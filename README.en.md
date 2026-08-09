@@ -1,8 +1,8 @@
 <h1 align="center">Toolbelt</h1>
 
 <p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="./README.md"><img src="https://img.shields.io/badge/docs-中文-red" alt="中文文档"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="Apache 2.0"></a>
 </p>
 
 <p align="center">
