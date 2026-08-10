@@ -1,1 +1,20 @@
+# IDE
 .idea/
+.vscode/
+
+# Frontend
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[codz]
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Environment
+.env
+.venv/
+venv/
