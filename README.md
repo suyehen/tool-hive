@@ -1,8 +1,8 @@
 <h1 align="center">ToolHive</h1>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="./README.en.md"><img src="https://img.shields.io/badge/docs-English-blue" alt="English Docs"></a>
+  <a href="tool-hive/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="README.en.md"><img src="https://img.shields.io/badge/docs-English-blue" alt="English Docs"></a>
 </p>
 
 <p align="center">
