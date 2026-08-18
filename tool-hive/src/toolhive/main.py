@@ -41,6 +41,14 @@ async def lifespan(app: FastAPI):
     session_security.configure_security(admin_security)
     totp.configure_security(admin_security)
 
+    # 同步内置超管角色与管理操作项目录（幂等）
+    from toolhive.infrastructure.database import async_session_factory
+    from toolhive.services.role_service import RoleService
+    async with async_session_factory() as session:
+        role_svc = RoleService(session)
+        await role_svc.ensure_super_admin_role()
+        await role_svc.sync_operation_codes()
+
     outbox_worker = None
     if settings.outbox.enabled:
         from toolhive.services.outbox.worker import OutboxWorker
