@@ -9,9 +9,17 @@ import string
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
 
 _ph = PasswordHasher()
+
+_admin_security = AdminSecuritySettings()
+
+
+def configure_security(admin_security: AdminSecuritySettings) -> None:
+    """启动阶段绑定管理安全配置分区。"""
+    global _admin_security
+    _admin_security = admin_security
 
 # ── 常见弱密码列表（生产环境可扩展） ──
 _COMMON_WEAK_PASSWORDS = frozenset({
@@ -54,10 +62,14 @@ def validate_password_strength(
     """校验密码强度，返回违规项列表。"""
     violations: list[str] = []
 
-    if len(password) < settings.password_min_length:
-        violations.append(f"密码长度不能少于 {settings.password_min_length} 位")
-    if len(password) > settings.password_max_length:
-        violations.append(f"密码长度不能超过 {settings.password_max_length} 位")
+    if len(password) < _admin_security.password_min_length:
+        violations.append(
+            f"密码长度不能少于 {_admin_security.password_min_length} 位",
+        )
+    if len(password) > _admin_security.password_max_length:
+        violations.append(
+            f"密码长度不能超过 {_admin_security.password_max_length} 位",
+        )
     if password.lower() in _COMMON_WEAK_PASSWORDS:
         violations.append("密码过于常见")
     if username and username.lower() in password.lower():
@@ -70,5 +82,5 @@ def validate_password_strength(
 
 def generate_temp_password() -> str:
     """生成安全随机的临时密码。"""
-    length = max(settings.password_min_length, 16)
+    length = max(_admin_security.password_min_length, 16)
     return "".join(secrets.choice(_TEMP_PASSWORD_ALPHABET) for _ in range(length))

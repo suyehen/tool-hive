@@ -1,14 +1,15 @@
-"""后台角色 ORM 模型。"""
+﻿"""后台角色 ORM 模型。"""
 
 from __future__ import annotations
 
 from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.core.enums import RoleStatus
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class BackendRole(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class BackendRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """后台角色。"""
 
     __tablename__ = "backend_role"
@@ -23,8 +24,8 @@ class BackendRole(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Boolean, nullable=False, default=False,
     )
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="active", index=True,
+        String(20), nullable=False, default=RoleStatus.ACTIVE, index=True,
     )  # active | disabled | archived
 
     def is_active(self) -> bool:
-        return self.status == "active"
+        return self.status == RoleStatus.ACTIVE

@@ -48,6 +48,10 @@ class OperationCode(StrEnum):
     PROVIDER_EDIT = "provider:edit"
     PROVIDER_MANAGE = "provider:manage"
 
+    # ── 系统任务（Outbox） ──
+    SYSTEM_TASK_VIEW = "system_task:view"
+    SYSTEM_TASK_RETRY = "system_task:retry"
+
 
 # 超管角色名（内置，不可删除/改名）
 SUPER_ADMIN_ROLE_NAME = "super_admin"

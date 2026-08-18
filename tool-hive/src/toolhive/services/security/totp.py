@@ -12,7 +12,7 @@ from typing import NamedTuple
 
 from cryptography.fernet import Fernet
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
 from toolhive.core.constants import (
     TOTP_ISSUER,
     TOTP_RECOVERY_CODE_BYTES,
@@ -23,6 +23,14 @@ from toolhive.core.constants import (
 _TOTP_DIGITS: int = 6
 _TOTP_PERIOD: int = 30
 _TOTP_TOLERANCE_WINDOWS: int = 1  # 前后各 1 个窗口
+
+_admin_security = AdminSecuritySettings()
+
+
+def configure_security(admin_security: AdminSecuritySettings) -> None:
+    """启动阶段绑定管理安全配置分区。"""
+    global _admin_security
+    _admin_security = admin_security
 
 
 class RecoveryCodes(NamedTuple):
@@ -88,7 +96,7 @@ def _url_encode(s: str) -> str:
 
 def _get_fernet() -> Fernet:
     """从配置获取或派生出 Fernet 实例。"""
-    key = settings.totp_encryption_key
+    key = _admin_security.totp_encryption_key
     if not key:
         # 开发环境：派生一个不安全的 key；生产环境必须配置
         key = base64.urlsafe_b64encode(hashlib.sha256(b"TOOLHIVE_TOTP_DEFAULT").digest()).decode()

@@ -40,7 +40,6 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 request.state.session = session
                 request.state.account_id = session.account_id
                 request.state.username = session.username
-                request.state.is_super_admin = session.is_super_admin
             else:
                 request.state.session = None
         else:

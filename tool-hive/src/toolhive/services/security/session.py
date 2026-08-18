@@ -8,9 +8,17 @@ from typing import NamedTuple
 
 from redis.asyncio import Redis
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
 from toolhive.core.constants import SESSION_COOKIE_PATH, SESSION_ID_BYTES
 from toolhive.infrastructure.redis import get_redis
+
+_admin_security = AdminSecuritySettings()
+
+
+def configure_security(admin_security: AdminSecuritySettings) -> None:
+    """启动阶段绑定管理安全配置分区。"""
+    global _admin_security
+    _admin_security = admin_security
 
 
 class SessionData(NamedTuple):
@@ -18,7 +26,7 @@ class SessionData(NamedTuple):
     session_id: str
     account_id: str
     username: str
-    is_super_admin: bool
+    security_version: str
     source_ip: str
     created_at: str
     last_activity: str
@@ -60,7 +68,7 @@ def _account_key(account_id: str) -> str:
 async def create_session(
     account_id: str,
     username: str,
-    is_super_admin: bool,
+    security_version: int,
     source_ip: str,
 ) -> str:
     """创建新会话（互斥登录：以原子方式撤销该账号旧会话）。"""
@@ -68,8 +76,8 @@ async def create_session(
     session_id = secrets.token_hex(SESSION_ID_BYTES)
 
     now = datetime.now(timezone.utc)
-    idle_seconds = settings.session_idle_timeout_minutes * 60
-    absolute_seconds = settings.session_absolute_timeout_hours * 3600
+    idle_seconds = _admin_security.session_idle_timeout_minutes * 60
+    absolute_seconds = _admin_security.session_absolute_timeout_hours * 3600
 
     expires_at = now.timestamp() + absolute_seconds
     ttl = absolute_seconds
@@ -77,7 +85,7 @@ async def create_session(
     fields: list[str] = [
         "account_id", account_id,
         "username", username,
-        "is_super_admin", str(int(is_super_admin)),
+        "security_version", str(security_version),
         "source_ip", source_ip,
         "created_at", str(int(now.timestamp())),
         "last_activity", str(int(now.timestamp())),
@@ -111,7 +119,7 @@ async def get_session(session_id: str) -> SessionData | None:
     last_activity = data.get("last_activity", "0")
     expires_at = data.get("expires_at", "0")
 
-    idle_timeout = settings.session_idle_timeout_minutes * 60
+    idle_timeout = _admin_security.session_idle_timeout_minutes * 60
 
     # 检查空闲超时
     if now.timestamp() - int(last_activity) > idle_timeout:
@@ -137,7 +145,7 @@ async def get_session(session_id: str) -> SessionData | None:
         session_id=session_id,
         account_id=data.get("account_id", ""),
         username=data.get("username", ""),
-        is_super_admin=data.get("is_super_admin", "0") == "1",
+        security_version=data.get("security_version", "0"),
         source_ip=data.get("source_ip", ""),
         created_at=data.get("created_at", ""),
         last_activity=data.get("last_activity", ""),

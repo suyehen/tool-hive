@@ -11,8 +11,12 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.config import settings
 from toolhive.core.constants import CALLER_SYSTEM_ID_PREFIX
+from toolhive.core.enums import (
+    CallerSystemStatus,
+    IPRuleStatus,
+    PublicKeyStatus,
+)
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.caller_ip_rule import CallerIPRule
@@ -59,7 +63,7 @@ class CallerSystemService:
             department=department,
             owner=owner,
             contact=contact,
-            status="draft",
+            status=CallerSystemStatus.DRAFT,
             effective_from=effective_from,
             effective_to=effective_to,
         )
@@ -101,7 +105,7 @@ class CallerSystemService:
     @transactional()
     async def enable(self, system_id: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
-        if system.status == "enabled":
+        if system.status == CallerSystemStatus.ENABLED:
             raise ConflictError("调用系统已启用")
 
         # 前置条件检查
@@ -113,18 +117,18 @@ class CallerSystemService:
         if system.effective_to and system.effective_to <= datetime.now(timezone.utc):
             raise ValidationError("当前时间不在有效期内")
 
-        system.status = "enabled"
+        system.status = CallerSystemStatus.ENABLED
         await self.db.flush()
         return system
 
     @transactional()
     async def disable(self, system_id: str, reason: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
-        if system.status == "disabled":
+        if system.status == CallerSystemStatus.DISABLED:
             raise ConflictError("调用系统已停用")
-        if system.status == "revoked":
+        if system.status == CallerSystemStatus.REVOKED:
             raise ConflictError("调用系统已注销，不能停用")
-        system.status = "disabled"
+        system.status = CallerSystemStatus.DISABLED
         system.deactivated_reason = reason
         await self.db.flush()
         return system
@@ -132,9 +136,9 @@ class CallerSystemService:
     @transactional()
     async def revive(self, system_id: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
-        if system.status != "disabled":
+        if system.status != CallerSystemStatus.DISABLED:
             raise ConflictError("只有已停用的调用系统可以恢复")
-        system.status = "enabled"
+        system.status = CallerSystemStatus.ENABLED
         system.deactivated_reason = None
         await self.db.flush()
         return system
@@ -142,15 +146,18 @@ class CallerSystemService:
     @transactional()
     async def revoke(self, system_id: str, reason: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
-        if system.status == "revoked":
+        if system.status == CallerSystemStatus.REVOKED:
             raise ConflictError("调用系统已注销")
-        system.status = "revoked"
+        system.status = CallerSystemStatus.REVOKED
         system.deactivated_reason = reason
         # 撤销全部公钥
         keys = await self.list_public_keys(system_id)
         for key in keys:
-            if key.status not in ("revoked", "expired"):
-                key.status = "revoked"
+            if key.status not in (
+                PublicKeyStatus.REVOKED,
+                PublicKeyStatus.EXPIRED,
+            ):
+                key.status = PublicKeyStatus.REVOKED
                 self.db.add(key)
         await self.db.flush()
         return system
@@ -160,8 +167,8 @@ class CallerSystemService:
         """超过 effective_to 自动拒绝请求（调用方检查）。"""
         system = await self.get_by_system_id(system_id)
         if system.effective_to and system.effective_to <= datetime.now(timezone.utc):
-            if system.status == "enabled":
-                system.status = "disabled"
+            if system.status == CallerSystemStatus.ENABLED:
+                system.status = CallerSystemStatus.DISABLED
                 system.deactivated_reason = "已过期（自动）"
                 await self.db.flush()
 
@@ -188,7 +195,7 @@ class CallerSystemService:
     ) -> tuple[list[CallerSystem], int]:
         result = await self.db.execute(
             select(CallerSystem)
-            .order_by(CallerSystem.created_at.desc())
+            .order_by(CallerSystem.create_time.desc())
             .offset(offset)
             .limit(limit)
         )
@@ -225,7 +232,9 @@ class CallerSystemService:
         existing = await self.db.scalar(
             select(CallerPublicKey).where(
                 CallerPublicKey.fingerprint == fingerprint,
-                CallerPublicKey.status.in_(("pending", "active")),
+                CallerPublicKey.status.in_(
+                    (PublicKeyStatus.PENDING, PublicKeyStatus.ACTIVE),
+                ),
             )
         )
         if existing:
@@ -237,7 +246,7 @@ class CallerSystemService:
             public_key=public_key,
             fingerprint=fingerprint,
             algorithm=algorithm,
-            status="pending",
+            status=PublicKeyStatus.PENDING,
             effective_from=datetime.now(timezone.utc),
             effective_to=effective_to,
         )
@@ -254,27 +263,27 @@ class CallerSystemService:
     @transactional()
     async def enable_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
-        if key.status != "pending":
+        if key.status != PublicKeyStatus.PENDING:
             raise ConflictError("只有待启用状态的公钥可以启用")
-        key.status = "active"
+        key.status = PublicKeyStatus.ACTIVE
         await self.db.flush()
         return key
 
     @transactional()
     async def disable_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
-        if key.status not in ("pending", "active"):
+        if key.status not in (PublicKeyStatus.PENDING, PublicKeyStatus.ACTIVE):
             raise ConflictError("只能停用有效或待启用状态的公钥")
-        key.status = "disabled"
+        key.status = PublicKeyStatus.DISABLED
         await self.db.flush()
         return key
 
     @transactional()
     async def revoke_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
-        if key.status == "revoked":
+        if key.status == PublicKeyStatus.REVOKED:
             raise ConflictError("该公钥已撤销")
-        key.status = "revoked"
+        key.status = PublicKeyStatus.REVOKED
         await self.db.flush()
         return key
 
@@ -308,16 +317,18 @@ class CallerSystemService:
         rule = await self.db.get(CallerIPRule, rule_id)
         if rule is None:
             raise NotFoundError(f"IP 规则不存在: {rule_id}")
-        if status not in ("active", "disabled"):
+        if status not in tuple(IPRuleStatus):
             raise ValidationError("无效状态")
-        rule.status = status
+        rule.status = IPRuleStatus(status)
         await self.db.flush()
         return rule
 
     @staticmethod
     def verify_ip(system_id: str, request_ip: str, rules: list[CallerIPRule]) -> bool:
         """校验来源 IP 是否匹配任一有效规则。"""
-        active_rules = [r for r in rules if r.status == "active"]
+        active_rules = [
+            r for r in rules if r.status == IPRuleStatus.ACTIVE
+        ]
         if not active_rules:
             return False
 

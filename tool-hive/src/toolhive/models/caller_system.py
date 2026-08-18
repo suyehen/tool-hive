@@ -1,4 +1,4 @@
-"""调用系统 ORM 模型。"""
+﻿"""调用系统 ORM 模型。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from datetime import datetime
 from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.core.enums import CallerSystemStatus
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class CallerSystem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """调用系统：调用 ToolHive 运行接口的外部软件系统。"""
 
     __tablename__ = "caller_system"
@@ -29,7 +30,7 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
     contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="draft", index=True,
+        String(20), nullable=False, default=CallerSystemStatus.DRAFT, index=True,
     )  # draft | enabled | disabled | revoked
     effective_from: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
@@ -40,7 +41,7 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     deactivated_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     def is_enabled(self) -> bool:
-        if self.status != "enabled":
+        if self.status != CallerSystemStatus.ENABLED:
             return False
         now = datetime.utcnow()
         if self.effective_to and self.effective_to <= now:

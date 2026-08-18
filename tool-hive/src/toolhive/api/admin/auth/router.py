@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from toolhive.api.deps import get_admin_security
 from toolhive.api.admin.auth.schemas import (
     ChangePasswordRequest,
     LoginRequest,
@@ -15,6 +16,7 @@ from toolhive.api.admin.auth.schemas import (
     RecoveryLoginRequest,
     SessionInfoResponse,
 )
+from toolhive.config import AdminSecuritySettings
 from toolhive.core.exceptions import (
     AuthenticationError,
     ToolHiveError,
@@ -54,6 +56,7 @@ def _clear_session_cookie(response: Response) -> None:
 async def _get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
 ):
     """依赖注入：获取当前管理账号（要求会话有效）。"""
     session = getattr(request.state, "session", None)
@@ -61,11 +64,15 @@ async def _get_current_user(
         raise HTTPException(status_code=401, detail="未认证")
 
     from toolhive.services.account_service import AccountService
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
-        return await svc.get_by_id(session.account_id)
+        account = await svc.get_by_id(session.account_id)
     except ToolHiveError:
         raise HTTPException(status_code=401, detail="未认证")
+    # security_version 不一致 → 会话已失效，要求重新登录
+    if str(session.security_version) != str(account.security_version):
+        raise HTTPException(status_code=401, detail="会话已失效，请重新登录")
+    return account
 
 
 # ── 端点 ──
@@ -77,6 +84,7 @@ async def login(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
 ):
     """登录步骤 1：密码校验。
 
@@ -85,7 +93,7 @@ async def login(
     - MfaSetupRequiredResponse：首次登录，需要绑定 TOTP
     - 需要 MFA 验证：返回 200 + { require_mfa: true }
     """
-    svc = AuthService(db)
+    svc = AuthService(db, admin_security)
     try:
         source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
         result = await svc.login_password(
@@ -109,14 +117,15 @@ async def login_verify_mfa(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     account: None = Depends(_get_current_user),
 ):
     """登录步骤 2：MFA 验证。需要先通过密码校验（有临时会话）。"""
     session = request.state.session
-    svc = AuthService(db)
+    svc = AuthService(db, admin_security)
 
     from toolhive.services.account_service import AccountService
-    acct_svc = AccountService(db)
+    acct_svc = AccountService(db, admin_security)
     account_obj = await acct_svc.get_by_id(session.account_id)
 
     try:
@@ -134,7 +143,6 @@ async def login_verify_mfa(
         session_id=result.session_id,
         csrf_token=result.csrf_token,
         username=result.account.username,
-        is_super_admin=False,
     )
 
 
@@ -144,9 +152,10 @@ async def login_recovery(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
 ):
     """使用恢复码登录（绕过 TOTP）。"""
-    svc = AuthService(db)
+    svc = AuthService(db, admin_security)
     try:
         source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
         result = await svc.login_with_recovery_code(
@@ -163,7 +172,6 @@ async def login_recovery(
         session_id=result.session_id,
         csrf_token=result.csrf_token,
         username=result.account.username,
-        is_super_admin=False,
     )
 
 
@@ -172,11 +180,12 @@ async def logout(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
 ):
     """登出，服务端删除会话。"""
     session_id = request.cookies.get(SESSION_COOKIE)
     if session_id:
-        svc = AuthService(db)
+        svc = AuthService(db, admin_security)
         await svc.logout(session_id)
     _clear_session_cookie(response)
     return {"detail": "已登出"}
@@ -191,13 +200,47 @@ async def get_session_info(
     session = getattr(request.state, "session", None)
     if session is None:
         raise HTTPException(status_code=401, detail="未认证")
+    from datetime import datetime, timezone
+
+    created_at_dt = None
+    if session.created_at:
+        try:
+            created_at_dt = datetime.fromtimestamp(
+                int(session.created_at), tz=timezone.utc,
+            )
+        except (ValueError, OverflowError):
+            created_at_dt = None
     return SessionInfoResponse(
         account_id=session.account_id,
         username=session.username,
-        is_super_admin=session.is_super_admin,
         source_ip=session.source_ip,
-        created_at=session.created_at,
+        created_at=created_at_dt,
     )
+
+
+@router.get("/me")
+async def get_me(
+    account=Depends(_get_current_user),
+):
+    """获取当前账号信息（权限实时生效，前端据此刷新展示）。"""
+    return {
+        "account_id": account.id,
+        "username": account.username,
+        "external_user_id": account.external_user_id,
+        "status": account.status,
+    }
+
+
+@router.get("/me/operation-items")
+async def get_my_operation_items(
+    db: AsyncSession = Depends(get_db),
+    account=Depends(_get_current_user),
+):
+    """获取当前账号的有效管理操作项（实时计算，超管自动全量）。"""
+    from toolhive.services.role_service import RoleService
+    svc = RoleService(db)
+    ops = await svc.get_effective_operations(account.id)
+    return {"operation_items": sorted(str(o) for o in ops)}
 
 
 @router.post("/mfa/bind")
@@ -205,10 +248,11 @@ async def bind_mfa(
     body: MfaBindRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     account=Depends(_get_current_user),
 ):
     """首次绑定 TOTP。返回恢复码明文（仅此一次）。"""
-    svc = AuthService(db)
+    svc = AuthService(db, admin_security)
     try:
         recovery_codes = await svc.bind_mfa(
             account=account,
@@ -227,10 +271,11 @@ async def change_password(
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     account=Depends(_get_current_user),
 ):
     """修改自己的密码，重新生成会话 ID。"""
-    svc = AuthService(db)
+    svc = AuthService(db, admin_security)
     try:
         await svc.account_svc.update_password(account, body.old_password, body.new_password)
     except (AuthenticationError, ValidationError) as e:
@@ -248,7 +293,7 @@ async def change_password(
         new_sid = await create_session(
             account_id=account.id,
             username=account.username,
-            is_super_admin=False,
+            security_version=account.security_version,
             source_ip=source_ip,
         )
         _set_session_cookie(response, new_sid)

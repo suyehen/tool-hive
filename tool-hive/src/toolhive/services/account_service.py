@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
+from toolhive.core.enums import AccountStatus
 from toolhive.core.exceptions import (
     AuthenticationError,
     ConflictError,
@@ -28,8 +29,9 @@ from toolhive.services.security.session import revoke_all_sessions
 class AccountService:
     """管理账号生命周期操作。所有写操作强制校验守护规则。"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, admin_security: AdminSecuritySettings):
         self.db = db
+        self._admin_security = admin_security
 
     # ── 初始化 ──
 
@@ -89,7 +91,7 @@ class AccountService:
             external_user_id=external_user_id,
             must_change_password=True,
             temp_password_expires_at=datetime.now(timezone.utc)
-            + timedelta(hours=settings.temp_password_expire_hours),
+            + timedelta(hours=self._admin_security.temp_password_expire_hours),
         )
         self.db.add(account)
         await self.db.flush()
@@ -117,7 +119,7 @@ class AccountService:
         )
         result = await self.db.execute(
             select(ManagementAccount)
-            .order_by(ManagementAccount.created_at.desc())
+            .order_by(ManagementAccount.create_time.desc())
             .offset(offset)
             .limit(limit)
         )
@@ -152,8 +154,9 @@ class AccountService:
         account.password_hash = hash_password(temp_pwd)
         account.must_change_password = True
         account.temp_password_expires_at = datetime.now(timezone.utc) + timedelta(
-            hours=settings.temp_password_expire_hours
+            hours=self._admin_security.temp_password_expire_hours
         )
+        account.security_version += 1
 
         # 立即撤销该账号全部会话
         await revoke_all_sessions(account.id)
@@ -164,9 +167,9 @@ class AccountService:
 
     @transactional()
     async def enable_account(self, account: ManagementAccount) -> None:
-        if account.status == "enabled":
+        if account.status == AccountStatus.ENABLED:
             raise ConflictError("账号已启用")
-        account.status = "enabled"
+        account.status = AccountStatus.ENABLED
         account.locked_until = None
         account.login_failures = 0
         await self.db.flush()
@@ -178,17 +181,18 @@ class AccountService:
         """禁用账号。不允许禁用最后一个超管，不允许禁用自己。"""
         if account.id == operator_id:
             raise ValidationError("不能停用自己的账号")
-        if account.status == "disabled":
+        if account.status == AccountStatus.DISABLED:
             raise ConflictError("账号已禁用")
         await self._check_last_super_admin(account)
-        account.status = "disabled"
+        account.status = AccountStatus.DISABLED
+        account.security_version += 1
         await revoke_all_sessions(account.id)
         await self.db.flush()
 
     @transactional()
     async def unlock_account(self, account: ManagementAccount) -> None:
         """提前解锁账号。"""
-        account.status = "enabled"
+        account.status = AccountStatus.ENABLED
         account.login_failures = 0
         account.locked_until = None
         await self.db.flush()
@@ -201,7 +205,8 @@ class AccountService:
         if account.id == operator_id:
             raise ValidationError("不能对自己执行离职处理")
         await self._check_last_super_admin(account)
-        account.status = "disabled"
+        account.status = AccountStatus.DISABLED
+        account.security_version += 1
         await revoke_all_sessions(account.id)
         await self.db.flush()
 
@@ -222,10 +227,10 @@ class AccountService:
         if fresh is None:
             return
         fresh.login_failures += 1
-        if fresh.login_failures >= settings.login_max_failures:
-            fresh.status = "locked"
+        if fresh.login_failures >= self._admin_security.login_max_failures:
+            fresh.status = AccountStatus.LOCKED
             fresh.locked_until = datetime.now(timezone.utc) + timedelta(
-                minutes=settings.login_lock_minutes,
+                minutes=self._admin_security.login_lock_minutes,
             )
         await self.db.flush()
 
@@ -233,8 +238,8 @@ class AccountService:
     async def record_login_success(self, account: ManagementAccount) -> None:
         """登录成功：清空失败计数，自动解除锁定状态。"""
         account.login_failures = 0
-        if account.status == "locked":
-            account.status = "enabled"
+        if account.status == AccountStatus.LOCKED:
+            account.status = AccountStatus.ENABLED
         account.locked_until = None
         await self.db.flush()
 
@@ -256,15 +261,15 @@ class AccountService:
         result = await self.db.execute(
             select(PasswordHistory)
             .where(PasswordHistory.account_id == account.id)
-            .order_by(desc(PasswordHistory.created_at))
-            .limit(settings.password_history_count)
+            .order_by(desc(PasswordHistory.create_time))
+            .limit(self._admin_security.password_history_count)
         )
         recent = result.scalars().all()
         for entry in recent:
             is_match, _ = verify_password(new_password, entry.password_hash)
             if is_match:
                 raise ValidationError(
-                    f"不能与最近 {settings.password_history_count} 次密码相同"
+                    f"不能与最近 {self._admin_security.password_history_count} 次密码相同"
                 )
 
         # 写入密码历史

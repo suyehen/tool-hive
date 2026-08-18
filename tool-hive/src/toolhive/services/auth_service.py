@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from toolhive.config import AdminSecuritySettings
+from toolhive.core.enums import AccountStatus
 from toolhive.core.exceptions import AuthenticationError, ValidationError
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.management_account import ManagementAccount
@@ -43,9 +45,10 @@ class MfaSetupResult:
 class AuthService:
     """认证流程编排。"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, admin_security: AdminSecuritySettings):
         self.db = db
-        self.account_svc = AccountService(db)
+        self._admin_security = admin_security
+        self.account_svc = AccountService(db, admin_security)
 
     # ── 登录步骤 1：密码校验 ──
 
@@ -68,7 +71,7 @@ class AuthService:
             raise AuthenticationError("用户名或密码错误")
 
         if not account.is_active():
-            if account.status == "disabled":
+            if account.status == AccountStatus.DISABLED:
                 raise AuthenticationError("账号已被禁用")
             if account.is_locked():
                 raise AuthenticationError("账号已被锁定，请稍后再试")
@@ -251,14 +254,10 @@ class AuthService:
         self, account: ManagementAccount, source_ip: str,
     ) -> LoginResult:
         """完成登录的最后一步：创建会话 + CSRF Token。"""
-        from toolhive.services.role_service import RoleService
-        role_svc = RoleService(self.db)
-        roles = await role_svc.get_account_roles(account.id)
-        is_super_admin = any(r.is_super_admin for r in roles)
         session_id = await create_session(
             account_id=account.id,
             username=account.username,
-            is_super_admin=is_super_admin,
+            security_version=account.security_version,
             source_ip=source_ip,
         )
         csrf_token = generate_csrf_token(session_id)

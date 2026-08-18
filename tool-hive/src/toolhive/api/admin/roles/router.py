@@ -42,8 +42,8 @@ async def list_roles(
             RoleResponse(
                 id=r.id, name=r.name, description=r.description,
                 is_super_admin=r.is_super_admin, status=r.status,
-                created_at=str(r.created_at) if r.created_at else "",
-                updated_at=str(r.updated_at) if r.updated_at else None,
+                created_at=r.create_time,
+                updated_at=r.update_time,
             )
             for r in items
         ],
@@ -66,8 +66,8 @@ async def create_role(
     return RoleResponse(
         id=role.id, name=role.name, description=role.description,
         is_super_admin=role.is_super_admin, status=role.status,
-        created_at=str(role.created_at) if role.created_at else "",
-        updated_at=None,
+        created_at=role.create_time,
+        updated_at=role.update_time,
     )
 
 
@@ -86,8 +86,8 @@ async def get_role(
     return RoleResponse(
         id=r.id, name=r.name, description=r.description,
         is_super_admin=r.is_super_admin, status=r.status,
-        created_at=str(r.created_at) if r.created_at else "",
-        updated_at=str(r.updated_at) if r.updated_at else None,
+                created_at=r.create_time,
+                updated_at=r.update_time,
     )
 
 
@@ -109,8 +109,8 @@ async def update_role(
     return RoleResponse(
         id=r.id, name=r.name, description=r.description,
         is_super_admin=r.is_super_admin, status=r.status,
-        created_at=str(r.created_at) if r.created_at else "",
-        updated_at=str(r.updated_at) if r.updated_at else None,
+        created_at=r.create_time,
+        updated_at=r.update_time,
     )
 
 

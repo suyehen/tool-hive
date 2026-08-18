@@ -11,6 +11,7 @@ from toolhive.api.admin.roles.router import (
     router as roles_router,
 )
 from toolhive.api.admin.caller_systems.router import router as caller_systems_router
+from toolhive.api.admin.system_tasks.router import router as system_tasks_router
 from toolhive.api.admin.middleware import CSRFMiddleware, SessionMiddleware
 
 admin_app = FastAPI(
@@ -28,3 +29,4 @@ admin_app.include_router(accounts_router)
 admin_app.include_router(roles_router)
 admin_app.include_router(operations_router)
 admin_app.include_router(caller_systems_router)
+admin_app.include_router(system_tasks_router)

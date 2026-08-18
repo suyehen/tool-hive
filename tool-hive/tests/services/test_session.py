@@ -45,7 +45,7 @@ class TestCreateSession:
         session_id = await create_session(
             account_id="test-account-123",
             username="admin",
-            is_super_admin=True,
+            security_version=0,
             source_ip="192.168.1.1",
         )
         assert isinstance(session_id, str)
@@ -70,7 +70,7 @@ class TestCreateSession:
         await create_session(
             account_id="test-account-123",
             username="admin",
-            is_super_admin=False,
+            security_version=1,
             source_ip="10.0.0.1",
         )
         # 应删除旧会话
@@ -98,7 +98,7 @@ class TestGetSession:
         mock_redis.hgetall.return_value = {
             "account_id": "acc-123",
             "username": "admin",
-            "is_super_admin": "1",
+            "security_version": "0",
             "source_ip": "1.2.3.4",
             "created_at": str(now - 100),
             "last_activity": str(now - 10),
@@ -111,7 +111,7 @@ class TestGetSession:
         assert result is not None
         assert result.account_id == "acc-123"
         assert result.username == "admin"
-        assert result.is_super_admin is True
+        assert result.security_version == "0"
 
 
 class TestRevokeSession:

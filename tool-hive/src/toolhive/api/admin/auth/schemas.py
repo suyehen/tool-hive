@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from toolhive.core.time_utils import UTCDateTime
+
 
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
@@ -38,7 +40,6 @@ class LoginResponse(BaseModel):
     session_id: str
     csrf_token: str
     username: str
-    is_super_admin: bool = False
 
 
 class MfaRequiredResponse(BaseModel):
@@ -58,6 +59,5 @@ class MfaSetupRequiredResponse(BaseModel):
 class SessionInfoResponse(BaseModel):
     account_id: str
     username: str
-    is_super_admin: bool
     source_ip: str
-    created_at: str
+    created_at: UTCDateTime | None

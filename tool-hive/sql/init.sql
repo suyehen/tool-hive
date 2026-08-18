@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS management_account (
     locked_until              TIMESTAMPTZ,
     must_change_password      BOOLEAN NOT NULL DEFAULT TRUE,
     temp_password_expires_at  TIMESTAMPTZ,
+    security_version          INTEGER NOT NULL DEFAULT 0,
     create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time                TIMESTAMPTZ,
     create_id                VARCHAR(32),
@@ -54,6 +55,7 @@ COMMENT ON COLUMN management_account.login_failures IS '连续登录失败次数
 COMMENT ON COLUMN management_account.locked_until IS '锁定到期时间';
 COMMENT ON COLUMN management_account.must_change_password IS '是否必须修改密码';
 COMMENT ON COLUMN management_account.temp_password_expires_at IS '临时密码过期时间';
+COMMENT ON COLUMN management_account.security_version IS '安全事件版本，用于会话失效判定';
 COMMENT ON COLUMN management_account.create_time IS '创建时间';
 COMMENT ON COLUMN management_account.update_time IS '最后更新时间';
 COMMENT ON COLUMN management_account.create_id IS '创建人 ID';
@@ -442,6 +444,8 @@ CREATE TABLE IF NOT EXISTS outbox_delivery (
     status       VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
+    duration_ms  INTEGER,
+    worker_instance VARCHAR(64),
     create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time   TIMESTAMPTZ,
     create_id   VARCHAR(32),
@@ -463,6 +467,8 @@ COMMENT ON COLUMN outbox_delivery.target IS '投递目标';
 COMMENT ON COLUMN outbox_delivery.status IS '状态';
 COMMENT ON COLUMN outbox_delivery.attempts IS '投递尝试次数';
 COMMENT ON COLUMN outbox_delivery.last_error IS '最近一次错误信息';
+COMMENT ON COLUMN outbox_delivery.duration_ms IS '最近一次投递耗时（毫秒）';
+COMMENT ON COLUMN outbox_delivery.worker_instance IS '处理投递的 Worker 实例标识';
 COMMENT ON COLUMN outbox_delivery.create_time IS '创建时间';
 COMMENT ON COLUMN outbox_delivery.update_time IS '最后更新时间';
 COMMENT ON COLUMN outbox_delivery.create_id IS '创建人 ID';

@@ -69,6 +69,8 @@ outbox:
   max_concurrency: 5
   # PROCESSING 任务的占用超时时间，单位秒。
   lock_timeout_seconds: 60
+  # 单条投递的最大尝试次数，超过后进入 DEAD。
+  max_attempts: 10
   retry:
     # 第一次投递失败后的等待时间，单位秒。
     initial_delay_seconds: 5
@@ -87,6 +89,15 @@ chroma:
   persist_directory: /vdb/tool-hive/chroma
   # 嵌入式模式的写入并发数，一期只能为 1。
   write_concurrency: 1
+
+# ── 网络入口 ──
+network:
+  # 可信代理 CIDR 列表；只有这些来源的内部 Header 才被读取。
+  trusted_proxies:
+    - 127.0.0.1/32
+    - ::1/128
+  # 开发环境是否允许仅回环地址直连（生产必须为 false）。
+  allow_loopback_direct: false
 
 # ── 雪花算法 ID ──
 snowflake:

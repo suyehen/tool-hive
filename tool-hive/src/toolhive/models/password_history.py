@@ -1,14 +1,14 @@
-"""密码历史 ORM 模型。"""
+﻿"""密码历史 ORM 模型。"""
 
 from __future__ import annotations
 
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class PasswordHistory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class PasswordHistory(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """密码历史记录（用于禁止重复使用最近 N 次密码）。"""
 
     __tablename__ = "password_history"

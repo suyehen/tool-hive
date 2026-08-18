@@ -17,6 +17,7 @@ from toolhive.api.admin.caller_systems.schemas import (
     StatusRequest,
     UpdateCallerSystemRequest,
 )
+from toolhive.core.enums import IPRuleStatus
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.infrastructure.database import get_db
 from toolhive.services.caller_system_service import CallerSystemService
@@ -35,11 +36,11 @@ def _to_response(cs) -> CallerSystemResponse:
         owner=cs.owner,
         contact=cs.contact,
         status=cs.status,
-        effective_from=str(cs.effective_from) if cs.effective_from else None,
-        effective_to=str(cs.effective_to) if cs.effective_to else None,
+        effective_from=cs.effective_from,
+        effective_to=cs.effective_to,
         deactivated_reason=cs.deactivated_reason,
-        created_at=str(cs.created_at) if cs.created_at else "",
-        updated_at=str(cs.updated_at) if cs.updated_at else None,
+        created_at=cs.create_time,
+        updated_at=cs.update_time,
     )
 
 
@@ -211,9 +212,9 @@ async def list_public_keys(
         PublicKeyResponse(
             id=k.id, key_id=k.key_id, system_id=k.system_id,
             fingerprint=k.fingerprint, algorithm=k.algorithm, status=k.status,
-            effective_from=str(k.effective_from),
-            effective_to=str(k.effective_to) if k.effective_to else None,
-            created_at=str(k.created_at) if k.created_at else "",
+            effective_from=k.effective_from,
+            effective_to=k.effective_to,
+            created_at=k.create_time,
         )
         for k in keys
     ]
@@ -241,9 +242,9 @@ async def add_public_key(
     return PublicKeyResponse(
         id=key.id, key_id=key.key_id, system_id=key.system_id,
         fingerprint=key.fingerprint, algorithm=key.algorithm, status=key.status,
-        effective_from=str(key.effective_from),
-        effective_to=str(key.effective_to) if key.effective_to else None,
-        created_at=str(key.created_at) if key.created_at else "",
+        effective_from=key.effective_from,
+        effective_to=key.effective_to,
+        created_at=key.create_time,
     )
 
 
@@ -314,7 +315,7 @@ async def list_ip_rules(
         IPRuleResponse(
             id=r.id, rule_id=r.id, system_id=r.system_id,
             ip_cidr=r.ip_cidr, description=r.description, status=r.status,
-            created_at=str(r.created_at) if r.created_at else "",
+            created_at=r.create_time,
         )
         for r in rules
     ]
@@ -341,7 +342,7 @@ async def add_ip_rule(
     return IPRuleResponse(
         id=rule.id, rule_id=rule.id, system_id=rule.system_id,
         ip_cidr=rule.ip_cidr, description=rule.description, status=rule.status,
-        created_at=str(rule.created_at) if rule.created_at else "",
+        created_at=rule.create_time,
     )
 
 
@@ -354,7 +355,9 @@ async def update_ip_rule_status(
 ):
     svc = CallerSystemService(db)
     try:
-        status = "disabled" if body.reason else "active"
+        status = (
+            IPRuleStatus.DISABLED if body.reason else IPRuleStatus.ACTIVE
+        )
         await svc.update_ip_rule_status(rule_id, status)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

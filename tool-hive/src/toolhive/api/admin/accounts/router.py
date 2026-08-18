@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from toolhive.api.deps import get_admin_security
 from toolhive.api.admin.accounts.schemas import (
     AccountListResponse,
     AccountResponse,
@@ -13,6 +14,7 @@ from toolhive.api.admin.accounts.schemas import (
     ResetPasswordResponse,
     StatusUpdateRequest,
 )
+from toolhive.config import AdminSecuritySettings
 from toolhive.api.admin.auth.router import _get_current_user
 from toolhive.core.exceptions import (
     ConflictError,
@@ -31,10 +33,11 @@ async def list_accounts(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(_get_current_user),
 ):
     """账号列表（需 admin_account:view）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     items, total = await svc.list_accounts(offset=offset, limit=limit)
     return AccountListResponse(
         items=[
@@ -45,8 +48,8 @@ async def list_accounts(
                 status=a.status,
                 login_failures=a.login_failures,
                 must_change_password=a.must_change_password,
-                created_at=str(a.created_at) if a.created_at else "",
-                updated_at=str(a.updated_at) if a.updated_at else None,
+                created_at=a.create_time,
+                updated_at=a.update_time,
             )
             for a in items
         ],
@@ -58,10 +61,11 @@ async def list_accounts(
 async def create_account(
     body: CreateAccountRequest,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(_get_current_user),
 ):
     """创建账号（需 admin_account:create）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
         account, temp_pwd = await svc.create_account(
             username=body.username,
@@ -82,10 +86,11 @@ async def create_account(
 async def get_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(_get_current_user),
 ):
     """账号详情（需 admin_account:view）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
         a = await svc.get_by_id(account_id)
     except NotFoundError as e:
@@ -97,8 +102,8 @@ async def get_account(
         status=a.status,
         login_failures=a.login_failures,
         must_change_password=a.must_change_password,
-        created_at=str(a.created_at) if a.created_at else "",
-        updated_at=str(a.updated_at) if a.updated_at else None,
+        created_at=a.create_time,
+        updated_at=a.update_time,
     )
 
 
@@ -108,10 +113,11 @@ async def update_account_status(
     body: StatusUpdateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     operator=Depends(_get_current_user),
 ):
     """启用/禁用/解锁（需 admin_account:manage）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
         target = await svc.get_by_id(account_id)
     except NotFoundError as e:
@@ -136,10 +142,11 @@ async def update_account_status(
 async def reset_password(
     account_id: str,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(_get_current_user),
 ):
     """重置密码（需 admin_account:manage）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
         target = await svc.get_by_id(account_id)
     except NotFoundError as e:
@@ -157,10 +164,11 @@ async def reset_password(
 async def force_logout(
     account_id: str,
     db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(_get_current_user),
 ):
     """强制下线（需 admin_account:manage）。"""
-    svc = AccountService(db)
+    svc = AccountService(db, admin_security)
     try:
         target = await svc.get_by_id(account_id)
     except NotFoundError as e:

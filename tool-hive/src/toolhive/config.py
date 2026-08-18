@@ -12,8 +12,52 @@ from pathlib import Path
 from typing import Any, get_args, get_origin
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AppSettings(BaseModel):
+    """应用级配置。"""
+
+    app_name: str = "ToolHive"
+    app_version: str = "0.1.0"
+    debug: bool = False
+    bind_host: str = "127.0.0.1"
+    bind_port: int = 8100
+
+
+class AdminSecuritySettings(BaseModel):
+    """管理侧安全配置：登录、密码、会话、TOTP 与 CSRF。"""
+
+    totp_encryption_key: str = ""
+    csrf_secret: str = ""
+    login_max_failures: int = 5
+    login_lock_minutes: int = 30
+    captcha_trigger_failures: int = 3
+    captcha_trigger_window_minutes: int = 10
+    temp_password_expire_hours: int = 24
+    password_min_length: int = 12
+    password_max_length: int = 128
+    password_history_count: int = 5
+    session_idle_timeout_minutes: int = 30
+    session_absolute_timeout_hours: int = 8
+
+
+class RuntimeSecuritySettings(BaseModel):
+    """运行侧安全配置：请求签名、时间窗口与 Nonce（一期下半使用）。"""
+
+    signature_time_window_seconds: int = 300
+    nonce_retention_minutes: int = 10
+    signing_key_min_bits: int = 2048
+    signing_algorithm: str = "RSA-PSS-SHA256"
+    signature_version: str = "TOOLHIVE-SIGN-V1"
+
+
+class RetrievalSettings(BaseModel):
+    """检索配置：Embedding 模型与模型 Key（一期下半使用）。"""
+
+    model_api_key: str = ""
+    embedding_model: str = ""
 
 
 class OutboxRetrySettings(BaseModel):
@@ -62,6 +106,11 @@ class OutboxSettings(BaseModel):
         ge=1,
         description="PROCESSING 任务的占用超时时间，单位秒",
     )
+    max_attempts: int = Field(
+        default=10,
+        ge=1,
+        description="单条投递的最大尝试次数，超过后进入 DEAD",
+    )
     retry: OutboxRetrySettings = Field(default_factory=OutboxRetrySettings)
 
 
@@ -81,6 +130,27 @@ class ChromaSettings(BaseModel):
         default=1,
         ge=1,
         description="嵌入式模式的写入并发数，一期只能为 1",
+    )
+
+
+class InfrastructureSettings(BaseModel):
+    """基础设施连接配置。"""
+
+    database_url: str = "postgresql+asyncpg://toolhive:changeme@localhost:5432/toolhive"
+    redis_url: str = "redis://localhost:6379/0"
+    chroma: ChromaSettings = Field(default_factory=ChromaSettings)
+
+
+class NetworkSettings(BaseModel):
+    """网络入口配置：可信代理与开发直连。"""
+
+    trusted_proxies: list[str] = Field(
+        default_factory=lambda: ["127.0.0.1/32", "::1/128"],
+        description="可信代理 CIDR 列表；只有这些来源的内部 Header 才被读取",
+    )
+    allow_loopback_direct: bool = Field(
+        default=False,
+        description="开发环境是否允许仅回环地址直连（生产必须为 false）",
     )
 
 
@@ -170,8 +240,70 @@ class Settings(BaseSettings):
     # ── Chroma 检索索引 ──
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
 
+    # ── 网络入口 ──
+    network: NetworkSettings = Field(default_factory=NetworkSettings)
+
     # ── 雪花 ID ──
     snowflake: SnowflakeSettings = Field(default_factory=SnowflakeSettings)
+
+    # ── 配置分区视图（业务模块只注入所需分区，不依赖完整 Settings） ──
+
+    @computed_field
+    @property
+    def app(self) -> AppSettings:
+        return AppSettings(
+            app_name=self.app_name,
+            app_version=self.app_version,
+            debug=self.debug,
+            bind_host=self.bind_host,
+            bind_port=self.bind_port,
+        )
+
+    @computed_field
+    @property
+    def admin_security(self) -> AdminSecuritySettings:
+        return AdminSecuritySettings(
+            totp_encryption_key=self.totp_encryption_key,
+            csrf_secret=self.csrf_secret,
+            login_max_failures=self.login_max_failures,
+            login_lock_minutes=self.login_lock_minutes,
+            captcha_trigger_failures=self.captcha_trigger_failures,
+            captcha_trigger_window_minutes=self.captcha_trigger_window_minutes,
+            temp_password_expire_hours=self.temp_password_expire_hours,
+            password_min_length=self.password_min_length,
+            password_max_length=self.password_max_length,
+            password_history_count=self.password_history_count,
+            session_idle_timeout_minutes=self.session_idle_timeout_minutes,
+            session_absolute_timeout_hours=self.session_absolute_timeout_hours,
+        )
+
+    @computed_field
+    @property
+    def runtime_security(self) -> RuntimeSecuritySettings:
+        return RuntimeSecuritySettings(
+            signature_time_window_seconds=self.signature_time_window_seconds,
+            nonce_retention_minutes=self.nonce_retention_minutes,
+            signing_key_min_bits=self.signing_key_min_bits,
+            signing_algorithm=self.signing_algorithm,
+            signature_version=self.signature_version,
+        )
+
+    @computed_field
+    @property
+    def retrieval(self) -> RetrievalSettings:
+        return RetrievalSettings(
+            model_api_key=self.model_api_key,
+            embedding_model=self.embedding_model,
+        )
+
+    @computed_field
+    @property
+    def infrastructure(self) -> InfrastructureSettings:
+        return InfrastructureSettings(
+            database_url=self.database_url,
+            redis_url=self.redis_url,
+            chroma=self.chroma,
+        )
 
 
 def _is_model(annotation: Any) -> bool:
@@ -252,11 +384,13 @@ def load_settings(config_file: str | Path | None = None) -> Settings:
     外挂配置文件通过 ``--config`` 或 ``TOOLHIVE_CONFIG_FILE`` 指定；
     明确指定的文件不存在、不可读或内容非法时抛出异常，服务启动失败。
     """
+    global settings
     resolved = config_file or os.environ.get("TOOLHIVE_CONFIG_FILE")
     yaml_data = _load_yaml_data(resolved)
     env_data = _collect_env_values()
     merged = _deep_merge(yaml_data, env_data)
-    return Settings(**merged)
+    settings = Settings(**merged)
+    return settings
 
 
 settings = Settings()

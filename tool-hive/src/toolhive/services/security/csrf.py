@@ -6,12 +6,20 @@ import hashlib
 import hmac
 import secrets
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
+
+_admin_security = AdminSecuritySettings()
+
+
+def configure_security(admin_security: AdminSecuritySettings) -> None:
+    """启动阶段绑定管理安全配置分区。"""
+    global _admin_security
+    _admin_security = admin_security
 
 
 def _get_csrf_secret() -> str:
     """获取 CSRF 签名密钥。"""
-    secret = settings.csrf_secret
+    secret = _admin_security.csrf_secret
     if not secret:
         # 开发环境默认 key（生产必须配置）
         secret = "TOOLHIVE_CSRF_DEV_KEY_CHANGE_IN_PRODUCTION"

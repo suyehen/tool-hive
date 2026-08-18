@@ -1,14 +1,15 @@
-"""管理操作项 ORM 模型。"""
+﻿"""管理操作项 ORM 模型。"""
 
 from __future__ import annotations
 
 from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin
+from toolhive.core.enums import OperationStatus
+from toolhive.models.base import Base, AuditMixin
 
 
-class ManagementOperation(Base, TimestampMixin):
+class ManagementOperation(Base, AuditMixin):
     """管理操作项。operation_code 为主键，由代码定义。"""
 
     __tablename__ = "management_operation"
@@ -23,8 +24,8 @@ class ManagementOperation(Base, TimestampMixin):
         Text, nullable=True,
     )
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="active",
+        String(20), nullable=False, default=OperationStatus.ACTIVE,
     )  # active | deprecated
 
     def is_active(self) -> bool:
-        return self.status == "active"
+        return self.status == OperationStatus.ACTIVE

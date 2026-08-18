@@ -1,14 +1,15 @@
-"""调用系统 IP 规则 ORM 模型。"""
+﻿"""调用系统 IP 规则 ORM 模型。"""
 
 from __future__ import annotations
 
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.core.enums import IPRuleStatus
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class CallerIPRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class CallerIPRule(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """调用系统来源 IP 白名单规则。"""
 
     __tablename__ = "caller_ip_rule"
@@ -24,5 +25,5 @@ class CallerIPRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )  # 单个 IP、CIDR 或 *
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="active",
+        String(20), nullable=False, default=IPRuleStatus.ACTIVE,
     )  # active | disabled

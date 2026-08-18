@@ -1,4 +1,4 @@
-"""MFA TOTP 配置 ORM 模型。"""
+﻿"""MFA TOTP 配置 ORM 模型。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import json
 from sqlalchemy import Boolean, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class MfaConfig(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class MfaConfig(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """管理员 MFA TOTP 配置。"""
 
     __tablename__ = "mfa_config"

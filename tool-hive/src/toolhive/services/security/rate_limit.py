@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from redis.asyncio import Redis
 
-from toolhive.config import settings
+from toolhive.config import AdminSecuritySettings
 from toolhive.infrastructure.redis import get_redis
 
 # ── Redis key 前缀 ──
 _ACCOUNT_FAIL_PREFIX: str = "login_fail:account:"
 _IP_FAIL_PREFIX: str = "login_fail:ip:"
+
+_admin_security = AdminSecuritySettings()
+
+
+def configure_security(admin_security: AdminSecuritySettings) -> None:
+    """启动阶段绑定管理安全配置分区。"""
+    global _admin_security
+    _admin_security = admin_security
 
 
 async def check_captcha_required(account_id: str | None, source_ip: str) -> bool:
@@ -18,8 +26,8 @@ async def check_captcha_required(account_id: str | None, source_ip: str) -> bool
     规则：账号或 IP 在窗口内失败 >= captcha_trigger_failures 次。
     """
     redis = await get_redis()
-    threshold = settings.captcha_trigger_failures
-    window_min = settings.captcha_trigger_window_minutes
+    threshold = _admin_security.captcha_trigger_failures
+    window_min = _admin_security.captcha_trigger_window_minutes
 
     checks: list[bool] = []
 
@@ -36,7 +44,7 @@ async def check_captcha_required(account_id: str | None, source_ip: str) -> bool
 async def record_login_failure(account_id: str | None, source_ip: str) -> None:
     """记录登录失败（账号 + IP 维度）。"""
     redis = await get_redis()
-    window_sec = settings.captcha_trigger_window_minutes * 60
+    window_sec = _admin_security.captcha_trigger_window_minutes * 60
 
     async with redis.pipeline(transaction=True) as pipe:
         if account_id:

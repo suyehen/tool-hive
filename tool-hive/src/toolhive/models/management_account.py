@@ -1,4 +1,4 @@
-"""管理账号 ORM 模型。"""
+﻿"""管理账号 ORM 模型。"""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from toolhive.core.enums import AccountStatus
+from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
 
 
-class ManagementAccount(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """管理账号。"""
 
     __tablename__ = "management_account"
@@ -26,7 +27,7 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     # ── 状态 ──
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="enabled", index=True,
+        String(20), nullable=False, default=AccountStatus.ENABLED, index=True,
     )  # enabled | disabled | locked
 
     # ── 登录安全 ──
@@ -42,12 +43,15 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     temp_password_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    security_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
 
     def is_enabled(self) -> bool:
-        return self.status == "enabled"
+        return self.status == AccountStatus.ENABLED
 
     def is_locked(self) -> bool:
-        if self.status == "locked":
+        if self.status == AccountStatus.LOCKED:
             if self.locked_until and self.locked_until > datetime.utcnow():
                 return True
             # 锁定期已过，但状态尚未更新（下一次登录成功时更正）
@@ -58,4 +62,4 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     def is_active(self) -> bool:
         """检查账号是否可以正常使用。"""
-        return self.status == "enabled" and not self.is_locked()
+        return self.status == AccountStatus.ENABLED and not self.is_locked()

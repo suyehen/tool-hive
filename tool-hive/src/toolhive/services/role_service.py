@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
+from toolhive.core.enums import OperationStatus, RoleStatus
 from toolhive.core.operation_codes import (
     SUPER_ADMIN_ROLE_NAME,
     OperationCode,
@@ -36,7 +37,7 @@ class RoleService:
     ) -> tuple[list[BackendRole], int]:
         result = await self.db.execute(
             select(BackendRole)
-            .order_by(BackendRole.created_at.desc())
+            .order_by(BackendRole.create_time.desc())
             .offset(offset)
             .limit(limit)
         )
@@ -100,9 +101,9 @@ class RoleService:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色状态")
-        if status not in ("active", "disabled", "archived"):
+        if status not in tuple(RoleStatus):
             raise ValidationError(f"无效状态: {status}")
-        role.status = status
+        role.status = RoleStatus(status)
         await self.db.flush()
         return role
 
@@ -116,7 +117,7 @@ class RoleService:
             select(ManagementOperation)
             .join(RoleOperation, RoleOperation.operation_code == ManagementOperation.operation_code)
             .where(RoleOperation.role_id == role_id)
-            .where(ManagementOperation.status == "active")
+            .where(ManagementOperation.status == OperationStatus.ACTIVE)
         )
         return list(result.scalars().all())
 
@@ -168,7 +169,7 @@ class RoleService:
             select(BackendRole)
             .join(AccountRole, AccountRole.role_id == BackendRole.id)
             .where(AccountRole.account_id == account_id)
-            .where(BackendRole.status == "active")
+            .where(BackendRole.status == RoleStatus.ACTIVE)
         )
         return list(result.scalars().all())
 
@@ -243,7 +244,7 @@ class RoleService:
         if any(r.is_super_admin for r in roles):
             result = await self.db.execute(
                 select(ManagementOperation.operation_code).where(
-                    ManagementOperation.status == "active"
+                    ManagementOperation.status == OperationStatus.ACTIVE
                 )
             )
             return {OperationCode(r[0]) for r in result}
@@ -290,7 +291,7 @@ class RoleService:
                 op = ManagementOperation(
                     operation_code=str(code),
                     display_name=str(code),  # 默认用 operation_code 作显示名
-                    status="active",
+                    status=OperationStatus.ACTIVE,
                 )
                 self.db.add(op)
                 logger.info("新增操作码: %s", code)
@@ -314,8 +315,8 @@ class RoleService:
         db_code_set = set(db_codes.keys())
         for code in db_code_set - all_codes:
             op = db_codes[code]
-            if op.status != "deprecated":
-                op.status = "deprecated"
+            if op.status != OperationStatus.DEPRECATED:
+                op.status = OperationStatus.DEPRECATED
                 self.db.add(op)
                 logger.info("废弃操作码: %s", code)
 
@@ -332,7 +333,7 @@ class RoleService:
                 name=SUPER_ADMIN_ROLE_NAME,
                 description="内置超级管理员角色，不可删除、不可修改",
                 is_super_admin=True,
-                status="active",
+                status=RoleStatus.ACTIVE,
             )
             self.db.add(role)
             await self.db.flush()
