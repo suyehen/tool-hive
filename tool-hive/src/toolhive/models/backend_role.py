@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import RoleStatus
@@ -26,6 +26,9 @@ class BackendRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=RoleStatus.ACTIVE, index=True,
     )  # active | disabled | archived
+    row_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
 
     def is_active(self) -> bool:
         return self.status == RoleStatus.ACTIVE

@@ -137,6 +137,7 @@ class AccountService:
             raise AuthenticationError("当前密码不正确")
 
         await self._set_password(account, new_password)
+        account.row_version += 1
         await self.db.flush()
 
     @transactional()
@@ -157,6 +158,7 @@ class AccountService:
             hours=self._admin_security.temp_password_expire_hours
         )
         account.security_version += 1
+        account.row_version += 1
 
         # 立即撤销该账号全部会话
         await revoke_all_sessions(account.id)
@@ -172,6 +174,7 @@ class AccountService:
         account.status = AccountStatus.ENABLED
         account.locked_until = None
         account.login_failures = 0
+        account.row_version += 1
         await self.db.flush()
 
     @transactional()
@@ -186,6 +189,7 @@ class AccountService:
         await self._check_last_super_admin(account)
         account.status = AccountStatus.DISABLED
         account.security_version += 1
+        account.row_version += 1
         await revoke_all_sessions(account.id)
         await self.db.flush()
 
@@ -195,6 +199,7 @@ class AccountService:
         account.status = AccountStatus.ENABLED
         account.login_failures = 0
         account.locked_until = None
+        account.row_version += 1
         await self.db.flush()
 
     @transactional()
@@ -207,6 +212,7 @@ class AccountService:
         await self._check_last_super_admin(account)
         account.status = AccountStatus.DISABLED
         account.security_version += 1
+        account.row_version += 1
         await revoke_all_sessions(account.id)
         await self.db.flush()
 

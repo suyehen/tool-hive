@@ -74,11 +74,20 @@ class RoleService:
 
     @transactional()
     async def update_role(
-        self, role_id: str, name: str | None = None, description: str | None = None,
+        self,
+        role_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        expected_row_version: int | None = None,
     ) -> BackendRole:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色")
+        if (
+            expected_row_version is not None
+            and role.row_version != expected_row_version
+        ):
+            raise ConflictError("数据已被他人修改，请刷新后重试")
 
         if name and name != role.name:
             existing = await self.db.scalar(
@@ -91,6 +100,7 @@ class RoleService:
         if description is not None:
             role.description = description
 
+        role.row_version += 1
         await self.db.flush()
         return role
 
@@ -104,6 +114,7 @@ class RoleService:
         if status not in tuple(RoleStatus):
             raise ValidationError(f"无效状态: {status}")
         role.status = RoleStatus(status)
+        role.row_version += 1
         await self.db.flush()
         return role
 

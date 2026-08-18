@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from toolhive.core.time_utils import UTCDateTime
+
 
 class CreateRoleRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
@@ -13,6 +15,7 @@ class CreateRoleRequest(BaseModel):
 class UpdateRoleRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     description: str | None = Field(None, max_length=512)
+    row_version: int | None = Field(None, ge=0, description="乐观锁版本号，可选")
 
 
 class RoleStatusRequest(BaseModel):
@@ -29,8 +32,9 @@ class RoleResponse(BaseModel):
     description: str | None
     is_super_admin: bool
     status: str
-    created_at: str
-    updated_at: str | None
+    row_version: int
+    created_at: UTCDateTime
+    updated_at: UTCDateTime | None
 
 
 class RoleListResponse(BaseModel):

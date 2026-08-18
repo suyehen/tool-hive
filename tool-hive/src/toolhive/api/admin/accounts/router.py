@@ -9,11 +9,13 @@ from toolhive.api.deps import get_admin_security
 from toolhive.api.admin.accounts.schemas import (
     AccountListResponse,
     AccountResponse,
+    AssignRoleRequest,
     CreateAccountRequest,
     CreateAccountResponse,
     ResetPasswordResponse,
     StatusUpdateRequest,
 )
+from toolhive.api.admin.roles.schemas import RoleResponse
 from toolhive.config import AdminSecuritySettings
 from toolhive.api.admin.auth.router import _get_current_user
 from toolhive.core.exceptions import (
@@ -24,6 +26,7 @@ from toolhive.core.exceptions import (
 )
 from toolhive.infrastructure.database import get_db
 from toolhive.services.account_service import AccountService
+from toolhive.services.role_service import RoleService
 
 router = APIRouter(prefix="/accounts", tags=["管理账号"])
 
@@ -48,6 +51,7 @@ async def list_accounts(
                 status=a.status,
                 login_failures=a.login_failures,
                 must_change_password=a.must_change_password,
+                row_version=a.row_version,
                 created_at=a.create_time,
                 updated_at=a.update_time,
             )
@@ -102,6 +106,7 @@ async def get_account(
         status=a.status,
         login_failures=a.login_failures,
         must_change_password=a.must_change_password,
+        row_version=a.row_version,
         created_at=a.create_time,
         updated_at=a.update_time,
     )
@@ -176,3 +181,67 @@ async def force_logout(
 
     await svc.force_logout(target)
     return {"detail": "已强制下线"}
+
+
+@router.get("/{account_id}/roles", response_model=list[RoleResponse])
+async def get_account_roles(
+    account_id: str,
+    db: AsyncSession = Depends(get_db),
+    _account=Depends(_get_current_user),
+):
+    """查询账号已分配的后台角色（需 role:view）。"""
+    svc = RoleService(db)
+    roles = await svc.get_account_roles(account_id)
+    return [
+        RoleResponse(
+            id=r.id,
+            name=r.name,
+            description=r.description,
+            is_super_admin=r.is_super_admin,
+            status=r.status,
+            row_version=r.row_version,
+            created_at=r.create_time,
+            updated_at=r.update_time,
+        )
+        for r in roles
+    ]
+
+
+@router.post("/{account_id}/roles")
+async def assign_role_to_account(
+    account_id: str,
+    body: AssignRoleRequest,
+    db: AsyncSession = Depends(get_db),
+    operator=Depends(_get_current_user),
+):
+    """给账号分配后台角色（需 role:assign）。"""
+    svc = RoleService(db)
+    try:
+        await svc.assign_role_to_account(
+            account_id, role_id=body.role_id, operator_id=operator.id,
+        )
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ConflictError, ValidationError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"detail": "已分配"}
+
+
+@router.delete("/{account_id}/roles/{role_id}")
+async def remove_role_from_account(
+    account_id: str,
+    role_id: str,
+    db: AsyncSession = Depends(get_db),
+    operator=Depends(_get_current_user),
+):
+    """从账号移除后台角色（需 role:assign）。"""
+    svc = RoleService(db)
+    try:
+        await svc.remove_role_from_account(
+            account_id, role_id=role_id, operator_id=operator.id,
+        )
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ConflictError, ValidationError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"detail": "已移除"}

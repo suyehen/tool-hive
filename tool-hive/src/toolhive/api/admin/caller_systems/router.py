@@ -39,6 +39,7 @@ def _to_response(cs) -> CallerSystemResponse:
         effective_from=cs.effective_from,
         effective_to=cs.effective_to,
         deactivated_reason=cs.deactivated_reason,
+        row_version=cs.row_version,
         created_at=cs.create_time,
         updated_at=cs.update_time,
     )
@@ -116,9 +117,12 @@ async def update_caller_system(
             contact=body.contact,
             effective_from=body.effective_from,
             effective_to=body.effective_to,
+            expected_row_version=body.row_version,
         )
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _to_response(cs)
@@ -214,6 +218,7 @@ async def list_public_keys(
             fingerprint=k.fingerprint, algorithm=k.algorithm, status=k.status,
             effective_from=k.effective_from,
             effective_to=k.effective_to,
+            row_version=k.row_version,
             created_at=k.create_time,
         )
         for k in keys
@@ -244,6 +249,7 @@ async def add_public_key(
         fingerprint=key.fingerprint, algorithm=key.algorithm, status=key.status,
         effective_from=key.effective_from,
         effective_to=key.effective_to,
+        row_version=key.row_version,
         created_at=key.create_time,
     )
 
@@ -315,6 +321,7 @@ async def list_ip_rules(
         IPRuleResponse(
             id=r.id, rule_id=r.id, system_id=r.system_id,
             ip_cidr=r.ip_cidr, description=r.description, status=r.status,
+            row_version=r.row_version,
             created_at=r.create_time,
         )
         for r in rules
@@ -342,6 +349,7 @@ async def add_ip_rule(
     return IPRuleResponse(
         id=rule.id, rule_id=rule.id, system_id=rule.system_id,
         ip_cidr=rule.ip_cidr, description=rule.description, status=rule.status,
+        row_version=rule.row_version,
         created_at=rule.create_time,
     )
 

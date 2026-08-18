@@ -42,6 +42,7 @@ async def list_roles(
             RoleResponse(
                 id=r.id, name=r.name, description=r.description,
                 is_super_admin=r.is_super_admin, status=r.status,
+                row_version=r.row_version,
                 created_at=r.create_time,
                 updated_at=r.update_time,
             )
@@ -66,6 +67,7 @@ async def create_role(
     return RoleResponse(
         id=role.id, name=role.name, description=role.description,
         is_super_admin=role.is_super_admin, status=role.status,
+        row_version=role.row_version,
         created_at=role.create_time,
         updated_at=role.update_time,
     )
@@ -85,7 +87,8 @@ async def get_role(
         raise HTTPException(status_code=404, detail=str(e))
     return RoleResponse(
         id=r.id, name=r.name, description=r.description,
-        is_super_admin=r.is_super_admin, status=r.status,
+                is_super_admin=r.is_super_admin, status=r.status,
+                row_version=r.row_version,
                 created_at=r.create_time,
                 updated_at=r.update_time,
     )
@@ -101,14 +104,22 @@ async def update_role(
     """修改角色（需 role:edit）。"""
     svc = RoleService(db)
     try:
-        r = await svc.update_role(role_id, name=body.name, description=body.description)
+        r = await svc.update_role(
+            role_id,
+            name=body.name,
+            description=body.description,
+            expected_row_version=body.row_version,
+        )
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except (ConflictError, ValidationError) as e:
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RoleResponse(
         id=r.id, name=r.name, description=r.description,
         is_super_admin=r.is_super_admin, status=r.status,
+        row_version=r.row_version,
         created_at=r.create_time,
         updated_at=r.update_time,
     )

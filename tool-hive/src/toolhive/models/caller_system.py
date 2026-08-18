@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import CallerSystemStatus
@@ -39,6 +39,9 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
         DateTime(timezone=True), nullable=True,
     )
     deactivated_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
 
     def is_enabled(self) -> bool:
         if self.status != CallerSystemStatus.ENABLED:

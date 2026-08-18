@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import PublicKeyStatus
@@ -42,6 +42,9 @@ class CallerPublicKey(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )
     effective_to: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
+    )
+    row_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
     )
 
     def is_valid(self) -> bool:

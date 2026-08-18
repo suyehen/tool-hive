@@ -82,9 +82,15 @@ class CallerSystemService:
         contact: str | None = None,
         effective_from: datetime | None = None,
         effective_to: datetime | None = None,
+        expected_row_version: int | None = None,
     ) -> CallerSystem:
         """更新调用系统主记录（仅更新显式提供的字段）。"""
         system = await self.get_by_system_id(system_id)
+        if (
+            expected_row_version is not None
+            and system.row_version != expected_row_version
+        ):
+            raise ConflictError("数据已被他人修改，请刷新后重试")
         if name is not None:
             system.name = name
         if description is not None:
@@ -99,6 +105,7 @@ class CallerSystemService:
             system.effective_from = effective_from
         if effective_to is not None:
             system.effective_to = effective_to
+        system.row_version += 1
         await self.db.flush()
         return system
 
@@ -118,6 +125,7 @@ class CallerSystemService:
             raise ValidationError("当前时间不在有效期内")
 
         system.status = CallerSystemStatus.ENABLED
+        system.row_version += 1
         await self.db.flush()
         return system
 
@@ -130,6 +138,7 @@ class CallerSystemService:
             raise ConflictError("调用系统已注销，不能停用")
         system.status = CallerSystemStatus.DISABLED
         system.deactivated_reason = reason
+        system.row_version += 1
         await self.db.flush()
         return system
 
@@ -140,6 +149,7 @@ class CallerSystemService:
             raise ConflictError("只有已停用的调用系统可以恢复")
         system.status = CallerSystemStatus.ENABLED
         system.deactivated_reason = None
+        system.row_version += 1
         await self.db.flush()
         return system
 
@@ -159,6 +169,8 @@ class CallerSystemService:
             ):
                 key.status = PublicKeyStatus.REVOKED
                 self.db.add(key)
+                key.row_version += 1
+        system.row_version += 1
         await self.db.flush()
         return system
 
@@ -170,6 +182,7 @@ class CallerSystemService:
             if system.status == CallerSystemStatus.ENABLED:
                 system.status = CallerSystemStatus.DISABLED
                 system.deactivated_reason = "已过期（自动）"
+                system.row_version += 1
                 await self.db.flush()
 
     # ═════════════════════════════════════════════════════════════
@@ -266,6 +279,7 @@ class CallerSystemService:
         if key.status != PublicKeyStatus.PENDING:
             raise ConflictError("只有待启用状态的公钥可以启用")
         key.status = PublicKeyStatus.ACTIVE
+        key.row_version += 1
         await self.db.flush()
         return key
 
@@ -275,6 +289,7 @@ class CallerSystemService:
         if key.status not in (PublicKeyStatus.PENDING, PublicKeyStatus.ACTIVE):
             raise ConflictError("只能停用有效或待启用状态的公钥")
         key.status = PublicKeyStatus.DISABLED
+        key.row_version += 1
         await self.db.flush()
         return key
 
@@ -284,6 +299,7 @@ class CallerSystemService:
         if key.status == PublicKeyStatus.REVOKED:
             raise ConflictError("该公钥已撤销")
         key.status = PublicKeyStatus.REVOKED
+        key.row_version += 1
         await self.db.flush()
         return key
 
@@ -320,6 +336,7 @@ class CallerSystemService:
         if status not in tuple(IPRuleStatus):
             raise ValidationError("无效状态")
         rule.status = IPRuleStatus(status)
+        rule.row_version += 1
         await self.db.flush()
         return rule
 

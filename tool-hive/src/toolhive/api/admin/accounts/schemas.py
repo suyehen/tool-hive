@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from toolhive.core.time_utils import UTCDateTime
+
 
 class CreateAccountRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
@@ -24,8 +26,9 @@ class AccountResponse(BaseModel):
     status: str
     login_failures: int
     must_change_password: bool
-    created_at: str
-    updated_at: str | None
+    row_version: int
+    created_at: UTCDateTime
+    updated_at: UTCDateTime | None
 
 
 class AccountListResponse(BaseModel):
@@ -35,6 +38,10 @@ class AccountListResponse(BaseModel):
 
 class StatusUpdateRequest(BaseModel):
     action: str = Field(description="enable | disable | unlock")
+
+
+class AssignRoleRequest(BaseModel):
+    role_id: str = Field(min_length=1, max_length=32)
 
 
 class ResetPasswordResponse(BaseModel):

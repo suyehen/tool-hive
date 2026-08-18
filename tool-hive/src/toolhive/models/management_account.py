@@ -46,6 +46,9 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
     security_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0,
     )
+    row_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
 
     def is_enabled(self) -> bool:
         return self.status == AccountStatus.ENABLED

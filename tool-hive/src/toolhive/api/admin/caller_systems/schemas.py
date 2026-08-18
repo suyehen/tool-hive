@@ -6,6 +6,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from toolhive.core.time_utils import UTCDateTime
+
 
 class CreateCallerSystemRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
@@ -26,6 +28,7 @@ class UpdateCallerSystemRequest(BaseModel):
     contact: str | None = None
     effective_from: datetime | None = None
     effective_to: datetime | None = None
+    row_version: int | None = Field(None, ge=0, description="乐观锁版本号，可选")
 
 
 class StatusRequest(BaseModel):
@@ -42,11 +45,12 @@ class CallerSystemResponse(BaseModel):
     owner: str | None
     contact: str | None
     status: str
-    effective_from: str | None
-    effective_to: str | None
+    effective_from: UTCDateTime | None
+    effective_to: UTCDateTime | None
     deactivated_reason: str | None
-    created_at: str
-    updated_at: str | None
+    row_version: int
+    created_at: UTCDateTime
+    updated_at: UTCDateTime | None
 
 
 class CallerSystemListResponse(BaseModel):
@@ -69,9 +73,10 @@ class PublicKeyResponse(BaseModel):
     fingerprint: str
     algorithm: str
     status: str
-    effective_from: str
-    effective_to: str | None
-    created_at: str
+    effective_from: UTCDateTime
+    effective_to: UTCDateTime | None
+    row_version: int
+    created_at: UTCDateTime
 
 
 # ── IP 规则 ──
@@ -88,4 +93,5 @@ class IPRuleResponse(BaseModel):
     ip_cidr: str
     description: str | None
     status: str
-    created_at: str
+    row_version: int
+    created_at: UTCDateTime

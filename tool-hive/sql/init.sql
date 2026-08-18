@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS management_account (
     must_change_password      BOOLEAN NOT NULL DEFAULT TRUE,
     temp_password_expires_at  TIMESTAMPTZ,
     security_version          INTEGER NOT NULL DEFAULT 0,
+    row_version               INTEGER NOT NULL DEFAULT 0,
     create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time                TIMESTAMPTZ,
     create_id                VARCHAR(32),
@@ -56,6 +57,7 @@ COMMENT ON COLUMN management_account.locked_until IS '锁定到期时间';
 COMMENT ON COLUMN management_account.must_change_password IS '是否必须修改密码';
 COMMENT ON COLUMN management_account.temp_password_expires_at IS '临时密码过期时间';
 COMMENT ON COLUMN management_account.security_version IS '安全事件版本，用于会话失效判定';
+COMMENT ON COLUMN management_account.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN management_account.create_time IS '创建时间';
 COMMENT ON COLUMN management_account.update_time IS '最后更新时间';
 COMMENT ON COLUMN management_account.create_id IS '创建人 ID';
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS backend_role (
     description     VARCHAR(512),
     is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
     status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    row_version     INTEGER NOT NULL DEFAULT 0,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
     create_id      VARCHAR(32),
@@ -92,6 +95,7 @@ COMMENT ON COLUMN backend_role.name IS '角色名称，唯一';
 COMMENT ON COLUMN backend_role.description IS '角色说明';
 COMMENT ON COLUMN backend_role.is_super_admin IS '是否为超级管理员角色';
 COMMENT ON COLUMN backend_role.status IS '角色状态';
+COMMENT ON COLUMN backend_role.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN backend_role.create_time IS '创建时间';
 COMMENT ON COLUMN backend_role.update_time IS '最后更新时间';
 COMMENT ON COLUMN backend_role.create_id IS '创建人 ID';
@@ -270,6 +274,7 @@ CREATE TABLE IF NOT EXISTS caller_system (
     effective_from     TIMESTAMPTZ,
     effective_to       TIMESTAMPTZ,
     deactivated_reason TEXT,
+    row_version        INTEGER NOT NULL DEFAULT 0,
     create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time         TIMESTAMPTZ,
     create_id         VARCHAR(32),
@@ -298,6 +303,7 @@ COMMENT ON COLUMN caller_system.department IS '所属部门或团队';
 COMMENT ON COLUMN caller_system.owner IS '负责人';
 COMMENT ON COLUMN caller_system.contact IS '联系方式';
 COMMENT ON COLUMN caller_system.status IS '状态';
+COMMENT ON COLUMN caller_system.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN caller_system.effective_from IS '生效时间';
 COMMENT ON COLUMN caller_system.effective_to IS '失效时间';
 COMMENT ON COLUMN caller_system.deactivated_reason IS '停用或注销原因';
@@ -321,6 +327,7 @@ CREATE TABLE IF NOT EXISTS caller_public_key (
     status          VARCHAR(20) NOT NULL DEFAULT 'pending',
     effective_from  TIMESTAMPTZ NOT NULL,
     effective_to    TIMESTAMPTZ,
+    row_version     INTEGER NOT NULL DEFAULT 0,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
     create_id      VARCHAR(32),
@@ -345,6 +352,7 @@ COMMENT ON COLUMN caller_public_key.public_key IS '公钥（PEM）';
 COMMENT ON COLUMN caller_public_key.fingerprint IS '公钥指纹';
 COMMENT ON COLUMN caller_public_key.algorithm IS '签名算法';
 COMMENT ON COLUMN caller_public_key.status IS '状态';
+COMMENT ON COLUMN caller_public_key.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN caller_public_key.effective_from IS '生效时间';
 COMMENT ON COLUMN caller_public_key.effective_to IS '失效时间';
 COMMENT ON COLUMN caller_public_key.create_time IS '创建时间';
@@ -363,6 +371,7 @@ CREATE TABLE IF NOT EXISTS caller_ip_rule (
     ip_cidr     VARCHAR(64) NOT NULL,
     description TEXT,
     status      VARCHAR(20) NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
     create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time  TIMESTAMPTZ,
     create_id  VARCHAR(32),
@@ -380,6 +389,7 @@ COMMENT ON COLUMN caller_ip_rule.system_id IS '所属调用系统标识';
 COMMENT ON COLUMN caller_ip_rule.ip_cidr IS '来源 IP 或 CIDR';
 COMMENT ON COLUMN caller_ip_rule.description IS '规则说明';
 COMMENT ON COLUMN caller_ip_rule.status IS '状态';
+COMMENT ON COLUMN caller_ip_rule.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN caller_ip_rule.create_time IS '创建时间';
 COMMENT ON COLUMN caller_ip_rule.update_time IS '最后更新时间';
 COMMENT ON COLUMN caller_ip_rule.create_id IS '创建人 ID';
