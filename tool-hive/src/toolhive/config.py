@@ -1,10 +1,117 @@
+"""ToolHive 全局配置。
+
+配置来源与优先级：环境变量具体值 > 外挂 YAML > 代码默认值。
+外挂 YAML 通过 ``--config`` 或 ``TOOLHIVE_CONFIG_FILE`` 指定，
+在应用启动阶段统一加载（``load_settings``）。
+"""
+
 from __future__ import annotations
 
+import os
+from pathlib import Path
+from typing import Any, get_args, get_origin
+
+import yaml
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class OutboxRetrySettings(BaseModel):
+    """Outbox 重试参数。"""
+
+    initial_delay_seconds: int = Field(
+        default=5,
+        ge=1,
+        description="第一次投递失败后的等待时间，单位秒",
+    )
+    max_delay_seconds: int = Field(
+        default=1800,
+        ge=1,
+        description="重试等待时间的最大值，单位秒",
+    )
+    multiplier: float = Field(
+        default=2.0,
+        ge=1.0,
+        description="每次重试等待时间的增长倍数",
+    )
+    jitter_ratio: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="避免多个任务同时重试的随机抖动比例",
+    )
+
+
+class OutboxSettings(BaseModel):
+    """Outbox 后台投递任务配置。"""
+
+    enabled: bool = Field(default=True, description="是否启用 Outbox 后台投递任务")
+    poll_interval_ms: int = Field(
+        default=1000,
+        ge=100,
+        description="查询 PostgreSQL 待处理任务的间隔，单位毫秒",
+    )
+    batch_size: int = Field(default=50, ge=1, description="单次领取的最大任务数量")
+    max_concurrency: int = Field(
+        default=5,
+        ge=1,
+        description="Redis 等普通投递目标的最大并发处理数量",
+    )
+    lock_timeout_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="PROCESSING 任务的占用超时时间，单位秒",
+    )
+    retry: OutboxRetrySettings = Field(default_factory=OutboxRetrySettings)
+
+
+class ChromaSettings(BaseModel):
+    """Chroma 检索索引配置。"""
+
+    mode: str = Field(
+        default="embedded",
+        pattern="^(embedded|service)$",
+        description="一期固定使用 embedded；二期可以扩展为 service",
+    )
+    persist_directory: str = Field(
+        default="/vdb/tool-hive/chroma",
+        description="嵌入式 Chroma 的生产持久化目录",
+    )
+    write_concurrency: int = Field(
+        default=1,
+        ge=1,
+        description="嵌入式模式的写入并发数，一期只能为 1",
+    )
+
+
+class SnowflakeSettings(BaseModel):
+    """雪花算法 ID 配置。"""
+
+    epoch_ms: int = Field(
+        default=1767225600000,
+        description="雪花算法使用的固定起始时间戳，投产后不得随意修改",
+    )
+    datacenter_id: int = Field(
+        default=1,
+        ge=0,
+        le=31,
+        description="数据中心编号，取值范围为 0～31",
+    )
+    worker_id: int = Field(
+        default=0,
+        ge=0,
+        le=31,
+        description="当前运行节点编号，取值范围为 0～31；多实例不得重复",
+    )
+    clock_rollback_tolerance_ms: int = Field(
+        default=5,
+        ge=0,
+        description="允许等待恢复的系统时钟回退时间，单位毫秒",
+    )
+
+
 class Settings(BaseSettings):
-    """ToolHive 全局配置，从环境变量或 .env 文件加载。"""
+    """ToolHive 全局配置。"""
 
     model_config = SettingsConfigDict(
         env_prefix="TOOLHIVE_",
@@ -18,22 +125,15 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
 
-    # ── 运行面（内网） ──
-    runtime_host: str = "127.0.0.1"
-    runtime_port: int = 8100
-
-    # ── 管理面（公网） ──
-    management_host: str = "0.0.0.0"
-    management_port: int = 8101
+    # ── 监听（A01：单一应用、单一端口，仅绑定回环地址） ──
+    bind_host: str = "127.0.0.1"
+    bind_port: int = 8100
 
     # ── 数据库 ──
     database_url: str = "postgresql+asyncpg://toolhive:changeme@localhost:5432/toolhive"
 
     # ── Redis / 共享缓存 ──
     redis_url: str = "redis://localhost:6379/0"
-
-    # ── Chroma ──
-    chroma_persist_dir: str = "./chroma_data"
 
     # ── 模型服务 ──
     model_api_key: str = ""
@@ -63,6 +163,100 @@ class Settings(BaseSettings):
     # ── 密钥（生产环境务必通过环境变量覆盖） ──
     totp_encryption_key: str = ""
     csrf_secret: str = ""
+
+    # ── Outbox 后台投递 ──
+    outbox: OutboxSettings = Field(default_factory=OutboxSettings)
+
+    # ── Chroma 检索索引 ──
+    chroma: ChromaSettings = Field(default_factory=ChromaSettings)
+
+    # ── 雪花 ID ──
+    snowflake: SnowflakeSettings = Field(default_factory=SnowflakeSettings)
+
+
+def _is_model(annotation: Any) -> bool:
+    """判断注解是否为（或包含）pydantic BaseModel。"""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return True
+    origin = get_origin(annotation)
+    if origin is not None:
+        return any(_is_model(arg) for arg in get_args(annotation))
+    return False
+
+
+def _iter_env_names(
+    model_cls: type[BaseModel], prefix: str = "",
+) -> list[tuple[str, str]]:
+    """遍历模型字段，返回 (字段路径, 环境变量名) 列表。"""
+    result: list[tuple[str, str]] = []
+    for name, field in model_cls.model_fields.items():
+        path = f"{prefix}.{name}" if prefix else name
+        env_name = "TOOLHIVE_" + path.upper().replace(".", "_")
+        if _is_model(field.annotation):
+            result.extend(_iter_env_names(field.annotation, path))
+        else:
+            result.append((path, env_name))
+    return result
+
+
+def _collect_env_values() -> dict[str, Any]:
+    """收集 TOOLHIVE_ 前缀环境变量并映射为嵌套 dict。"""
+    data: dict[str, Any] = {}
+    for path, env_name in _iter_env_names(Settings):
+        value = os.environ.get(env_name)
+        if value is None:
+            continue
+        node = data
+        parts = path.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    return data
+
+
+def _load_yaml_data(config_file: str | Path | None) -> dict[str, Any]:
+    if config_file is None:
+        return {}
+    path = Path(config_file)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"配置文件不存在或不可读: {path}")
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"配置文件内容非法: {path}: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"配置文件必须是 YAML 映射: {path}")
+    return data
+
+
+def _deep_merge(
+    base: dict[str, Any], override: dict[str, Any],
+) -> dict[str, Any]:
+    """override 递归覆盖 base。"""
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def load_settings(config_file: str | Path | None = None) -> Settings:
+    """加载应用配置。
+
+    优先级：环境变量具体值 > 外挂 YAML > 代码默认值。
+    外挂配置文件通过 ``--config`` 或 ``TOOLHIVE_CONFIG_FILE`` 指定；
+    明确指定的文件不存在、不可读或内容非法时抛出异常，服务启动失败。
+    """
+    resolved = config_file or os.environ.get("TOOLHIVE_CONFIG_FILE")
+    yaml_data = _load_yaml_data(resolved)
+    env_data = _collect_env_values()
+    merged = _deep_merge(yaml_data, env_data)
+    return Settings(**merged)
 
 
 settings = Settings()

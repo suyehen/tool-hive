@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Agent 的工具蜂巢 - 统一托管、策略鉴权、安全执行"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.12"
+requires-python = ">=3.11.6,<3.12"
 authors = [
     {name = "ToolHive Team"},
 ]
@@ -23,6 +23,7 @@ dependencies = [
     "alembic>=1.14.0",
     "argon2-cffi>=23.0.0",
     "cryptography>=43.0.0",
+    "pyyaml>=6.0.1",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +38,7 @@ packages = ["src/toolhive"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]

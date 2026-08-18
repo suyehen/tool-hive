@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from toolhive.config import settings
 from toolhive.core.constants import CALLER_SYSTEM_ID_PREFIX
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
+from toolhive.infrastructure.transactions import transactional
 from toolhive.models.caller_ip_rule import CallerIPRule
 from toolhive.models.caller_public_key import CallerPublicKey
 from toolhive.models.caller_system import CallerSystem
@@ -35,6 +36,7 @@ class CallerSystemService:
     def generate_system_id() -> str:
         return f"{CALLER_SYSTEM_ID_PREFIX}{uuid.uuid4().hex}"
 
+    @transactional()
     async def create_draft(
         self,
         name: str,
@@ -65,6 +67,38 @@ class CallerSystemService:
         await self.db.flush()
         return system
 
+    @transactional()
+    async def update_system(
+        self,
+        system_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        department: str | None = None,
+        owner: str | None = None,
+        contact: str | None = None,
+        effective_from: datetime | None = None,
+        effective_to: datetime | None = None,
+    ) -> CallerSystem:
+        """更新调用系统主记录（仅更新显式提供的字段）。"""
+        system = await self.get_by_system_id(system_id)
+        if name is not None:
+            system.name = name
+        if description is not None:
+            system.description = description
+        if department is not None:
+            system.department = department
+        if owner is not None:
+            system.owner = owner
+        if contact is not None:
+            system.contact = contact
+        if effective_from is not None:
+            system.effective_from = effective_from
+        if effective_to is not None:
+            system.effective_to = effective_to
+        await self.db.flush()
+        return system
+
+    @transactional()
     async def enable(self, system_id: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
         if system.status == "enabled":
@@ -83,6 +117,7 @@ class CallerSystemService:
         await self.db.flush()
         return system
 
+    @transactional()
     async def disable(self, system_id: str, reason: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
         if system.status == "disabled":
@@ -94,6 +129,7 @@ class CallerSystemService:
         await self.db.flush()
         return system
 
+    @transactional()
     async def revive(self, system_id: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
         if system.status != "disabled":
@@ -103,6 +139,7 @@ class CallerSystemService:
         await self.db.flush()
         return system
 
+    @transactional()
     async def revoke(self, system_id: str, reason: str) -> CallerSystem:
         system = await self.get_by_system_id(system_id)
         if system.status == "revoked":
@@ -118,6 +155,7 @@ class CallerSystemService:
         await self.db.flush()
         return system
 
+    @transactional()
     async def check_and_expire(self, system_id: str) -> None:
         """超过 effective_to 自动拒绝请求（调用方检查）。"""
         system = await self.get_by_system_id(system_id)
@@ -172,6 +210,7 @@ class CallerSystemService:
     def compute_fingerprint(public_key_pem: str) -> str:
         return hashlib.sha256(public_key_pem.encode()).hexdigest()
 
+    @transactional()
     async def add_public_key(
         self,
         system_id: str,
@@ -212,6 +251,7 @@ class CallerSystemService:
         )
         return list(result.scalars().all())
 
+    @transactional()
     async def enable_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
         if key.status != "pending":
@@ -220,6 +260,7 @@ class CallerSystemService:
         await self.db.flush()
         return key
 
+    @transactional()
     async def disable_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
         if key.status not in ("pending", "active"):
@@ -228,6 +269,7 @@ class CallerSystemService:
         await self.db.flush()
         return key
 
+    @transactional()
     async def revoke_public_key(self, key_id: str) -> CallerPublicKey:
         key = await self._get_key(key_id)
         if key.status == "revoked":
@@ -240,6 +282,7 @@ class CallerSystemService:
     # IP 规则
     # ═════════════════════════════════════════════════════════════
 
+    @transactional()
     async def add_ip_rule(
         self, system_id: str, ip_cidr: str, description: str | None = None,
     ) -> CallerIPRule:
@@ -260,6 +303,7 @@ class CallerSystemService:
         )
         return list(result.scalars().all())
 
+    @transactional()
     async def update_ip_rule_status(self, rule_id: str, status: str) -> CallerIPRule:
         rule = await self.db.get(CallerIPRule, rule_id)
         if rule is None:

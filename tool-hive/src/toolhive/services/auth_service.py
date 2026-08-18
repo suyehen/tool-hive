@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.exceptions import AuthenticationError, ValidationError
+from toolhive.infrastructure.transactions import transactional
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.account_service import AccountService
 from toolhive.services.security.csrf import generate_csrf_token
@@ -48,6 +49,7 @@ class AuthService:
 
     # ── 登录步骤 1：密码校验 ──
 
+    @transactional()
     async def login_password(
         self,
         username: str,
@@ -118,6 +120,7 @@ class AuthService:
 
     # ── 登录步骤 2：MFA 验证 ──
 
+    @transactional()
     async def login_mfa_verify(
         self,
         account: ManagementAccount,
@@ -150,6 +153,7 @@ class AuthService:
 
     # ── 恢复码登录 ──
 
+    @transactional()
     async def login_with_recovery_code(
         self,
         username: str,
@@ -187,6 +191,7 @@ class AuthService:
 
     # ── MFA 绑定 ──
 
+    @transactional()
     async def bind_mfa(
         self,
         account: ManagementAccount,
@@ -227,6 +232,7 @@ class AuthService:
 
     # ── 修改密码 ──
 
+    @transactional()
     async def change_password(
         self,
         account: ManagementAccount,

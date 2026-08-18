@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from toolhive.config import Settings, settings
+from toolhive.config import Settings, load_settings, settings
 
 
 class TestSettingsDefaults:
@@ -22,15 +22,10 @@ class TestSettingsDefaults:
         s = Settings()
         assert s.debug is False
 
-    def test_default_runtime_bind(self) -> None:
+    def test_default_bind(self) -> None:
         s = Settings()
-        assert s.runtime_host == "127.0.0.1"
-        assert s.runtime_port == 8100
-
-    def test_default_management_bind(self) -> None:
-        s = Settings()
-        assert s.management_host == "0.0.0.0"
-        assert s.management_port == 8101
+        assert s.bind_host == "127.0.0.1"
+        assert s.bind_port == 8100
 
 
 class TestSettingsSecurityDefaults:
@@ -93,3 +88,62 @@ class TestGlobalSettingsInstance:
 
     def test_settings_has_app_name(self) -> None:
         assert len(settings.app_name) > 0
+
+
+class TestLoadSettings:
+    """外挂配置加载测试。"""
+
+    def test_yaml_loaded(self, tmp_path: pytest.TempPathFactory) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "app_name: TestAppYaml\noutbox:\n  poll_interval_ms: 2000\n",
+            encoding="utf-8",
+        )
+        s = load_settings(cfg)
+        assert s.app_name == "TestAppYaml"
+        assert s.outbox.poll_interval_ms == 2000
+
+    def test_env_overrides_yaml(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "app_name: FromYaml\noutbox:\n  poll_interval_ms: 2000\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("TOOLHIVE_APP_NAME", "FromEnv")
+        monkeypatch.setenv("TOOLHIVE_OUTBOX_POLL_INTERVAL_MS", "3000")
+        s = load_settings(cfg)
+        assert s.app_name == "FromEnv"
+        assert s.outbox.poll_interval_ms == 3000
+
+    def test_yaml_overrides_default(self, tmp_path: pytest.TempPathFactory) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("snowflake:\n  worker_id: 7\n", encoding="utf-8")
+        s = load_settings(cfg)
+        assert s.snowflake.worker_id == 7
+        assert s.snowflake.datacenter_id == 1
+
+    def test_missing_config_file_raises(self, tmp_path: pytest.TempPathFactory) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_settings(tmp_path / "not_exist.yaml")
+
+    def test_invalid_yaml_raises(self, tmp_path: pytest.TempPathFactory) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("key: [1, 2\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            load_settings(cfg)
+
+    def test_yaml_not_mapping_raises(self, tmp_path: pytest.TempPathFactory) -> None:
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("- a\n- b\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            load_settings(cfg)
+
+    def test_defaults_without_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TOOLHIVE_CONFIG_FILE", raising=False)
+        s = load_settings(None)
+        assert s.app_name == "ToolHive"
+        assert s.outbox.poll_interval_ms == 1000
+        assert s.chroma.mode == "embedded"
+        assert s.snowflake.datacenter_id == 1

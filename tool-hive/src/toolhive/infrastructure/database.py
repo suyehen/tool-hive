@@ -23,11 +23,10 @@ async_session_factory = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI 依赖注入用：每次请求提供一个数据库会话。"""
+    """FastAPI 依赖注入用：每次请求提供一个数据库会话。
+
+    只注入会话，不负责提交或回滚；事务边界由 Service 写方法通过
+    ``@transactional`` 声明。
+    """
     async with async_session_factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+        yield session

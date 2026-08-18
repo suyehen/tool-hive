@@ -12,6 +12,7 @@ from toolhive.core.operation_codes import (
     SUPER_ADMIN_ROLE_NAME,
     OperationCode,
 )
+from toolhive.infrastructure.transactions import transactional
 from toolhive.models.account_role import AccountRole
 from toolhive.models.backend_role import BackendRole
 from toolhive.models.management_operation import ManagementOperation
@@ -51,6 +52,7 @@ class RoleService:
             raise NotFoundError(f"角色不存在: {role_id}")
         return role
 
+    @transactional()
     async def create_role(
         self, name: str, description: str | None = None,
     ) -> BackendRole:
@@ -69,6 +71,7 @@ class RoleService:
         await self.db.flush()
         return role
 
+    @transactional()
     async def update_role(
         self, role_id: str, name: str | None = None, description: str | None = None,
     ) -> BackendRole:
@@ -90,6 +93,7 @@ class RoleService:
         await self.db.flush()
         return role
 
+    @transactional()
     async def update_role_status(
         self, role_id: str, status: str,
     ) -> BackendRole:
@@ -116,6 +120,7 @@ class RoleService:
         )
         return list(result.scalars().all())
 
+    @transactional()
     async def assign_operations(
         self, role_id: str, operation_codes: list[str],
     ) -> None:
@@ -135,6 +140,7 @@ class RoleService:
                 self.db.add(op)
         await self.db.flush()
 
+    @transactional()
     async def remove_operations(
         self, role_id: str, operation_codes: list[str],
     ) -> None:
@@ -166,6 +172,7 @@ class RoleService:
         )
         return list(result.scalars().all())
 
+    @transactional()
     async def assign_role_to_account(
         self, account_id: str, role_id: str, operator_id: str,
     ) -> None:
@@ -189,6 +196,7 @@ class RoleService:
         self.db.add(acct_role)
         await self.db.flush()
 
+    @transactional()
     async def remove_role_from_account(
         self, account_id: str, role_id: str, operator_id: str,
     ) -> None:
@@ -265,6 +273,7 @@ class RoleService:
     # 启动同步
     # ═════════════════════════════════════════════════════════════
 
+    @transactional()
     async def sync_operation_codes(self) -> None:
         """启动时同步操作码到数据库（幂等）。"""
         all_codes = set(OperationCode)
@@ -312,6 +321,7 @@ class RoleService:
 
         await self.db.flush()
 
+    @transactional()
     async def ensure_super_admin_role(self) -> BackendRole:
         """确保超级管理员角色存在（首次启动时创建）。"""
         role = await self.db.scalar(

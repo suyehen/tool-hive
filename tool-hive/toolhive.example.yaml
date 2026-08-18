@@ -1,0 +1,100 @@
+# ToolHive 外挂配置文件示例
+# 通过 --config <path> 或环境变量 TOOLHIVE_CONFIG_FILE 指定。
+# 配置优先级：环境变量具体值 > 本文件 > 代码默认值。
+# 生产部署建议复制为 /vdb/tool-hive/config/production.yaml 使用。
+
+# ── 应用 ──
+app_name: ToolHive
+app_version: 0.1.0
+debug: false
+
+# ── 监听（A01：单一应用、单一端口，仅绑定回环地址） ──
+bind_host: 127.0.0.1
+bind_port: 8100
+
+# ── 数据库 ──
+database_url: postgresql+asyncpg://toolhive:changeme@localhost:5432/toolhive
+
+# ── Redis / 共享缓存 ──
+redis_url: redis://localhost:6379/0
+
+# ── 模型服务 ──
+model_api_key: ""
+embedding_model: ""
+
+# ── 安全：登录与账号 ──
+# 连续登录失败次数达到该值后锁定账号。
+login_max_failures: 5
+# 账号锁定时长，单位分钟。
+login_lock_minutes: 30
+# 同一账号或来源 IP 触发验证码的连续失败次数。
+captcha_trigger_failures: 3
+# 验证码触发统计的时间窗口，单位分钟。
+captcha_trigger_window_minutes: 10
+# 临时密码有效期，单位小时。
+temp_password_expire_hours: 24
+# 密码最小长度。
+password_min_length: 12
+# 密码最大长度。
+password_max_length: 128
+# 禁止与最近 N 次历史密码重复。
+password_history_count: 5
+
+# ── 安全：会话 ──
+# 会话空闲超时，单位分钟。
+session_idle_timeout_minutes: 30
+# 单次登录最长有效时间，单位小时。
+session_absolute_timeout_hours: 8
+
+# ── 安全：运行侧签名 ──
+signature_time_window_seconds: 300
+nonce_retention_minutes: 10
+signing_key_min_bits: 2048
+signing_algorithm: RSA-PSS-SHA256
+signature_version: TOOLHIVE-SIGN-V1
+
+# ── 密钥（生产环境务必通过环境变量覆盖） ──
+totp_encryption_key: ""
+csrf_secret: ""
+
+# ── Outbox 后台投递任务 ──
+outbox:
+  # 是否启用 Outbox 后台投递任务。
+  enabled: true
+  # 查询 PostgreSQL 待处理任务的间隔，单位毫秒。
+  poll_interval_ms: 1000
+  # 单次领取的最大任务数量。
+  batch_size: 50
+  # Redis 等普通投递目标的最大并发处理数量。
+  max_concurrency: 5
+  # PROCESSING 任务的占用超时时间，单位秒。
+  lock_timeout_seconds: 60
+  retry:
+    # 第一次投递失败后的等待时间，单位秒。
+    initial_delay_seconds: 5
+    # 重试等待时间的最大值，单位秒。
+    max_delay_seconds: 1800
+    # 每次重试等待时间的增长倍数。
+    multiplier: 2.0
+    # 避免多个任务同时重试的随机抖动比例。
+    jitter_ratio: 0.1
+
+# ── Chroma 检索索引 ──
+chroma:
+  # 一期固定使用 embedded；二期可以扩展为 service。
+  mode: embedded
+  # 嵌入式 Chroma 的生产持久化目录。
+  persist_directory: /vdb/tool-hive/chroma
+  # 嵌入式模式的写入并发数，一期只能为 1。
+  write_concurrency: 1
+
+# ── 雪花算法 ID ──
+snowflake:
+  # 固定起始时间戳，投产后不得随意修改。
+  epoch_ms: 1767225600000
+  # 数据中心编号，取值范围为 0～31。
+  datacenter_id: 1
+  # 当前运行节点编号，取值范围为 0～31；多实例不得重复。
+  worker_id: 0
+  # 允许等待恢复的系统时钟回退时间，单位毫秒。
+  clock_rollback_tolerance_ms: 5

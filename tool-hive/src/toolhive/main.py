@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import argparse
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from toolhive.config import settings
+# 启动阶段统一加载配置：--config 或 TOOLHIVE_CONFIG_FILE 指定外挂 YAML
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--config", dest="config_file", default=None)
+_args, _ = _parser.parse_known_args()
+
+from toolhive.config import load_settings
+
+settings = load_settings(_args.config_file)
 
 
 @asynccontextmanager

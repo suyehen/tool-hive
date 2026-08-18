@@ -106,26 +106,20 @@ async def update_caller_system(
 ):
     svc = CallerSystemService(db)
     try:
-        cs = await svc.get_by_system_id(system_id)
+        cs = await svc.update_system(
+            system_id,
+            name=body.name,
+            description=body.description,
+            department=body.department,
+            owner=body.owner,
+            contact=body.contact,
+            effective_from=body.effective_from,
+            effective_to=body.effective_to,
+        )
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-    if body.name is not None:
-        cs.name = body.name
-    if body.description is not None:
-        cs.description = body.description
-    if body.department is not None:
-        cs.department = body.department
-    if body.owner is not None:
-        cs.owner = body.owner
-    if body.contact is not None:
-        cs.contact = body.contact
-    if body.effective_from is not None:
-        cs.effective_from = body.effective_from
-    if body.effective_to is not None:
-        cs.effective_to = body.effective_to
-
-    await db.flush()
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _to_response(cs)
 
 

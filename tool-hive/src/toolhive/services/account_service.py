@@ -14,6 +14,7 @@ from toolhive.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from toolhive.infrastructure.transactions import transactional
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.security.password import (
     generate_temp_password,
@@ -32,6 +33,7 @@ class AccountService:
 
     # ── 初始化 ──
 
+    @transactional()
     async def init_super_admin(self, username: str, password: str) -> ManagementAccount:
         """CLI 调用：仅当无任何账号时创建首个超级管理员。"""
         count = await self.db.scalar(
@@ -53,6 +55,7 @@ class AccountService:
 
     # ── 创建 ──
 
+    @transactional()
     async def create_account(
         self,
         username: str,
@@ -122,6 +125,7 @@ class AccountService:
 
     # ── 密码 ──
 
+    @transactional()
     async def update_password(
         self, account: ManagementAccount, old_password: str, new_password: str,
     ) -> None:
@@ -133,6 +137,7 @@ class AccountService:
         await self._set_password(account, new_password)
         await self.db.flush()
 
+    @transactional()
     async def reset_password(
         self, account: ManagementAccount,
     ) -> str:
@@ -157,6 +162,7 @@ class AccountService:
 
     # ── 状态控制 ──
 
+    @transactional()
     async def enable_account(self, account: ManagementAccount) -> None:
         if account.status == "enabled":
             raise ConflictError("账号已启用")
@@ -165,6 +171,7 @@ class AccountService:
         account.login_failures = 0
         await self.db.flush()
 
+    @transactional()
     async def disable_account(
         self, account: ManagementAccount, operator_id: str,
     ) -> None:
@@ -178,6 +185,7 @@ class AccountService:
         await revoke_all_sessions(account.id)
         await self.db.flush()
 
+    @transactional()
     async def unlock_account(self, account: ManagementAccount) -> None:
         """提前解锁账号。"""
         account.status = "enabled"
@@ -185,6 +193,7 @@ class AccountService:
         account.locked_until = None
         await self.db.flush()
 
+    @transactional()
     async def offboard_account(
         self, account: ManagementAccount, operator_id: str,
     ) -> None:
@@ -202,16 +211,25 @@ class AccountService:
 
     # ── 登录安全计数 ──
 
+    @transactional(requires_new=True)
     async def record_login_failure(self, account: ManagementAccount) -> None:
-        """记录一次登录失败，检查是否需要锁定。"""
-        account.login_failures += 1
-        if account.login_failures >= settings.login_max_failures:
-            account.status = "locked"
-            account.locked_until = datetime.now(timezone.utc) + timedelta(
+        """记录一次登录失败，检查是否需要锁定。
+
+        使用独立事务提交，保证请求最终返回认证失败时，
+        失败计数与锁定状态仍然持久化。
+        """
+        fresh = await self.db.get(ManagementAccount, account.id)
+        if fresh is None:
+            return
+        fresh.login_failures += 1
+        if fresh.login_failures >= settings.login_max_failures:
+            fresh.status = "locked"
+            fresh.locked_until = datetime.now(timezone.utc) + timedelta(
                 minutes=settings.login_lock_minutes,
             )
         await self.db.flush()
 
+    @transactional()
     async def record_login_success(self, account: ManagementAccount) -> None:
         """登录成功：清空失败计数，自动解除锁定状态。"""
         account.login_failures = 0
