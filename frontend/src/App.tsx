@@ -3,6 +3,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AdminLayout from './layouts/AdminLayout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
+import ChangePasswordPage from './pages/ChangePasswordPage';
 import AccountListPage from './pages/accounts/AccountListPage';
 import RoleListPage from './pages/roles/RoleListPage';
 import CallerSystemListPage from './pages/caller-systems/CallerSystemListPage';
@@ -21,6 +22,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
+        <Route path="change-password" element={<ChangePasswordPage />} />
         <Route path="accounts" element={<AccountListPage />} />
         <Route path="roles" element={<RoleListPage />} />
         <Route path="caller-systems" element={<CallerSystemListPage />} />

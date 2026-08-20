@@ -9,12 +9,14 @@ import {
   getRoleOperations, assignOperations, removeOperations, listAllOperations,
   type RoleItem, type OperationItem,
 } from '../../api/roles';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { Title } = Typography;
 
 const statusColor: Record<string, string> = { active: 'green', disabled: 'orange', archived: 'red' };
 
 export default function RoleListPage() {
+  const { hasOperation } = useAuth();
   const [roles, setRoles] = useState<RoleItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -119,18 +121,20 @@ export default function RoleListPage() {
       title: '操作', key: 'actions', width: 300,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" onClick={() => openOpsModal(record.id)}>操作项</Button>
-          {!record.is_super_admin && record.status === 'active' && (
+          {hasOperation('role:edit') && (
+            <Button size="small" onClick={() => openOpsModal(record.id)}>操作项</Button>
+          )}
+          {hasOperation('role:manage') && !record.is_super_admin && record.status === 'active' && (
             <Popconfirm title="确认停用？" onConfirm={() => handleStatus(record.id, 'disabled')}>
               <Button size="small">停用</Button>
             </Popconfirm>
           )}
-          {record.status === 'disabled' && (
+          {hasOperation('role:manage') && record.status === 'disabled' && (
             <Popconfirm title="确认启用？" onConfirm={() => handleStatus(record.id, 'active')}>
               <Button size="small">启用</Button>
             </Popconfirm>
           )}
-          {record.status !== 'archived' && !record.is_super_admin && (
+          {hasOperation('role:manage') && record.status !== 'archived' && !record.is_super_admin && (
             <Popconfirm title="确认归档？" onConfirm={() => handleStatus(record.id, 'archived')}>
               <Button size="small">归档</Button>
             </Popconfirm>
@@ -149,9 +153,11 @@ export default function RoleListPage() {
         <Title level={4} style={{ margin: 0 }}>后台角色 ({total})</Title>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchRoles}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-            创建角色
-          </Button>
+          {hasOperation('role:create') && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              创建角色
+            </Button>
+          )}
         </Space>
       </div>
 

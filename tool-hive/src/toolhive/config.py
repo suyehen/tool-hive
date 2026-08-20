@@ -393,4 +393,31 @@ def load_settings(config_file: str | Path | None = None) -> Settings:
     return settings
 
 
+def validate_production_settings(settings: Settings) -> None:
+    """生产模式（debug=false）配置校验。
+
+    不满足时抛出 ValueError，应用启动失败并输出明确原因；
+    开发模式（debug=true）跳过校验，允许宽松配置。
+    """
+    if settings.debug:
+        return
+    errors: list[str] = []
+    if not settings.csrf_secret:
+        errors.append("csrf_secret 不能为空，必须通过环境变量或配置文件设置")
+    if "changeme" in settings.database_url:
+        errors.append("database_url 不能使用默认占位密码 changeme")
+    if "changeme" in settings.redis_url:
+        errors.append("redis_url 不能使用默认占位密码 changeme")
+    if settings.network.allow_loopback_direct:
+        errors.append("network.allow_loopback_direct 在生产环境必须为 false")
+    if settings.bind_host not in ("127.0.0.1", "::1"):
+        errors.append("bind_host 在生产环境必须绑定回环地址（127.0.0.1 或 ::1）")
+    if not settings.network.trusted_proxies:
+        errors.append("network.trusted_proxies 不能为空，必须包含部署的 Nginx 地址")
+    if errors:
+        raise ValueError(
+            "生产配置校验失败，拒绝启动：\n- " + "\n- ".join(errors),
+        )
+
+
 settings = Settings()

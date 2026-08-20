@@ -5,7 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 const { Title } = Typography;
 
 export default function DashboardPage() {
-  const { session } = useAuth();
+  const { session, me, operationItems } = useAuth();
+
+  const statusText =
+    me?.status === 'enabled' ? '正常' : me?.status === 'disabled' ? '已禁用' : me?.status || '-';
 
   return (
     <>
@@ -20,12 +23,12 @@ export default function DashboardPage() {
         </Col>
         <Col span={8}>
           <Card>
-            <Statistic title="角色" value={session?.is_super_admin ? '超级管理员' : '普通管理员'} prefix={<SafetyOutlined />} />
+            <Statistic title="账号状态" value={statusText} prefix={<SafetyOutlined />} />
           </Card>
         </Col>
         <Col span={8}>
           <Card>
-            <Statistic title="当前会话" value="已认证" prefix={<ApiOutlined />} valueStyle={{ color: '#52c41a' }} />
+            <Statistic title="已授权操作项" value={operationItems.length} prefix={<ApiOutlined />} />
           </Card>
         </Col>
       </Row>

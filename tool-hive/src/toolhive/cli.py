@@ -55,6 +55,30 @@ async def _init_admin(username: str) -> int:
     return 0
 
 
+async def _db_migrate() -> int:
+    """执行 sql/migrations/ 下未应用的增量迁移。"""
+    from pathlib import Path
+
+    from toolhive.config import settings
+    from toolhive.services.db_migration import run_migrations
+
+    migrations_dir = (
+        Path(__file__).resolve().parent.parent.parent
+        / "sql"
+        / "migrations"
+    )
+    executed = await run_migrations(
+        settings.infrastructure.database_url,
+        migrations_dir,
+    )
+    if executed:
+        for name in executed:
+            print(f"已应用迁移: {name}")
+    else:
+        print("没有待应用的迁移")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """ToolHive 管理命令入口。"""
     parser = argparse.ArgumentParser(
@@ -83,6 +107,10 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="首个超级管理员用户名（必填）",
     )
+    sub.add_parser(
+        "db-migrate",
+        help="执行 sql/migrations/ 下未应用的数据库增量迁移",
+    )
     args = parser.parse_args(argv)
 
     load_settings(args.config)
@@ -91,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_rebuild_chroma())
     if args.command == "init-admin":
         return asyncio.run(_init_admin(args.username))
+    if args.command == "db-migrate":
+        return asyncio.run(_db_migrate())
     parser.error(f"未知命令: {args.command}")
     return 2
 

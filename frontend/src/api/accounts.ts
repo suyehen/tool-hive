@@ -51,3 +51,7 @@ export async function resetPassword(id: string): Promise<{ temp_password: string
 export async function forceLogout(id: string): Promise<void> {
   await client.post(`/accounts/${id}/force-logout`);
 }
+
+export async function offboardAccount(id: string): Promise<void> {
+  await client.post(`/accounts/${id}/offboard`);
+}

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import AccountStatus
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
@@ -55,10 +55,10 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
 
     def is_locked(self) -> bool:
         if self.status == AccountStatus.LOCKED:
-            if self.locked_until and self.locked_until > datetime.utcnow():
+            if self.locked_until and self.locked_until > datetime.now(UTC):
                 return True
             # 锁定期已过，但状态尚未更新（下一次登录成功时更正）
-            if self.locked_until and self.locked_until <= datetime.utcnow():
+            if self.locked_until and self.locked_until <= datetime.now(UTC):
                 return False
             return True
         return False

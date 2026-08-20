@@ -50,6 +50,17 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+def _get_client_ip(request: Request) -> str:
+    """获取可信来源 IP。
+
+    优先使用入口中间件（A10）解析并写入 ``request.state.client_ip`` 的结果；
+    仅在中间件未写入时回退到直连地址，业务代码不得直接读取代理 Header。
+    """
+    return getattr(request.state, "client_ip", None) or (
+        request.client.host if request.client else "unknown"
+    )
+
+
 # ── 端点 ──
 
 
@@ -75,10 +86,7 @@ async def login(
     """图形验证码 + 账号密码登录，成功直接创建管理会话。"""
     svc = AuthService(db, admin_security)
     try:
-        source_ip = request.headers.get(
-            "X-Forwarded-For",
-            request.client.host if request.client else "unknown",
-        )
+        source_ip = _get_client_ip(request)
         result = await svc.login_password(
             username=body.username,
             password=body.password,
@@ -189,10 +197,7 @@ async def change_password(
         await rotate_session_id(old_session_id)  # 这里需要重新创建
         # 简化：直接重新创建会话
         from toolhive.services.security.session import create_session
-        source_ip = request.headers.get(
-            "X-Forwarded-For",
-            request.client.host if request.client else "unknown",
-        )
+        source_ip = _get_client_ip(request)
         new_sid = await create_session(
             account_id=account.id,
             username=account.username,

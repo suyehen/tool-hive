@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu, Button, theme, Dropdown, type MenuProps } from 'antd';
 import {
@@ -15,17 +15,22 @@ const { Header, Sider, Content } = Layout;
 
 export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
-  const { session, logout } = useAuth();
+  const { session, operationItems, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
 
-  const menuItems: MenuProps['items'] = [
+  // 菜单 → 后端操作码（前端仅控制展示，后端仍独立校验）
+  const menuPermission: Array<{ key: string; icon: ReactNode; label: string; operation?: string }> = [
     { key: '/', icon: <DashboardOutlined />, label: '首页' },
-    { key: '/accounts', icon: <UserOutlined />, label: '管理账号' },
-    { key: '/roles', icon: <SafetyOutlined />, label: '后台角色' },
-    { key: '/caller-systems', icon: <ApiOutlined />, label: '调用系统' },
+    { key: '/accounts', icon: <UserOutlined />, label: '管理账号', operation: 'admin_account:view' },
+    { key: '/roles', icon: <SafetyOutlined />, label: '后台角色', operation: 'role:view' },
+    { key: '/caller-systems', icon: <ApiOutlined />, label: '调用系统', operation: 'caller_system:view' },
   ];
+
+  const menuItems: MenuProps['items'] = menuPermission
+    .filter((item) => !item.operation || operationItems.includes(item.operation))
+    .map(({ key, icon, label }) => ({ key, icon, label }));
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(key);

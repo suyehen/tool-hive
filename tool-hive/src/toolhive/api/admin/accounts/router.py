@@ -183,6 +183,28 @@ async def force_logout(
     return {"detail": "已强制下线"}
 
 
+@router.post("/{account_id}/offboard")
+async def offboard_account(
+    account_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
+    operator=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_MANAGE)),
+):
+    """离职处理：禁用账号、撤销全部会话并保留记录（需 admin_account:manage）。"""
+    svc = AccountService(db, admin_security)
+    try:
+        target = await svc.get_by_id(account_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    try:
+        await svc.offboard_account(target, operator_id=operator.id)
+    except (ConflictError, ValidationError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"detail": "已执行离职处理"}
+
+
 @router.get("/{account_id}/roles", response_model=list[RoleResponse])
 async def get_account_roles(
     account_id: str,

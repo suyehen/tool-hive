@@ -20,6 +20,10 @@ settings = load_settings(_args.config_file)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理。"""
+    # 生产配置校验：不满足时启动失败并输出明确原因
+    from toolhive.config import validate_production_settings
+    validate_production_settings(settings)
+
     # 启动阶段：初始化基础设施与管理安全配置分区
     from toolhive.infrastructure.database import init_infrastructure
     from toolhive.infrastructure.redis import init_redis

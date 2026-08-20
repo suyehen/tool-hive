@@ -6,8 +6,10 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   listAccounts, createAccount, updateAccountStatus, resetPassword, forceLogout,
+  offboardAccount,
   type AccountItem,
 } from '../../api/accounts';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { Title } = Typography;
 
@@ -19,6 +21,7 @@ const statusLabel: Record<string, string> = {
 };
 
 export default function AccountListPage() {
+  const { hasOperation } = useAuth();
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -88,6 +91,17 @@ export default function AccountListPage() {
     }
   };
 
+  const handleOffboard = async (id: string) => {
+    try {
+      await offboardAccount(id);
+      message.success('已执行离职处理');
+      fetchAccounts();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '操作失败';
+      message.error(msg);
+    }
+  };
+
   const columns: ColumnsType<AccountItem> = [
     { title: '用户名', dataIndex: 'username', key: 'username' },
     { title: '工号', dataIndex: 'external_user_id', key: 'external_user_id', render: (v) => v || '-' },
@@ -104,27 +118,37 @@ export default function AccountListPage() {
       title: '操作', key: 'actions', width: 300,
       render: (_, record) => (
         <Space size="small" wrap>
-          {record.status === 'disabled' && (
+          {hasOperation('admin_account:manage') && record.status === 'disabled' && (
             <Popconfirm title="确认启用？" onConfirm={() => handleAction(record.id, 'enable')}>
               <Button size="small">启用</Button>
             </Popconfirm>
           )}
-          {record.status === 'enabled' && (
+          {hasOperation('admin_account:manage') && record.status === 'enabled' && (
             <Popconfirm title="确认禁用？" onConfirm={() => handleAction(record.id, 'disable')}>
               <Button size="small" danger>禁用</Button>
             </Popconfirm>
           )}
-          {record.status === 'locked' && (
+          {hasOperation('admin_account:manage') && record.status === 'locked' && (
             <Popconfirm title="确认解锁？" onConfirm={() => handleAction(record.id, 'unlock')}>
               <Button size="small">解锁</Button>
             </Popconfirm>
           )}
-          <Popconfirm title="确认重置密码？" onConfirm={() => handleResetPassword(record.id)}>
-            <Button size="small">重置密码</Button>
-          </Popconfirm>
-          <Popconfirm title="确认强制下线？" onConfirm={() => handleForceLogout(record.id)}>
-            <Button size="small">强制下线</Button>
-          </Popconfirm>
+          {hasOperation('admin_account:manage') && (
+            <>
+              <Popconfirm title="确认重置密码？" onConfirm={() => handleResetPassword(record.id)}>
+                <Button size="small">重置密码</Button>
+              </Popconfirm>
+              <Popconfirm title="确认强制下线？" onConfirm={() => handleForceLogout(record.id)}>
+                <Button size="small">强制下线</Button>
+              </Popconfirm>
+              <Popconfirm
+                title="确认执行离职处理？将禁用账号并撤销全部会话"
+                onConfirm={() => handleOffboard(record.id)}
+              >
+                <Button size="small" danger>离职</Button>
+              </Popconfirm>
+            </>
+          )}
         </Space>
       ),
     },
@@ -136,9 +160,11 @@ export default function AccountListPage() {
         <Title level={4} style={{ margin: 0 }}>管理账号 ({total})</Title>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchAccounts}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-            创建账号
-          </Button>
+          {hasOperation('admin_account:create') && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              创建账号
+            </Button>
+          )}
         </Space>
       </div>
 

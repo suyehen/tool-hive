@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from toolhive.config import Settings, load_settings, settings
+from toolhive.config import (
+    Settings,
+    load_settings,
+    settings,
+    validate_production_settings,
+)
 
 
 class TestSettingsDefaults:
@@ -148,3 +153,38 @@ class TestLoadSettings:
         assert s.outbox.poll_interval_ms == 1000
         assert s.chroma.mode == "embedded"
         assert s.snowflake.datacenter_id == 1
+
+
+class TestProductionValidation:
+    """生产配置校验（H11）。"""
+
+    def test_development_skips_validation(self) -> None:
+        s = Settings(debug=True)
+        validate_production_settings(s)  # 不应抛出
+
+    def test_production_rejects_insecure_defaults(self) -> None:
+        s = Settings()
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        message = str(exc_info.value)
+        assert "csrf_secret" in message
+        assert "changeme" in message
+
+    def test_production_accepts_secure_settings(self) -> None:
+        s = Settings(
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+        )
+        validate_production_settings(s)  # 不应抛出
+
+    def test_production_rejects_loopback_direct(self) -> None:
+        s = Settings(
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+            network={"allow_loopback_direct": True},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        assert "allow_loopback_direct" in str(exc_info.value)

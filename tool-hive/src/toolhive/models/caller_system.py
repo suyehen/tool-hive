@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -55,7 +55,7 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
     def is_enabled(self) -> bool:
         if self.status != CallerSystemStatus.ENABLED:
             return False
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         if self.effective_to and self.effective_to <= now:
             return False
         return True

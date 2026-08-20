@@ -5,6 +5,9 @@ import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import {
   loginPassword,
   getCaptchaChallenge,
+  getSession,
+  getMe,
+  getOperationItems,
   type CaptchaChallenge,
 } from '../api/auth';
 import { useAuth } from '../contexts/AuthContext';
@@ -52,13 +55,13 @@ export default function LoginPage() {
         captcha.captcha_id,
         values.captchaCode,
       );
-      login(result.csrf_token, {
-        account_id: '',
-        username: result.username,
-        is_super_admin: result.is_super_admin,
-        source_ip: '',
-        created_at: '',
-      });
+      // 登录成功后拉取真实会话、账号资料与实时操作项
+      const [session, me, operationItems] = await Promise.all([
+        getSession(),
+        getMe(),
+        getOperationItems(),
+      ]);
+      login(result.csrf_token, session, me, operationItems);
       message.success('登录成功');
       navigate(from, { replace: true });
     } catch (err: unknown) {

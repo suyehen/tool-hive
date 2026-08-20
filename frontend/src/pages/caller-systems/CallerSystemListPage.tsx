@@ -11,6 +11,7 @@ import {
   listIPRules, addIPRule, updateIPRuleStatus,
   type CallerSystemItem, type PublicKeyItem, type IPRuleItem,
 } from '../../api/caller-systems';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { Title, Paragraph } = Typography;
 
@@ -19,6 +20,7 @@ const statusColor: Record<string, string> = {
 };
 
 export default function CallerSystemListPage() {
+  const { hasOperation } = useAuth();
   const [systems, setSystems] = useState<CallerSystemItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -121,13 +123,15 @@ export default function CallerSystemListPage() {
       title: '操作', key: 'actions', width: 280,
       render: (_, record) => (
         <Space size="small">
-          <Button size="small" onClick={() => openDetail(record.system_id)}>详情</Button>
-          {record.status === 'draft' && (
+          {hasOperation('caller_system:view') && (
+            <Button size="small" onClick={() => openDetail(record.system_id)}>详情</Button>
+          )}
+          {hasOperation('caller_system:manage') && record.status === 'draft' && (
             <Popconfirm title="确认启用？" onConfirm={() => handleLifecycle(record.system_id, 'enable')}>
               <Button size="small" type="primary">启用</Button>
             </Popconfirm>
           )}
-          {record.status === 'enabled' && (
+          {hasOperation('caller_system:manage') && record.status === 'enabled' && (
             <Popconfirm title="确认停用？" onConfirm={() => {
               const reason = prompt('停用原因（可选）：') || '';
               handleLifecycle(record.system_id, 'disable', reason);
@@ -135,7 +139,7 @@ export default function CallerSystemListPage() {
               <Button size="small" danger>停用</Button>
             </Popconfirm>
           )}
-          {record.status === 'disabled' && (
+          {hasOperation('caller_system:manage') && record.status === 'disabled' && (
             <Space size="small">
               <Popconfirm title="确认恢复？" onConfirm={() => handleLifecycle(record.system_id, 'revive')}>
                 <Button size="small">恢复</Button>
@@ -161,17 +165,17 @@ export default function CallerSystemListPage() {
       title: '操作', key: 'actions', width: 200,
       render: (_, record) => (
         <Space size="small">
-          {record.status === 'pending' && (
+          {hasOperation('caller_system:manage') && record.status === 'pending' && (
             <Popconfirm title="确认启用？" onConfirm={() => enablePublicKey(record.key_id).then(() => openDetail(detailId!))}>
               <Button size="small">启用</Button>
             </Popconfirm>
           )}
-          {(record.status === 'pending' || record.status === 'active') && (
+          {hasOperation('caller_system:manage') && (record.status === 'pending' || record.status === 'active') && (
             <Popconfirm title="确认停用？" onConfirm={() => disablePublicKey(record.key_id).then(() => openDetail(detailId!))}>
               <Button size="small">停用</Button>
             </Popconfirm>
           )}
-          {record.status !== 'revoked' && (
+          {hasOperation('caller_system:manage') && record.status !== 'revoked' && (
             <Popconfirm title="确认撤销？不可恢复！" onConfirm={() => revokePublicKey(record.key_id).then(() => openDetail(detailId!))}>
               <Button size="small" danger>撤销</Button>
             </Popconfirm>
@@ -188,9 +192,11 @@ export default function CallerSystemListPage() {
     {
       title: '操作', key: 'actions', width: 100,
       render: (_, record) => (
-        <Popconfirm title="切换启用/停用" onConfirm={() => updateIPRuleStatus(record.id, 'toggle').then(() => openDetail(detailId!))}>
-          <Button size="small">{record.status === 'active' ? '停用' : '启用'}</Button>
-        </Popconfirm>
+        hasOperation('caller_system:manage') ? (
+          <Popconfirm title="切换启用/停用" onConfirm={() => updateIPRuleStatus(record.id, 'toggle').then(() => openDetail(detailId!))}>
+            <Button size="small">{record.status === 'active' ? '停用' : '启用'}</Button>
+          </Popconfirm>
+        ) : null
       ),
     },
   ];
@@ -201,9 +207,11 @@ export default function CallerSystemListPage() {
         <Title level={4} style={{ margin: 0 }}>调用系统 ({total})</Title>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchSystems}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-            登记调用系统
-          </Button>
+          {hasOperation('caller_system:create') && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              登记调用系统
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -250,7 +258,9 @@ export default function CallerSystemListPage() {
                           <Input.TextArea placeholder="粘贴 PEM 公钥" rows={3} style={{ width: 400 }} />
                         </Form.Item>
                       </Form>
-                      <Button type="primary" onClick={handleAddKey}>添加公钥</Button>
+                      {hasOperation('caller_system:manage') && (
+                        <Button type="primary" onClick={handleAddKey}>添加公钥</Button>
+                      )}
                     </Space>
                   </div>
                   <Table columns={keyColumns} dataSource={keys} rowKey="key_id" size="small" />
@@ -272,7 +282,9 @@ export default function CallerSystemListPage() {
                           <Input placeholder="描述（可选）" />
                         </Form.Item>
                       </Form>
-                      <Button type="primary" onClick={handleAddRule}>添加规则</Button>
+                      {hasOperation('caller_system:manage') && (
+                        <Button type="primary" onClick={handleAddRule}>添加规则</Button>
+                      )}
                     </Space>
                   </div>
                   <Table columns={ruleColumns} dataSource={rules} rowKey="id" size="small" />

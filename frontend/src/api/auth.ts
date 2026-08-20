@@ -4,7 +4,6 @@ export interface LoginResponse {
   session_id: string;
   csrf_token: string;
   username: string;
-  is_super_admin: boolean;
 }
 
 export interface CaptchaChallenge {
@@ -40,14 +39,34 @@ export async function logout(): Promise<void> {
 export interface SessionInfo {
   account_id: string;
   username: string;
-  is_super_admin: boolean;
   source_ip: string;
   created_at: string;
+}
+
+export interface MeInfo {
+  account_id: string;
+  username: string;
+  external_user_id: string | null;
+  status: string;
+}
+
+export interface OperationItemsResponse {
+  operation_items: string[];
 }
 
 export async function getSession(): Promise<SessionInfo> {
   const { data } = await client.get('/auth/session');
   return data;
+}
+
+export async function getMe(): Promise<MeInfo> {
+  const { data } = await client.get('/auth/me');
+  return data;
+}
+
+export async function getOperationItems(): Promise<string[]> {
+  const { data } = await client.get<OperationItemsResponse>('/auth/me/operation-items');
+  return data.operation_items;
 }
 
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {

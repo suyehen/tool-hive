@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import PublicKeyStatus
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class CallerPublicKey(Base, UUIDPrimaryKeyMixin, AuditMixin):
@@ -53,7 +53,7 @@ class CallerPublicKey(Base, UUIDPrimaryKeyMixin, AuditMixin):
             PublicKeyStatus.ACTIVE,
         ):
             return False
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         if self.effective_from > now:
             return False
         if self.effective_to and self.effective_to <= now:
