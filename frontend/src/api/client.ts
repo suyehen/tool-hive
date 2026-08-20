@@ -22,7 +22,7 @@ client.interceptors.response.use(
     if (err.response?.status === 401) {
       localStorage.removeItem('csrf_token');
       const path = window.location.pathname;
-      if (path !== '/login' && !path.startsWith('/mfa-setup')) {
+      if (path !== '/login') {
         window.location.href = '/login';
       }
     }

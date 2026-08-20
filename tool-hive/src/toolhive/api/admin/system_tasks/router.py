@@ -8,12 +8,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.api.admin.auth.router import _get_current_user
+from toolhive.api.admin.deps import require_operation
 from toolhive.api.admin.system_tasks.schemas import (
     DeliveryTaskListResponse,
     DeliveryTaskResponse,
 )
 from toolhive.core.exceptions import NotFoundError
+from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
 from toolhive.models.outbox_delivery import OutboxDelivery
 from toolhive.models.outbox_event import OutboxEvent
@@ -50,7 +51,7 @@ def _to_response(
 @router.get("", response_model=DeliveryTaskListResponse)
 async def list_delivery_tasks(
     db: Annotated[AsyncSession, Depends(get_db)],
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.SYSTEM_TASK_VIEW)),
     status: str | None = Query(default=None),
     target: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
@@ -84,7 +85,7 @@ async def list_delivery_tasks(
 async def retry_delivery(
     delivery_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.SYSTEM_TASK_RETRY)),
 ):
     """人工重投指定投递记录（置回 PENDING，由 Worker 重新处理）。"""
     svc = OutboxService(db)

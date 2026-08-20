@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import CallerSystemStatus
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
@@ -39,6 +39,15 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
         DateTime(timezone=True), nullable=True,
     )
     deactivated_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    emergency_disabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
+    emergency_disabled_reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+    )
+    emergency_disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     row_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0,
     )

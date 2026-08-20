@@ -1,6 +1,6 @@
 """认证流程编排服务。
 
-职责：编排密码校验、MFA 验证、会话创建、CSRF Token 生成的完整流程。
+职责：编排图形验证码与密码校验、会话创建、CSRF Token 生成的完整流程。
 不直接替代各子服务的独立能力。
 """
 
@@ -12,19 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.enums import AccountStatus
-from toolhive.core.exceptions import AuthenticationError, ValidationError
+from toolhive.core.exceptions import AuthenticationError
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.account_service import AccountService
+from toolhive.services.security.captcha import consume_captcha
 from toolhive.services.security.csrf import generate_csrf_token
 from toolhive.services.security.password import verify_password
 from toolhive.services.security.rate_limit import (
-    check_captcha_required,
     clear_login_failures,
     record_login_failure,
 )
 from toolhive.services.security.session import create_session
-from toolhive.services.security.totp import verify_totp
 
 
 @dataclass
@@ -35,13 +34,6 @@ class LoginResult:
     account: ManagementAccount
 
 
-@dataclass
-class MfaSetupResult:
-    """MFA 绑定准备结果。"""
-    totp_uri: str
-    secret: str
-
-
 class AuthService:
     """认证流程编排。"""
 
@@ -50,7 +42,7 @@ class AuthService:
         self._admin_security = admin_security
         self.account_svc = AccountService(db, admin_security)
 
-    # ── 登录步骤 1：密码校验 ──
+    # ── 登录 ──
 
     @transactional()
     async def login_password(
@@ -58,11 +50,14 @@ class AuthService:
         username: str,
         password: str,
         source_ip: str,
-    ) -> LoginResult | dict:
-        """密码校验阶段。
+        captcha_id: str,
+        captcha_code: str,
+    ) -> LoginResult:
+        """图形验证码 + 账号密码校验，通过后直接创建登录会话。"""
+        # 图形验证码：先校验再进入账号流程；无论正确与否均一次性消费
+        if not await consume_captcha(captcha_id, captcha_code):
+            raise AuthenticationError("验证码错误或已过期，请刷新后重试")
 
-        返回 LoginResult（无需 MFA）或 dict（需要 MFA 绑定/验证）。
-        """
         account = await self.account_svc.get_by_username(username)
 
         if account is None:
@@ -75,12 +70,6 @@ class AuthService:
                 raise AuthenticationError("账号已被禁用")
             if account.is_locked():
                 raise AuthenticationError("账号已被锁定，请稍后再试")
-
-        # 检查验证码
-        require_captcha = await check_captcha_required(account.id, source_ip)
-        if require_captcha:
-            # 验证码由前端自行处理（校验成功后再次调用本接口，附带 captcha_token）
-            raise AuthenticationError("captcha_required")
 
         # 校验密码
         is_valid, needs_rehash = verify_password(password, account.password_hash)
@@ -95,137 +84,10 @@ class AuthService:
             account.password_hash = hash_password(password)
             await self.db.flush()
 
-        # 检查是否需要首次绑定 MFA
-        from toolhive.models.mfa_config import MfaConfig
-        from sqlalchemy import select
-        mfa = await self.db.scalar(
-            select(MfaConfig).where(MfaConfig.account_id == account.id)
-        )
-        if mfa is None or not mfa.is_bound:
-            from toolhive.services.security.totp import (
-                generate_totp_secret,
-                generate_totp_uri,
-            )
-            secret = generate_totp_secret()
-            uri = generate_totp_uri(secret, account.username)
-            return {
-                "require_mfa_setup": True,
-                "totp_uri": uri,
-                "secret": secret,
-                "step": "mfa_setup",
-            }
-
-        # 需要 MFA 验证
-        return {
-            "require_mfa": True,
-            "step": "mfa_verify",
-        }
-
-    # ── 登录步骤 2：MFA 验证 ──
-
-    @transactional()
-    async def login_mfa_verify(
-        self,
-        account: ManagementAccount,
-        code: str,
-        source_ip: str,
-    ) -> LoginResult:
-        """MFA 验证成功后创建完整登录会话。"""
-        from sqlalchemy import select
-        from toolhive.models.mfa_config import MfaConfig
-
-        mfa = await self.db.scalar(
-            select(MfaConfig).where(MfaConfig.account_id == account.id)
-        )
-        if mfa is None:
-            raise ValidationError("未绑定 MFA，请先完成绑定")
-
-        from toolhive.services.security.totp import decrypt_totp_secret
-        secret = decrypt_totp_secret(mfa.encrypted_secret)
-
-        if not verify_totp(secret, code):
-            await self.account_svc.record_login_failure(account)
-            await record_login_failure(account.id, source_ip)
-            raise AuthenticationError("MFA 验证失败")
-
-        # 登录成功
-        await self.account_svc.record_login_success(account)
-        await clear_login_failures(account.id, source_ip)
-
-        return await self._finish_login(account, source_ip)
-
-    # ── 恢复码登录 ──
-
-    @transactional()
-    async def login_with_recovery_code(
-        self,
-        username: str,
-        password: str,
-        recovery_code: str,
-        source_ip: str,
-    ) -> LoginResult:
-        """使用恢复码登录（密码 + 恢复码，跳过 TOTP）。"""
-        account = await self.account_svc.get_by_username(username)
-        if account is None or not account.is_active():
-            raise AuthenticationError("用户名或密码错误")
-
-        is_valid, _ = verify_password(password, account.password_hash)
-        if not is_valid:
-            await self.account_svc.record_login_failure(account)
-            await record_login_failure(account.id, source_ip)
-            raise AuthenticationError("用户名或密码错误")
-
-        from sqlalchemy import select
-        from toolhive.models.mfa_config import MfaConfig
-        mfa = await self.db.scalar(
-            select(MfaConfig).where(MfaConfig.account_id == account.id)
-        )
-        if mfa is None:
-            raise ValidationError("未绑定 MFA")
-
-        if not mfa.verify_recovery_code(recovery_code):
-            await self.account_svc.record_login_failure(account)
-            await record_login_failure(account.id, source_ip)
-            raise AuthenticationError("恢复码无效或已被使用")
-
+        # 登录成功：记录成功并清除失败计数
         await self.account_svc.record_login_success(account)
         await clear_login_failures(account.id, source_ip)
         return await self._finish_login(account, source_ip)
-
-    # ── MFA 绑定 ──
-
-    @transactional()
-    async def bind_mfa(
-        self,
-        account: ManagementAccount,
-        secret: str,
-        code: str,
-    ) -> list[str]:
-        """首次绑定 TOTP。返回恢复码明文（仅此一次展示）。"""
-        from toolhive.models.mfa_config import MfaConfig
-        from sqlalchemy import select
-
-        if not verify_totp(secret, code):
-            raise ValidationError("TOTP 验证码不正确，请重试")
-
-        from toolhive.services.security.totp import (
-            encrypt_totp_secret,
-            generate_recovery_codes,
-        )
-
-        encrypted = encrypt_totp_secret(secret)
-        recovery = generate_recovery_codes()
-
-        mfa = MfaConfig(
-            account_id=account.id,
-            encrypted_secret=encrypted,
-            is_bound=True,
-        )
-        mfa.set_recovery_codes(recovery.hash_codes)
-        self.db.add(mfa)
-        await self.db.flush()
-
-        return recovery.plain_codes
 
     # ── 登出 ──
 
@@ -244,7 +106,6 @@ class AuthService:
     ) -> str:
         """修改密码，返回新的 session_id（防会话固定）。"""
         await self.account_svc.update_password(account, old_password, new_password)
-        from toolhive.services.security.session import rotate_session_id
         # 这里不轮转，由调用方传入 old_session_id 处理
         return ""
 

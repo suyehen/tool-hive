@@ -164,6 +164,50 @@ COMMENT ON COLUMN management_operation.create_name IS '创建人名称';
 COMMENT ON COLUMN management_operation.update_name IS '修改人名称';
 
 -- ------------------------------------------------------------
+-- 管理操作审计（追加式，不更新、不删除）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS management_audit_log (
+    id                 VARCHAR(32) PRIMARY KEY,
+    actor_account_id   VARCHAR(32),
+    actor_account_name VARCHAR(128),
+    actor_system_id    VARCHAR(64),
+    object_type        VARCHAR(64) NOT NULL,
+    object_id          VARCHAR(64),
+    action             VARCHAR(128) NOT NULL,
+    before_summary     TEXT,
+    after_summary      TEXT,
+    reason             TEXT,
+    result             VARCHAR(20) NOT NULL DEFAULT 'success',
+    trace_id           VARCHAR(64),
+    source_ip          VARCHAR(64),
+    occurred_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor_account
+    ON management_audit_log (actor_account_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_object
+    ON management_audit_log (object_type, object_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action
+    ON management_audit_log (action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at
+    ON management_audit_log (occurred_at);
+
+COMMENT ON TABLE management_audit_log IS '管理操作审计记录（追加式）';
+COMMENT ON COLUMN management_audit_log.actor_account_id IS '操作人账号 ID';
+COMMENT ON COLUMN management_audit_log.actor_account_name IS '操作人用户名';
+COMMENT ON COLUMN management_audit_log.actor_system_id IS '调用系统 ID（管理侧一般为空）';
+COMMENT ON COLUMN management_audit_log.object_type IS '操作对象类型';
+COMMENT ON COLUMN management_audit_log.object_id IS '操作对象 ID';
+COMMENT ON COLUMN management_audit_log.action IS '动作码';
+COMMENT ON COLUMN management_audit_log.before_summary IS '变更前摘要（JSON，脱敏）';
+COMMENT ON COLUMN management_audit_log.after_summary IS '变更后摘要（JSON，脱敏）';
+COMMENT ON COLUMN management_audit_log.reason IS '原因或失败说明';
+COMMENT ON COLUMN management_audit_log.result IS '结果：success | failure';
+COMMENT ON COLUMN management_audit_log.trace_id IS '关联 Trace ID';
+COMMENT ON COLUMN management_audit_log.source_ip IS '来源 IP';
+COMMENT ON COLUMN management_audit_log.occurred_at IS '事件发生时间';
+
+-- ------------------------------------------------------------
 -- 后台角色 ↔ 管理操作项 关联
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS role_operation (
@@ -194,40 +238,6 @@ COMMENT ON COLUMN role_operation.create_id IS '创建人 ID';
 COMMENT ON COLUMN role_operation.update_id IS '修改人 ID';
 COMMENT ON COLUMN role_operation.create_name IS '创建人名称';
 COMMENT ON COLUMN role_operation.update_name IS '修改人名称';
-
--- ------------------------------------------------------------
--- 管理账号 MFA TOTP 配置
--- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS mfa_config (
-    id                    VARCHAR(32) PRIMARY KEY,
-    account_id            VARCHAR(32) NOT NULL,
-    encrypted_secret      VARCHAR(512) NOT NULL,
-    recovery_codes_hash   TEXT NOT NULL,
-    is_bound              BOOLEAN NOT NULL DEFAULT FALSE,
-    create_time            TIMESTAMPTZ NOT NULL DEFAULT now(),
-    update_time            TIMESTAMPTZ,
-    create_id            VARCHAR(32),
-    update_id            VARCHAR(32),
-    create_name       VARCHAR(128),
-    update_name       VARCHAR(128),
-    CONSTRAINT uq_mfa_config_account UNIQUE (account_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_mfa_config_account_id
-    ON mfa_config (account_id);
-
-COMMENT ON TABLE mfa_config IS '管理账号 MFA TOTP 配置';
-COMMENT ON COLUMN mfa_config.id IS '主键，应用层生成';
-COMMENT ON COLUMN mfa_config.account_id IS '管理账号 ID';
-COMMENT ON COLUMN mfa_config.encrypted_secret IS '加密的 TOTP 密钥';
-COMMENT ON COLUMN mfa_config.recovery_codes_hash IS '恢复码哈希列表';
-COMMENT ON COLUMN mfa_config.is_bound IS '是否已完成 MFA 绑定';
-COMMENT ON COLUMN mfa_config.create_time IS '创建时间';
-COMMENT ON COLUMN mfa_config.update_time IS '最后更新时间';
-COMMENT ON COLUMN mfa_config.create_id IS '创建人 ID';
-COMMENT ON COLUMN mfa_config.update_id IS '修改人 ID';
-COMMENT ON COLUMN mfa_config.create_name IS '创建人名称';
-COMMENT ON COLUMN mfa_config.update_name IS '修改人名称';
 
 -- ------------------------------------------------------------
 -- 密码历史
@@ -274,6 +284,9 @@ CREATE TABLE IF NOT EXISTS caller_system (
     effective_from     TIMESTAMPTZ,
     effective_to       TIMESTAMPTZ,
     deactivated_reason TEXT,
+    emergency_disabled BOOLEAN NOT NULL DEFAULT FALSE,
+    emergency_disabled_reason TEXT,
+    emergency_disabled_at TIMESTAMPTZ,
     row_version        INTEGER NOT NULL DEFAULT 0,
     create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time         TIMESTAMPTZ,
@@ -307,12 +320,87 @@ COMMENT ON COLUMN caller_system.row_version IS '乐观锁版本号，用于并�
 COMMENT ON COLUMN caller_system.effective_from IS '生效时间';
 COMMENT ON COLUMN caller_system.effective_to IS '失效时间';
 COMMENT ON COLUMN caller_system.deactivated_reason IS '停用或注销原因';
+COMMENT ON COLUMN caller_system.emergency_disabled IS '是否处于系统级紧急禁用状态';
+COMMENT ON COLUMN caller_system.emergency_disabled_reason IS '紧急禁用原因';
+COMMENT ON COLUMN caller_system.emergency_disabled_at IS '紧急禁用时间';
 COMMENT ON COLUMN caller_system.create_time IS '创建时间';
 COMMENT ON COLUMN caller_system.update_time IS '最后更新时间';
 COMMENT ON COLUMN caller_system.create_id IS '创建人 ID';
 COMMENT ON COLUMN caller_system.update_id IS '修改人 ID';
 COMMENT ON COLUMN caller_system.create_name IS '创建人名称';
 COMMENT ON COLUMN caller_system.update_name IS '修改人名称';
+
+-- 兼容已存在的调用系统表：幂等补充紧急禁用字段
+ALTER TABLE caller_system ADD COLUMN IF NOT EXISTS emergency_disabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE caller_system ADD COLUMN IF NOT EXISTS emergency_disabled_reason TEXT;
+ALTER TABLE caller_system ADD COLUMN IF NOT EXISTS emergency_disabled_at TIMESTAMPTZ;
+
+-- ------------------------------------------------------------
+-- 调用系统运行策略（每系统一条）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS caller_runtime_policy (
+    id                       VARCHAR(32) PRIMARY KEY,
+    system_id                VARCHAR(64) NOT NULL,
+    allowed_api_patterns     TEXT NOT NULL,
+    qps_limit                INTEGER NOT NULL,
+    concurrency_limit        INTEGER NOT NULL,
+    quota_per_day            INTEGER NOT NULL,
+    request_timeout_seconds  INTEGER NOT NULL,
+    circuit_breaker_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+    effective_from           TIMESTAMPTZ,
+    effective_to             TIMESTAMPTZ,
+    row_version              INTEGER NOT NULL DEFAULT 0,
+    create_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time              TIMESTAMPTZ,
+    create_id                VARCHAR(32),
+    update_id                VARCHAR(32),
+    create_name              VARCHAR(128),
+    update_name              VARCHAR(128),
+    CONSTRAINT uq_caller_runtime_policy_system UNIQUE (system_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_runtime_policy_system_id
+    ON caller_runtime_policy (system_id);
+
+COMMENT ON TABLE caller_runtime_policy IS '调用系统运行策略';
+COMMENT ON COLUMN caller_runtime_policy.system_id IS '调用系统公开标识';
+COMMENT ON COLUMN caller_runtime_policy.allowed_api_patterns IS '允许访问的运行 API 范围（JSON 数组）';
+COMMENT ON COLUMN caller_runtime_policy.qps_limit IS '每秒请求上限';
+COMMENT ON COLUMN caller_runtime_policy.concurrency_limit IS '并发请求上限';
+COMMENT ON COLUMN caller_runtime_policy.quota_per_day IS '每日配额上限';
+COMMENT ON COLUMN caller_runtime_policy.request_timeout_seconds IS '请求超时时间（秒）';
+COMMENT ON COLUMN caller_runtime_policy.circuit_breaker_enabled IS '是否启用熔断';
+COMMENT ON COLUMN caller_runtime_policy.effective_from IS '策略生效时间';
+COMMENT ON COLUMN caller_runtime_policy.effective_to IS '策略失效时间';
+COMMENT ON COLUMN caller_runtime_policy.row_version IS '乐观锁版本号';
+
+-- ------------------------------------------------------------
+-- 调用系统工具范围
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS caller_tool_scope (
+    id            VARCHAR(32) PRIMARY KEY,
+    system_id     VARCHAR(64) NOT NULL,
+    scope_type    VARCHAR(20) NOT NULL DEFAULT 'tool',
+    scope_code    VARCHAR(256) NOT NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'active',
+    row_version   INTEGER NOT NULL DEFAULT 0,
+    create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time   TIMESTAMPTZ,
+    create_id     VARCHAR(32),
+    update_id     VARCHAR(32),
+    create_name   VARCHAR(128),
+    update_name   VARCHAR(128)
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_system_id
+    ON caller_tool_scope (system_id);
+CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_code
+    ON caller_tool_scope (scope_code);
+
+COMMENT ON TABLE caller_tool_scope IS '调用系统可访问的工具/能力包范围';
+COMMENT ON COLUMN caller_tool_scope.scope_type IS '范围类型：capability（能力包）| tool（工具）';
+COMMENT ON COLUMN caller_tool_scope.scope_code IS '工具或能力包编码';
+COMMENT ON COLUMN caller_tool_scope.status IS '状态：active | disabled';
 
 -- ------------------------------------------------------------
 -- 调用系统公钥

@@ -7,8 +7,8 @@ import logging
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from toolhive.core.enums import AccountStatus, OperationStatus, RoleStatus
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
-from toolhive.core.enums import OperationStatus, RoleStatus
 from toolhive.core.operation_codes import (
     SUPER_ADMIN_ROLE_NAME,
     OperationCode,
@@ -16,8 +16,10 @@ from toolhive.core.operation_codes import (
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.account_role import AccountRole
 from toolhive.models.backend_role import BackendRole
+from toolhive.models.management_account import ManagementAccount
 from toolhive.models.management_operation import ManagementOperation
 from toolhive.models.role_operation import RoleOperation
+from toolhive.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,12 @@ class RoleService:
         )
         self.db.add(role)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="role.create",
+            object_type="role",
+            object_id=role.id,
+            after_summary={"name": name, "is_super_admin": role.is_super_admin},
+        )
         return role
 
     @transactional()
@@ -89,6 +97,7 @@ class RoleService:
         ):
             raise ConflictError("数据已被他人修改，请刷新后重试")
 
+        before = {"name": role.name, "description": role.description}
         if name and name != role.name:
             existing = await self.db.scalar(
                 select(BackendRole).where(BackendRole.name == name)
@@ -102,6 +111,13 @@ class RoleService:
 
         role.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="role.update",
+            object_type="role",
+            object_id=role.id,
+            before_summary=before,
+            after_summary={"name": role.name, "description": role.description},
+        )
         return role
 
     @transactional()
@@ -116,6 +132,12 @@ class RoleService:
         role.status = RoleStatus(status)
         role.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="role.status",
+            object_type="role",
+            object_id=role.id,
+            after_summary={"status": role.status},
+        )
         return role
 
     # ═════════════════════════════════════════════════════════════
@@ -151,6 +173,12 @@ class RoleService:
                 op = RoleOperation(role_id=role_id, operation_code=code)
                 self.db.add(op)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="role.operations.assign",
+            object_type="role",
+            object_id=role_id,
+            after_summary={"operation_codes": operation_codes},
+        )
 
     @transactional()
     async def remove_operations(
@@ -170,6 +198,12 @@ class RoleService:
             if existing:
                 await self.db.delete(existing)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="role.operations.remove",
+            object_type="role",
+            object_id=role_id,
+            after_summary={"operation_codes": operation_codes},
+        )
 
     # ═════════════════════════════════════════════════════════════
     # 账号 — 角色关联
@@ -207,6 +241,13 @@ class RoleService:
         acct_role = AccountRole(account_id=account_id, role_id=role_id)
         self.db.add(acct_role)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account_role.assign",
+            object_type="account",
+            object_id=account_id,
+            actor_account_id=operator_id,
+            after_summary={"role_id": role_id},
+        )
 
     @transactional()
     async def remove_role_from_account(
@@ -240,6 +281,13 @@ class RoleService:
         if ar:
             await self.db.delete(ar)
             await self.db.flush()
+            AuditService(self.db).add_record(
+                action="account_role.remove",
+                object_type="account",
+                object_id=account_id,
+                actor_account_id=operator_id,
+                after_summary={"role_id": role_id},
+            )
 
     # ═════════════════════════════════════════════════════════════
     # 权限判定
@@ -280,6 +328,30 @@ class RoleService:
         self, account_id: str, required: OperationCode,
     ) -> bool:
         return required in await self.get_effective_operations(account_id)
+
+    async def is_super_admin_account(self, account_id: str) -> bool:
+        """账号是否持有 active 的超管角色。"""
+        result = await self.db.execute(
+            select(AccountRole.id)
+            .join(BackendRole, AccountRole.role_id == BackendRole.id)
+            .where(AccountRole.account_id == account_id)
+            .where(BackendRole.is_super_admin.is_(True))
+            .where(BackendRole.status == RoleStatus.ACTIVE)
+            .limit(1)
+        )
+        return result.first() is not None
+
+    async def count_enabled_super_admins(self) -> int:
+        """统计启用状态且持有 active 超管角色的账号数。"""
+        count = await self.db.scalar(
+            select(func.count(func.distinct(AccountRole.account_id)))
+            .join(BackendRole, AccountRole.role_id == BackendRole.id)
+            .join(ManagementAccount, ManagementAccount.id == AccountRole.account_id)
+            .where(BackendRole.is_super_admin.is_(True))
+            .where(BackendRole.status == RoleStatus.ACTIVE)
+            .where(ManagementAccount.status == AccountStatus.ENABLED)
+        )
+        return count or 0
 
     # ═════════════════════════════════════════════════════════════
     # 启动同步
@@ -356,6 +428,6 @@ class RoleService:
 
     async def _get_super_admin_role_ids(self) -> list[str]:
         result = await self.db.execute(
-            select(BackendRole.id).where(BackendRole.is_super_admin == True)
+            select(BackendRole.id).where(BackendRole.is_super_admin)
         )
         return [r[0] for r in result]

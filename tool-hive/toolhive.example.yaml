@@ -27,10 +27,12 @@ embedding_model: ""
 login_max_failures: 5
 # 账号锁定时长，单位分钟。
 login_lock_minutes: 30
-# 同一账号或来源 IP 触发验证码的连续失败次数。
-captcha_trigger_failures: 3
-# 验证码触发统计的时间窗口，单位分钟。
-captcha_trigger_window_minutes: 10
+# 登录失败统计窗口，单位分钟（账号 / 来源 IP 失败计数在该窗口内累计）。
+login_failure_window_minutes: 10
+# 图形验证码有效期，单位秒。
+captcha_ttl_seconds: 300
+# 图形验证码字符长度。
+captcha_code_length: 4
 # 临时密码有效期，单位小时。
 temp_password_expire_hours: 24
 # 密码最小长度。
@@ -54,7 +56,6 @@ signing_algorithm: RSA-PSS-SHA256
 signature_version: TOOLHIVE-SIGN-V1
 
 # ── 密钥（生产环境务必通过环境变量覆盖） ──
-totp_encryption_key: ""
 csrf_secret: ""
 
 # ── Outbox 后台投递任务 ──
@@ -109,3 +110,13 @@ snowflake:
   worker_id: 0
   # 允许等待恢复的系统时钟回退时间，单位毫秒。
   clock_rollback_tolerance_ms: 5
+
+# ── 首个超级管理员初始化（H03） ──
+# 新环境部署后执行：toolhive init-admin --username <名称>
+# 初始密码来源（二选一）：
+#   1. 环境变量 TOOLHIVE_INIT_ADMIN_PASSWORD（推荐，适合部署脚本）。示例：
+#      TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' toolhive init-admin --username admin
+#   2. 未设置该环境变量时，命令会交互式提示输入两次密码（不显示输入内容）。
+# 仅当管理账号表为空时可执行；已存在账号时拒绝执行并返回非零退出码，不覆盖任何数据。
+# 初始化成功后账号自动授予内置超管角色；超级管理员默认拥有全部有效管理操作项，
+# 新增管理接口无需为超管逐项手动授权。

@@ -38,8 +38,9 @@ class TestSettingsSecurityDefaults:
 
     def test_captcha_defaults(self) -> None:
         s = Settings()
-        assert s.captcha_trigger_failures == 3
-        assert s.captcha_trigger_window_minutes == 10
+        assert s.login_failure_window_minutes == 10
+        assert s.captcha_ttl_seconds == 300
+        assert s.captcha_code_length == 4
 
     def test_password_length_defaults(self) -> None:
         s = Settings()

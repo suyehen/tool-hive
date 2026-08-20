@@ -2,7 +2,6 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminLayout from './layouts/AdminLayout';
 import LoginPage from './pages/LoginPage';
-import MfaSetupPage from './pages/MfaSetupPage';
 import DashboardPage from './pages/DashboardPage';
 import AccountListPage from './pages/accounts/AccountListPage';
 import RoleListPage from './pages/roles/RoleListPage';
@@ -12,7 +11,6 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/mfa-setup" element={<MfaSetupPage />} />
       <Route
         path="/"
         element={

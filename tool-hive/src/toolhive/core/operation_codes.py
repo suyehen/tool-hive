@@ -33,6 +33,7 @@ class OperationCode(StrEnum):
     CALLER_SYSTEM_EDIT = "caller_system:edit"
     CALLER_SYSTEM_MANAGE = "caller_system:manage"
     CALLER_SYSTEM_ALLOW_ANY_IP = "caller_system:allow_any_ip"
+    CALLER_SYSTEM_POLICY = "caller_system:policy"
 
     # ── 工具 ──
     TOOL_VIEW = "tool:view"

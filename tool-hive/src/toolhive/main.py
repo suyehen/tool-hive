@@ -28,18 +28,18 @@ async def lifespan(app: FastAPI):
     init_redis(settings.infrastructure)
 
     from toolhive.services.security import (
+        captcha,
         csrf,
         password,
         rate_limit,
         session as session_security,
-        totp,
     )
     admin_security = settings.admin_security
+    captcha.configure_security(admin_security)
     csrf.configure_security(admin_security)
     password.configure_security(admin_security)
     rate_limit.configure_security(admin_security)
     session_security.configure_security(admin_security)
-    totp.configure_security(admin_security)
 
     # 同步内置超管角色与管理操作项目录（幂等）
     from toolhive.infrastructure.database import async_session_factory

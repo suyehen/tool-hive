@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.config import AdminSecuritySettings
@@ -16,7 +17,10 @@ from toolhive.core.exceptions import (
     ValidationError,
 )
 from toolhive.infrastructure.transactions import transactional
+from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
+from toolhive.services.audit_service import AuditService
+from toolhive.services.role_service import RoleService
 from toolhive.services.security.password import (
     generate_temp_password,
     hash_password,
@@ -24,6 +28,8 @@ from toolhive.services.security.password import (
     verify_password,
 )
 from toolhive.services.security.session import revoke_all_sessions
+
+logger = logging.getLogger(__name__)
 
 
 class AccountService:
@@ -37,23 +43,57 @@ class AccountService:
 
     @transactional()
     async def init_super_admin(self, username: str, password: str) -> ManagementAccount:
-        """CLI 调用：仅当无任何账号时创建首个超级管理员。"""
+        """CLI 调用：仅当无任何账号时创建首个超级管理员并授予超管角色。"""
+        audit = AuditService(self.db)
+        try:
+            count = await self.db.scalar(
+                select(func.count()).select_from(ManagementAccount)
+            )
+            if count and count > 0:
+                raise ValidationError("已存在管理账号，不能重复初始化超管")
+            violations = validate_password_strength(password, username)
+            if violations:
+                raise ValidationError("; ".join(violations))
+            account = ManagementAccount(
+                username=username,
+                password_hash=hash_password(password),
+                must_change_password=False,
+            )
+            self.db.add(account)
+            await self.db.flush()
+
+            # 确保内置超管角色存在，并建立账号 → 超管角色关联
+            super_role = await RoleService(self.db).ensure_super_admin_role()
+            self.db.add(AccountRole(account_id=account.id, role_id=super_role.id))
+            await self.db.flush()
+
+            audit.add_record(
+                action="admin.init",
+                object_type="account",
+                object_id=account.id,
+                actor_account_name=username,
+                after_summary={"username": username, "role": "super_admin"},
+            )
+            logger.info(
+                "首个超级管理员初始化完成: username=%s source=cli", username,
+            )
+            return account
+        except ValidationError as exc:
+            await AuditService.record_standalone(
+                action="admin.init",
+                object_type="account",
+                actor_account_name=username,
+                result="failure",
+                reason=str(exc),
+            )
+            raise
+
+    async def has_any_account(self) -> bool:
+        """是否存在任意管理账号（用于初始化状态查询，不泄露账号信息）。"""
         count = await self.db.scalar(
             select(func.count()).select_from(ManagementAccount)
         )
-        if count and count > 0:
-            raise ValidationError("已存在管理账号，不能重复初始化超管")
-        violations = validate_password_strength(password, username)
-        if violations:
-            raise ValidationError("; ".join(violations))
-        account = ManagementAccount(
-            username=username,
-            password_hash=hash_password(password),
-            must_change_password=False,
-        )
-        self.db.add(account)
-        await self.db.flush()
-        return account
+        return bool(count and count > 0)
 
     # ── 创建 ──
 
@@ -90,11 +130,17 @@ class AccountService:
             password_hash=hash_password(temp_pwd),
             external_user_id=external_user_id,
             must_change_password=True,
-            temp_password_expires_at=datetime.now(timezone.utc)
+            temp_password_expires_at=datetime.now(UTC)
             + timedelta(hours=self._admin_security.temp_password_expire_hours),
         )
         self.db.add(account)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.create",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"username": username, "external_user_id": external_user_id},
+        )
         return account, temp_pwd
 
     # ── 查询 ──
@@ -139,6 +185,12 @@ class AccountService:
         await self._set_password(account, new_password)
         account.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.change_password",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"must_change_password": False},
+        )
 
     @transactional()
     async def reset_password(
@@ -154,7 +206,7 @@ class AccountService:
 
         account.password_hash = hash_password(temp_pwd)
         account.must_change_password = True
-        account.temp_password_expires_at = datetime.now(timezone.utc) + timedelta(
+        account.temp_password_expires_at = datetime.now(UTC) + timedelta(
             hours=self._admin_security.temp_password_expire_hours
         )
         account.security_version += 1
@@ -163,6 +215,12 @@ class AccountService:
         # 立即撤销该账号全部会话
         await revoke_all_sessions(account.id)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.reset_password",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"must_change_password": True},
+        )
         return temp_pwd
 
     # ── 状态控制 ──
@@ -176,22 +234,44 @@ class AccountService:
         account.login_failures = 0
         account.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.enable",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"status": "enabled"},
+        )
 
     @transactional()
     async def disable_account(
         self, account: ManagementAccount, operator_id: str,
     ) -> None:
         """禁用账号。不允许禁用最后一个超管，不允许禁用自己。"""
-        if account.id == operator_id:
-            raise ValidationError("不能停用自己的账号")
-        if account.status == AccountStatus.DISABLED:
-            raise ConflictError("账号已禁用")
-        await self._check_last_super_admin(account)
-        account.status = AccountStatus.DISABLED
-        account.security_version += 1
-        account.row_version += 1
-        await revoke_all_sessions(account.id)
-        await self.db.flush()
+        try:
+            if account.id == operator_id:
+                raise ValidationError("不能停用自己的账号")
+            if account.status == AccountStatus.DISABLED:
+                raise ConflictError("账号已禁用")
+            await self._check_last_super_admin(account)
+            account.status = AccountStatus.DISABLED
+            account.security_version += 1
+            account.row_version += 1
+            await revoke_all_sessions(account.id)
+            await self.db.flush()
+        except ValidationError as exc:
+            await AuditService.record_standalone(
+                action="account.disable",
+                object_type="account",
+                object_id=account.id,
+                result="failure",
+                reason=str(exc),
+            )
+            raise
+        AuditService(self.db).add_record(
+            action="account.disable",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"status": "disabled"},
+        )
 
     @transactional()
     async def unlock_account(self, account: ManagementAccount) -> None:
@@ -201,24 +281,52 @@ class AccountService:
         account.locked_until = None
         account.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.unlock",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"status": "enabled", "locked_until": None},
+        )
 
     @transactional()
     async def offboard_account(
         self, account: ManagementAccount, operator_id: str,
     ) -> None:
         """离职处理：禁用 + 撤销全部会话 + 保留记录。"""
-        if account.id == operator_id:
-            raise ValidationError("不能对自己执行离职处理")
-        await self._check_last_super_admin(account)
-        account.status = AccountStatus.DISABLED
-        account.security_version += 1
-        account.row_version += 1
-        await revoke_all_sessions(account.id)
-        await self.db.flush()
+        try:
+            if account.id == operator_id:
+                raise ValidationError("不能对自己执行离职处理")
+            await self._check_last_super_admin(account)
+            account.status = AccountStatus.DISABLED
+            account.security_version += 1
+            account.row_version += 1
+            await revoke_all_sessions(account.id)
+            await self.db.flush()
+        except ValidationError as exc:
+            await AuditService.record_standalone(
+                action="account.offboard",
+                object_type="account",
+                object_id=account.id,
+                result="failure",
+                reason=str(exc),
+            )
+            raise
+        AuditService(self.db).add_record(
+            action="account.offboard",
+            object_type="account",
+            object_id=account.id,
+            after_summary={"status": "disabled"},
+        )
 
+    @transactional()
     async def force_logout(self, account: ManagementAccount) -> None:
         """强制下线：撤销全部会话。"""
         await revoke_all_sessions(account.id)
+        AuditService(self.db).add_record(
+            action="account.force_logout",
+            object_type="account",
+            object_id=account.id,
+        )
 
     # ── 登录安全计数 ──
 
@@ -235,7 +343,7 @@ class AccountService:
         fresh.login_failures += 1
         if fresh.login_failures >= self._admin_security.login_max_failures:
             fresh.status = AccountStatus.LOCKED
-            fresh.locked_until = datetime.now(timezone.utc) + timedelta(
+            fresh.locked_until = datetime.now(UTC) + timedelta(
                 minutes=self._admin_security.login_lock_minutes,
             )
         await self.db.flush()
@@ -253,8 +361,8 @@ class AccountService:
 
     async def _set_password(self, account: ManagementAccount, new_password: str) -> None:
         """内部：设置新密码并检查历史。"""
-        import asyncio
-        from sqlalchemy import select, desc
+        from sqlalchemy import desc, select
+
         from toolhive.models.password_history import PasswordHistory
 
         violations = validate_password_strength(
@@ -291,6 +399,11 @@ class AccountService:
         account.temp_password_expires_at = None
 
     async def _check_last_super_admin(self, account: ManagementAccount) -> None:
-        """检查是否为最后一个启用状态的超管（需要 super_admin 字段，待角色模型实现）。"""
-        # 一期占位：具体逻辑在模块三（角色）完成后接入
-        pass
+        """检查是否为最后一个启用状态的超管，防止系统失去管理入口。"""
+        if account.status == AccountStatus.DISABLED:
+            return
+        role_svc = RoleService(self.db)
+        if not await role_svc.is_super_admin_account(account.id):
+            return
+        if await role_svc.count_enabled_super_admins() <= 1:
+            raise ValidationError("不能停用或离职最后一个超级管理员")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -16,12 +17,17 @@ from toolhive.core.enums import (
     CallerSystemStatus,
     IPRuleStatus,
     PublicKeyStatus,
+    ToolScopeStatus,
+    ToolScopeType,
 )
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.caller_ip_rule import CallerIPRule
 from toolhive.models.caller_public_key import CallerPublicKey
+from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
+from toolhive.models.caller_tool_scope import CallerToolScope
+from toolhive.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +75,16 @@ class CallerSystemService:
         )
         self.db.add(system)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.create",
+            object_type="caller_system",
+            object_id=system.system_id,
+            after_summary={
+                "system_id": system.system_id,
+                "name": name,
+                "environment": environment,
+            },
+        )
         return system
 
     @transactional()
@@ -127,6 +143,201 @@ class CallerSystemService:
         system.status = CallerSystemStatus.ENABLED
         system.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.enable",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"status": "enabled"},
+        )
+        return system
+
+    # ═════════════════════════════════════════════════════════════
+    # 运行策略
+    # ═════════════════════════════════════════════════════════════
+
+    async def get_runtime_policy(
+        self, system_id: str,
+    ) -> CallerRuntimePolicy | None:
+        """查询运行策略；调用系统不存在时抛 404，策略未配置时返回 None。"""
+        await self.get_by_system_id(system_id)
+        return await self.db.scalar(
+            select(CallerRuntimePolicy).where(
+                CallerRuntimePolicy.system_id == system_id,
+            )
+        )
+
+    @transactional()
+    async def save_runtime_policy(
+        self,
+        system_id: str,
+        allowed_api_patterns: list[str],
+        qps_limit: int,
+        concurrency_limit: int,
+        quota_per_day: int,
+        request_timeout_seconds: int,
+        circuit_breaker_enabled: bool,
+        effective_from: datetime | None = None,
+        effective_to: datetime | None = None,
+        expected_row_version: int | None = None,
+    ) -> CallerRuntimePolicy:
+        """整存运行策略（每调用系统一条，不存在则创建）。"""
+        await self.get_by_system_id(system_id)
+        if not allowed_api_patterns:
+            raise ValidationError("运行 API 范围不能为空")
+
+        policy = await self.db.scalar(
+            select(CallerRuntimePolicy).where(
+                CallerRuntimePolicy.system_id == system_id,
+            )
+        )
+        if policy is None:
+            policy = CallerRuntimePolicy(
+                system_id=system_id,
+                allowed_api_patterns=json.dumps(
+                    allowed_api_patterns, ensure_ascii=False,
+                ),
+                qps_limit=qps_limit,
+                concurrency_limit=concurrency_limit,
+                quota_per_day=quota_per_day,
+                request_timeout_seconds=request_timeout_seconds,
+                circuit_breaker_enabled=circuit_breaker_enabled,
+                effective_from=effective_from,
+                effective_to=effective_to,
+            )
+            self.db.add(policy)
+        else:
+            if (
+                expected_row_version is not None
+                and policy.row_version != expected_row_version
+            ):
+                raise ConflictError("策略已被他人修改，请刷新后重试")
+            policy.allowed_api_patterns = json.dumps(
+                allowed_api_patterns, ensure_ascii=False,
+            )
+            policy.qps_limit = qps_limit
+            policy.concurrency_limit = concurrency_limit
+            policy.quota_per_day = quota_per_day
+            policy.request_timeout_seconds = request_timeout_seconds
+            policy.circuit_breaker_enabled = circuit_breaker_enabled
+            policy.effective_from = effective_from
+            policy.effective_to = effective_to
+            policy.row_version += 1
+        await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_policy.save",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={
+                "allowed_api_patterns": allowed_api_patterns,
+                "qps_limit": qps_limit,
+                "concurrency_limit": concurrency_limit,
+                "quota_per_day": quota_per_day,
+                "request_timeout_seconds": request_timeout_seconds,
+                "circuit_breaker_enabled": circuit_breaker_enabled,
+            },
+        )
+        return policy
+
+    # ═════════════════════════════════════════════════════════════
+    # 工具范围
+    # ═════════════════════════════════════════════════════════════
+
+    async def list_tool_scopes(
+        self, system_id: str,
+    ) -> list[CallerToolScope]:
+        """查询调用系统的工具/能力包范围。"""
+        await self.get_by_system_id(system_id)
+        result = await self.db.execute(
+            select(CallerToolScope)
+            .where(CallerToolScope.system_id == system_id)
+            .order_by(CallerToolScope.scope_type, CallerToolScope.scope_code),
+        )
+        return list(result.scalars().all())
+
+    @transactional()
+    async def replace_tool_scopes(
+        self,
+        system_id: str,
+        items: list[dict],
+    ) -> list[CallerToolScope]:
+        """全量替换工具范围（先删旧记录再写入新集合）。"""
+        await self.get_by_system_id(system_id)
+
+        # 先整体校验新集合，避免删除旧记录后才发现输入非法
+        for item in items:
+            scope_type = item["scope_type"]
+            status = item["status"]
+            if scope_type not in tuple(ToolScopeType):
+                raise ValidationError(f"无效的工具范围类型: {scope_type}")
+            if status not in tuple(ToolScopeStatus):
+                raise ValidationError(f"无效的工具范围状态: {status}")
+
+        old_scopes = await self.list_tool_scopes(system_id)
+        for scope in old_scopes:
+            await self.db.delete(scope)
+
+        new_scopes: list[CallerToolScope] = []
+        for item in items:
+            scope = CallerToolScope(
+                system_id=system_id,
+                scope_type=item["scope_type"],
+                scope_code=item["scope_code"],
+                status=item["status"],
+            )
+            self.db.add(scope)
+            new_scopes.append(scope)
+        await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_tool_scope.replace",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"count": len(new_scopes)},
+        )
+        return new_scopes
+
+    # ═════════════════════════════════════════════════════════════
+    # 紧急禁用
+    # ═════════════════════════════════════════════════════════════
+
+    @transactional()
+    async def emergency_disable(
+        self, system_id: str, reason: str,
+    ) -> CallerSystem:
+        """系统级紧急禁用（仅对已启用系统生效，运行侧应立即拒绝）。"""
+        system = await self.get_by_system_id(system_id)
+        if system.status != CallerSystemStatus.ENABLED:
+            raise ConflictError("只有已启用的调用系统可以紧急禁用")
+        system.emergency_disabled = True
+        system.emergency_disabled_reason = reason
+        system.emergency_disabled_at = datetime.now(timezone.utc)
+        system.row_version += 1
+        await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.emergency_disable",
+            object_type="caller_system",
+            object_id=system_id,
+            reason=reason,
+            after_summary={"emergency_disabled": True},
+        )
+        return system
+
+    @transactional()
+    async def emergency_enable(self, system_id: str) -> CallerSystem:
+        """解除系统级紧急禁用。"""
+        system = await self.get_by_system_id(system_id)
+        if not system.emergency_disabled:
+            raise ConflictError("调用系统未处于紧急禁用状态")
+        system.emergency_disabled = False
+        system.emergency_disabled_reason = None
+        system.emergency_disabled_at = None
+        system.row_version += 1
+        await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.emergency_enable",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"emergency_disabled": False},
+        )
         return system
 
     @transactional()
@@ -140,6 +351,13 @@ class CallerSystemService:
         system.deactivated_reason = reason
         system.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.disable",
+            object_type="caller_system",
+            object_id=system_id,
+            reason=reason or None,
+            after_summary={"status": "disabled"},
+        )
         return system
 
     @transactional()
@@ -151,6 +369,12 @@ class CallerSystemService:
         system.deactivated_reason = None
         system.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.revive",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"status": "enabled"},
+        )
         return system
 
     @transactional()
@@ -172,6 +396,13 @@ class CallerSystemService:
                 key.row_version += 1
         system.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_system.revoke",
+            object_type="caller_system",
+            object_id=system_id,
+            reason=reason or None,
+            after_summary={"status": "revoked"},
+        )
         return system
 
     @transactional()
@@ -265,6 +496,12 @@ class CallerSystemService:
         )
         self.db.add(key)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_key.add",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"key_id": key.key_id, "fingerprint": key.fingerprint},
+        )
         return key
 
     async def list_public_keys(self, system_id: str) -> list[CallerPublicKey]:
@@ -281,6 +518,12 @@ class CallerSystemService:
         key.status = PublicKeyStatus.ACTIVE
         key.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_key.enable",
+            object_type="caller_system",
+            object_id=key.system_id,
+            after_summary={"key_id": key.key_id, "status": "active"},
+        )
         return key
 
     @transactional()
@@ -291,6 +534,12 @@ class CallerSystemService:
         key.status = PublicKeyStatus.DISABLED
         key.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_key.disable",
+            object_type="caller_system",
+            object_id=key.system_id,
+            after_summary={"key_id": key.key_id, "status": "disabled"},
+        )
         return key
 
     @transactional()
@@ -301,6 +550,12 @@ class CallerSystemService:
         key.status = PublicKeyStatus.REVOKED
         key.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_key.revoke",
+            object_type="caller_system",
+            object_id=key.system_id,
+            after_summary={"key_id": key.key_id, "status": "revoked"},
+        )
         return key
 
     # ═════════════════════════════════════════════════════════════
@@ -320,6 +575,12 @@ class CallerSystemService:
         )
         self.db.add(rule)
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_ip_rule.add",
+            object_type="caller_system",
+            object_id=system_id,
+            after_summary={"ip_cidr": normalized},
+        )
         return rule
 
     async def list_ip_rules(self, system_id: str) -> list[CallerIPRule]:
@@ -338,6 +599,12 @@ class CallerSystemService:
         rule.status = IPRuleStatus(status)
         rule.row_version += 1
         await self.db.flush()
+        AuditService(self.db).add_record(
+            action="caller_ip_rule.status",
+            object_type="caller_system",
+            object_id=rule.system_id,
+            after_summary={"status": status},
+        )
         return rule
 
     @staticmethod
@@ -389,6 +656,11 @@ class CallerSystemService:
         rules = await self.list_ip_rules(system_id)
         if not rules:
             conditions.append("缺少来源 IP 规则")
+
+        # 检查运行策略（API 范围）
+        policy = await self.get_runtime_policy(system_id)
+        if policy is None or not policy.get_allowed_api_patterns():
+            conditions.append("缺少运行策略（运行 API 范围）")
 
         return conditions
 

@@ -20,6 +20,7 @@ _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # 无需 CSRF 校验的公开路径前缀
 _CSRF_SKIP_PREFIXES = (
     "/auth/login",
+    "/auth/captcha/challenge",
     "/auth/csrf-token",
 )
 

@@ -2,28 +2,27 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.api.deps import get_admin_security
 from toolhive.api.admin.auth.schemas import (
+    CaptchaChallengeResponse,
     ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
-    MfaBindRequest,
-    MfaSetupRequiredResponse,
-    MfaVerifyRequest,
-    RecoveryLoginRequest,
     SessionInfoResponse,
 )
+from toolhive.api.admin.deps import _get_current_user
+from toolhive.api.deps import get_admin_security
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.exceptions import (
     AuthenticationError,
-    ToolHiveError,
     ValidationError,
 )
 from toolhive.infrastructure.database import get_db
-from toolhive.services.auth_service import AuthService, MfaSetupResult
+from toolhive.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
@@ -51,31 +50,18 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
-# ── 依赖：从 Cookie 获取当前用户 ──
-
-async def _get_current_user(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    admin_security: AdminSecuritySettings = Depends(get_admin_security),
-):
-    """依赖注入：获取当前管理账号（要求会话有效）。"""
-    session = getattr(request.state, "session", None)
-    if session is None:
-        raise HTTPException(status_code=401, detail="未认证")
-
-    from toolhive.services.account_service import AccountService
-    svc = AccountService(db, admin_security)
-    try:
-        account = await svc.get_by_id(session.account_id)
-    except ToolHiveError:
-        raise HTTPException(status_code=401, detail="未认证")
-    # security_version 不一致 → 会话已失效，要求重新登录
-    if str(session.security_version) != str(account.security_version):
-        raise HTTPException(status_code=401, detail="会话已失效，请重新登录")
-    return account
-
-
 # ── 端点 ──
+
+
+@router.post("/captcha/challenge", response_model=CaptchaChallengeResponse)
+async def captcha_challenge():
+    """申请图形验证码挑战（公开接口，无需登录）。
+
+    返回短期有效的验证码标识、PNG 图片（base64 data URI）与有效期；
+    登录时需携带该标识与用户输入的验证码内容。
+    """
+    from toolhive.services.security.captcha import create_captcha_challenge
+    return await create_captcha_challenge()
 
 
 @router.post("/login")
@@ -86,85 +72,21 @@ async def login(
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
 ):
-    """登录步骤 1：密码校验。
-
-    可能返回三种结果：
-    - LoginResponse：MFA 已完成（或未启用），直接登录成功
-    - MfaSetupRequiredResponse：首次登录，需要绑定 TOTP
-    - 需要 MFA 验证：返回 200 + { require_mfa: true }
-    """
+    """图形验证码 + 账号密码登录，成功直接创建管理会话。"""
     svc = AuthService(db, admin_security)
     try:
-        source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+        source_ip = request.headers.get(
+            "X-Forwarded-For",
+            request.client.host if request.client else "unknown",
+        )
         result = await svc.login_password(
             username=body.username,
             password=body.password,
             source_ip=source_ip,
+            captcha_id=body.captcha_id,
+            captcha_code=body.captcha_code,
         )
     except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
-
-    if isinstance(result, LoginResponse):
-        _set_session_cookie(response, result.session_id)
-        return result
-
-    return result
-
-
-@router.post("/login/verify-mfa")
-async def login_verify_mfa(
-    body: MfaVerifyRequest,
-    request: Request,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    account: None = Depends(_get_current_user),
-):
-    """登录步骤 2：MFA 验证。需要先通过密码校验（有临时会话）。"""
-    session = request.state.session
-    svc = AuthService(db, admin_security)
-
-    from toolhive.services.account_service import AccountService
-    acct_svc = AccountService(db, admin_security)
-    account_obj = await acct_svc.get_by_id(session.account_id)
-
-    try:
-        source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-        result = await svc.login_mfa_verify(
-            account=account_obj,
-            code=body.code,
-            source_ip=source_ip,
-        )
-    except (AuthenticationError, ValidationError) as e:
-        raise HTTPException(status_code=401, detail=str(e))
-
-    _set_session_cookie(response, result.session_id)
-    return LoginResponse(
-        session_id=result.session_id,
-        csrf_token=result.csrf_token,
-        username=result.account.username,
-    )
-
-
-@router.post("/login/recovery")
-async def login_recovery(
-    body: RecoveryLoginRequest,
-    request: Request,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    admin_security: AdminSecuritySettings = Depends(get_admin_security),
-):
-    """使用恢复码登录（绕过 TOTP）。"""
-    svc = AuthService(db, admin_security)
-    try:
-        source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-        result = await svc.login_with_recovery_code(
-            username=body.username,
-            password=body.password,
-            recovery_code=body.recovery_code,
-            source_ip=source_ip,
-        )
-    except (AuthenticationError, ValidationError) as e:
         raise HTTPException(status_code=401, detail=str(e))
 
     _set_session_cookie(response, result.session_id)
@@ -200,13 +122,13 @@ async def get_session_info(
     session = getattr(request.state, "session", None)
     if session is None:
         raise HTTPException(status_code=401, detail="未认证")
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     created_at_dt = None
     if session.created_at:
         try:
             created_at_dt = datetime.fromtimestamp(
-                int(session.created_at), tz=timezone.utc,
+                int(session.created_at), tz=UTC,
             )
         except (ValueError, OverflowError):
             created_at_dt = None
@@ -243,28 +165,6 @@ async def get_my_operation_items(
     return {"operation_items": sorted(str(o) for o in ops)}
 
 
-@router.post("/mfa/bind")
-async def bind_mfa(
-    body: MfaBindRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    account=Depends(_get_current_user),
-):
-    """首次绑定 TOTP。返回恢复码明文（仅此一次）。"""
-    svc = AuthService(db, admin_security)
-    try:
-        recovery_codes = await svc.bind_mfa(
-            account=account,
-            secret=body.secret,
-            code=body.code,
-        )
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return {"recovery_codes": recovery_codes}
-
-
 @router.post("/change-password")
 async def change_password(
     body: ChangePasswordRequest,
@@ -286,10 +186,13 @@ async def change_password(
     if old_session_id:
         from toolhive.services.security.session import rotate_session_id
         await svc.logout(old_session_id)
-        new_session_id = await rotate_session_id(old_session_id)  # 这里需要重新创建
+        await rotate_session_id(old_session_id)  # 这里需要重新创建
         # 简化：直接重新创建会话
         from toolhive.services.security.session import create_session
-        source_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
+        source_ip = request.headers.get(
+            "X-Forwarded-For",
+            request.client.host if request.client else "unknown",
+        )
         new_sid = await create_session(
             account_id=account.id,
             username=account.username,

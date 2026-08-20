@@ -27,14 +27,14 @@ class AppSettings(BaseModel):
 
 
 class AdminSecuritySettings(BaseModel):
-    """管理侧安全配置：登录、密码、会话、TOTP 与 CSRF。"""
+    """管理侧安全配置：登录、密码、会话与 CSRF。"""
 
-    totp_encryption_key: str = ""
     csrf_secret: str = ""
     login_max_failures: int = 5
     login_lock_minutes: int = 30
-    captcha_trigger_failures: int = 3
-    captcha_trigger_window_minutes: int = 10
+    login_failure_window_minutes: int = 10
+    captcha_ttl_seconds: int = 300
+    captcha_code_length: int = 4
     temp_password_expire_hours: int = 24
     password_min_length: int = 12
     password_max_length: int = 128
@@ -212,8 +212,9 @@ class Settings(BaseSettings):
     # ── 安全：登录与账号 ──
     login_max_failures: int = 5
     login_lock_minutes: int = 30
-    captcha_trigger_failures: int = 3
-    captcha_trigger_window_minutes: int = 10
+    login_failure_window_minutes: int = 10
+    captcha_ttl_seconds: int = 300
+    captcha_code_length: int = 4
     temp_password_expire_hours: int = 24
     password_min_length: int = 12
     password_max_length: int = 128
@@ -231,7 +232,6 @@ class Settings(BaseSettings):
     signature_version: str = "TOOLHIVE-SIGN-V1"
 
     # ── 密钥（生产环境务必通过环境变量覆盖） ──
-    totp_encryption_key: str = ""
     csrf_secret: str = ""
 
     # ── Outbox 后台投递 ──
@@ -263,12 +263,12 @@ class Settings(BaseSettings):
     @property
     def admin_security(self) -> AdminSecuritySettings:
         return AdminSecuritySettings(
-            totp_encryption_key=self.totp_encryption_key,
             csrf_secret=self.csrf_secret,
             login_max_failures=self.login_max_failures,
             login_lock_minutes=self.login_lock_minutes,
-            captcha_trigger_failures=self.captcha_trigger_failures,
-            captcha_trigger_window_minutes=self.captcha_trigger_window_minutes,
+            login_failure_window_minutes=self.login_failure_window_minutes,
+            captcha_ttl_seconds=self.captcha_ttl_seconds,
+            captcha_code_length=self.captcha_code_length,
             temp_password_expire_hours=self.temp_password_expire_hours,
             password_min_length=self.password_min_length,
             password_max_length=self.password_max_length,

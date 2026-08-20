@@ -1,8 +1,6 @@
-"""登录限流与验证码触发。"""
+"""登录失败统计与限流。"""
 
 from __future__ import annotations
-
-from redis.asyncio import Redis
 
 from toolhive.config import AdminSecuritySettings
 from toolhive.infrastructure.redis import get_redis
@@ -20,31 +18,10 @@ def configure_security(admin_security: AdminSecuritySettings) -> None:
     _admin_security = admin_security
 
 
-async def check_captcha_required(account_id: str | None, source_ip: str) -> bool:
-    """检查是否需要验证码。
-
-    规则：账号或 IP 在窗口内失败 >= captcha_trigger_failures 次。
-    """
-    redis = await get_redis()
-    threshold = _admin_security.captcha_trigger_failures
-    window_min = _admin_security.captcha_trigger_window_minutes
-
-    checks: list[bool] = []
-
-    if account_id:
-        count = await redis.get(f"{_ACCOUNT_FAIL_PREFIX}{account_id}")
-        checks.append(int(count or 0) >= threshold)
-
-    ip_count = await redis.get(f"{_IP_FAIL_PREFIX}{source_ip}")
-    checks.append(int(ip_count or 0) >= threshold)
-
-    return any(checks)
-
-
 async def record_login_failure(account_id: str | None, source_ip: str) -> None:
     """记录登录失败（账号 + IP 维度）。"""
     redis = await get_redis()
-    window_sec = _admin_security.captcha_trigger_window_minutes * 60
+    window_sec = _admin_security.login_failure_window_minutes * 60
 
     async with redis.pipeline(transaction=True) as pipe:
         if account_id:

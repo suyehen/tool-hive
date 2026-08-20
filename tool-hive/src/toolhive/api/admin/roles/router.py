@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.api.admin.auth.router import _get_current_user
+from toolhive.api.admin.deps import require_operation
 from toolhive.api.admin.roles.schemas import (
     AssignOperationsRequest,
     CreateRoleRequest,
@@ -16,6 +16,7 @@ from toolhive.api.admin.roles.schemas import (
     UpdateRoleRequest,
 )
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
+from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
 from toolhive.services.role_service import RoleService
 
@@ -32,7 +33,7 @@ async def list_roles(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """角色列表（需 role:view）。"""
     svc = RoleService(db)
@@ -56,7 +57,7 @@ async def list_roles(
 async def create_role(
     body: CreateRoleRequest,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_CREATE)),
 ):
     """创建角色（需 role:create）。"""
     svc = RoleService(db)
@@ -77,7 +78,7 @@ async def create_role(
 async def get_role(
     role_id: str,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """角色详情（需 role:view）。"""
     svc = RoleService(db)
@@ -99,7 +100,7 @@ async def update_role(
     role_id: str,
     body: UpdateRoleRequest,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_EDIT)),
 ):
     """修改角色（需 role:edit）。"""
     svc = RoleService(db)
@@ -130,7 +131,7 @@ async def update_role_status(
     role_id: str,
     body: RoleStatusRequest,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_MANAGE)),
 ):
     """启用/停用/归档角色（需 role:manage）。"""
     svc = RoleService(db)
@@ -150,7 +151,7 @@ async def update_role_status(
 async def get_role_operations(
     role_id: str,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """查询角色的操作项（需 role:view）。"""
     svc = RoleService(db)
@@ -174,7 +175,7 @@ async def assign_operations(
     role_id: str,
     body: AssignOperationsRequest,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_EDIT)),
 ):
     """分配操作项（需 role:edit）。"""
     svc = RoleService(db)
@@ -192,7 +193,7 @@ async def remove_operations(
     role_id: str,
     body: AssignOperationsRequest,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_EDIT)),
 ):
     """移除操作项（需 role:edit）。"""
     svc = RoleService(db)
@@ -211,10 +212,11 @@ async def remove_operations(
 @_ops_router.get("", response_model=list[OperationResponse])
 async def list_operations(
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """查询全部操作项定义（需 role:view）。"""
     from sqlalchemy import select
+
     from toolhive.models.management_operation import ManagementOperation
 
     result = await db.execute(

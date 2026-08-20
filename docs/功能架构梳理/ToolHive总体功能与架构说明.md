@@ -248,3 +248,14 @@ ToolHive 一期是一个应用进程和一个 Linux 服务账号。管理模块�
 Nginx 必须清除调用方提交的 `Forwarded`、`X-Forwarded-For`、`X-Real-IP` 和内部入口 Header，再根据实际连接重写 `X-ToolHive-Ingress` 与 `X-ToolHive-Client-IP`。ToolHive 只有在 TCP 对端属于明确配置的可信代理范围时，才使用这些 Header 判断入口和来源 IP。
 
 一期运行入口先由 Nginx 限制内网来源，应用再按 `system_id` 的来源 IP 规则进行校验。调用系统规则中的 `*` 只在已通过运行入口限制的范围内生效。若后续将 Nginx、WAF 或 Gateway 部署到其他服务器，必须重新配置代理链、可信 CIDR、专用私网和防火墙，不能直接沿用同机回环地址前提。
+
+---
+
+## 8. 补充记录（H05：管理登录方案调整）
+
+> 本节仅追加补充记录，不修改上文内容。
+
+### 2026-08-20
+
+- 一期管理登录已改为“账号 + 密码 + 图形验证码”，正文中“账号 / MFA / 会话”“本地登录、TOTP MFA”“管理员登录并完成 MFA”“管理身份……MFA 配置”等表述不再适用：TOTP MFA、恢复码登录、MFA 绑定接口与 MFA 设置页面已删除，`mfa_config` 数据模型及 `totp_encryption_key` 配置已清理。
+- 管理侧登录链路现状为：图形验证码校验 → 账号状态与登录失败限制 → 密码校验 → 创建管理会话与 CSRF Token。

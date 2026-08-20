@@ -10,24 +10,16 @@ from toolhive.core.time_utils import UTCDateTime
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=256)
+    captcha_id: str = Field(min_length=1, max_length=128)
+    captcha_code: str = Field(min_length=1, max_length=16)
 
 
-class MfaVerifyRequest(BaseModel):
-    """密码校验通过后的 MFA 验证。需在 step 1 的 Cookie 上下文中调用。"""
-    code: str = Field(min_length=6, max_length=8)
+class CaptchaChallengeResponse(BaseModel):
+    """图形验证码挑战：标识、图片（base64 data URI）与有效期。"""
 
-
-class MfaBindRequest(BaseModel):
-    """绑定 TOTP。step 1 返回的 secret 由前端暂存，回调时提交。"""
-    secret: str
-    code: str = Field(min_length=6, max_length=8)
-
-
-class RecoveryLoginRequest(BaseModel):
-    """使用恢复码登录。"""
-    username: str = Field(min_length=1, max_length=128)
-    password: str = Field(min_length=1, max_length=256)
-    recovery_code: str = Field(min_length=1, max_length=128)
+    captcha_id: str
+    image: str
+    expires_in_seconds: int
 
 
 class ChangePasswordRequest(BaseModel):
@@ -40,20 +32,6 @@ class LoginResponse(BaseModel):
     session_id: str
     csrf_token: str
     username: str
-
-
-class MfaRequiredResponse(BaseModel):
-    """MFA 验证必要（密码正确但尚未完成 MFA）。"""
-    require_mfa: bool = True
-    step: str = "mfa_verify"
-
-
-class MfaSetupRequiredResponse(BaseModel):
-    """需要绑定 MFA（首次登录）。"""
-    require_mfa_setup: bool = True
-    totp_uri: str
-    secret: str
-    step: str = "mfa_setup"
 
 
 class SessionInfoResponse(BaseModel):

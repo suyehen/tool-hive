@@ -7,37 +7,29 @@ export interface LoginResponse {
   is_super_admin: boolean;
 }
 
-export interface MfaRequiredResponse {
-  require_mfa: boolean;
-  step: string;
+export interface CaptchaChallenge {
+  captcha_id: string;
+  image: string;
+  expires_in_seconds: number;
 }
 
-export interface MfaSetupRequiredResponse {
-  require_mfa_setup: boolean;
-  totp_uri: string;
-  secret: string;
-  step: string;
-}
-
-export type LoginStep1Result = LoginResponse | MfaRequiredResponse | MfaSetupRequiredResponse;
-
-export async function loginPassword(username: string, password: string): Promise<LoginStep1Result> {
-  const { data } = await client.post('/auth/login', { username, password });
+export async function getCaptchaChallenge(): Promise<CaptchaChallenge> {
+  const { data } = await client.post('/auth/captcha/challenge');
   return data;
 }
 
-export async function verifyMfa(code: string): Promise<LoginResponse> {
-  const { data } = await client.post('/auth/login/verify-mfa', { code });
-  return data;
-}
-
-export async function loginRecovery(username: string, password: string, recoveryCode: string): Promise<LoginResponse> {
-  const { data } = await client.post('/auth/login/recovery', { username, password, recovery_code: recoveryCode });
-  return data;
-}
-
-export async function bindMfa(secret: string, code: string): Promise<{ recovery_codes: string[] }> {
-  const { data } = await client.post('/auth/mfa/bind', { secret, code });
+export async function loginPassword(
+  username: string,
+  password: string,
+  captchaId: string,
+  captchaCode: string,
+): Promise<LoginResponse> {
+  const { data } = await client.post('/auth/login', {
+    username,
+    password,
+    captcha_id: captchaId,
+    captcha_code: captchaCode,
+  });
   return data;
 }
 

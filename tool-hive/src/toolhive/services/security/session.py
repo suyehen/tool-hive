@@ -164,7 +164,7 @@ async def revoke_session(session_id: str) -> None:
 
 
 async def revoke_all_sessions(account_id: str) -> None:
-    """撤销某账号的全部会话（禁用/重置密码/MFA 重置/强制下线）。"""
+    """撤销某账号的全部会话（禁用/重置密码/强制下线）。"""
     redis = await get_redis()
     old_session_id = await redis.get(_account_key(account_id))
     if old_session_id:

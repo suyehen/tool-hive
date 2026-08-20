@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from toolhive.api.admin.auth.router import router as auth_router
 from toolhive.api.admin.accounts.router import router as accounts_router
+from toolhive.api.admin.auth.router import router as auth_router
+from toolhive.api.admin.bootstrap import router as bootstrap_router
+from toolhive.api.admin.caller_systems.router import router as caller_systems_router
+from toolhive.api.admin.middleware import CSRFMiddleware, SessionMiddleware
 from toolhive.api.admin.roles.router import (
     _ops_router as operations_router,
+)
+from toolhive.api.admin.roles.router import (
     router as roles_router,
 )
-from toolhive.api.admin.caller_systems.router import router as caller_systems_router
 from toolhive.api.admin.system_tasks.router import router as system_tasks_router
-from toolhive.api.admin.middleware import CSRFMiddleware, SessionMiddleware
 
 admin_app = FastAPI(
     title="ToolHive Admin API",
@@ -25,6 +28,7 @@ admin_app.add_middleware(SessionMiddleware)
 
 # 注册子路由
 admin_app.include_router(auth_router)
+admin_app.include_router(bootstrap_router)
 admin_app.include_router(accounts_router)
 admin_app.include_router(roles_router)
 admin_app.include_router(operations_router)

@@ -58,6 +58,27 @@ class IPRuleStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class ToolScopeType(StrEnum):
+    """工具范围类型：能力包或具体工具。"""
+
+    CAPABILITY = "capability"
+    TOOL = "tool"
+
+
+class ToolScopeStatus(StrEnum):
+    """工具范围条目状态。"""
+
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class AuditResult(StrEnum):
+    """审计结果。"""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
 class OutboxStatus(StrEnum):
     """Outbox 事件与投递状态。"""
 

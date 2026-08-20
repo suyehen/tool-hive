@@ -10,11 +10,6 @@ SESSION_COOKIE_PATH: str = "/api/admin"
 # ── Nonce ──
 NONCE_BYTES: int = 16  # 128 位
 
-# ── TOTP ──
-TOTP_ISSUER: str = "ToolHive"
-TOTP_RECOVERY_CODE_COUNT: int = 8
-TOTP_RECOVERY_CODE_BYTES: int = 16
-
 # ── 临时密码 ──
 TEMP_PASSWORD_BYTES: int = 24
 

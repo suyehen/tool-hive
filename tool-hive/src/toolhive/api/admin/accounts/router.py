@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.api.deps import get_admin_security
 from toolhive.api.admin.accounts.schemas import (
     AccountListResponse,
     AccountResponse,
@@ -15,15 +14,16 @@ from toolhive.api.admin.accounts.schemas import (
     ResetPasswordResponse,
     StatusUpdateRequest,
 )
+from toolhive.api.admin.deps import require_operation
 from toolhive.api.admin.roles.schemas import RoleResponse
+from toolhive.api.deps import get_admin_security
 from toolhive.config import AdminSecuritySettings
-from toolhive.api.admin.auth.router import _get_current_user
 from toolhive.core.exceptions import (
     ConflictError,
     NotFoundError,
-    ToolHiveError,
     ValidationError,
 )
+from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
 from toolhive.services.account_service import AccountService
 from toolhive.services.role_service import RoleService
@@ -37,7 +37,7 @@ async def list_accounts(
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)),
 ):
     """账号列表（需 admin_account:view）。"""
     svc = AccountService(db, admin_security)
@@ -66,7 +66,7 @@ async def create_account(
     body: CreateAccountRequest,
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_CREATE)),
 ):
     """创建账号（需 admin_account:create）。"""
     svc = AccountService(db, admin_security)
@@ -91,7 +91,7 @@ async def get_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)),
 ):
     """账号详情（需 admin_account:view）。"""
     svc = AccountService(db, admin_security)
@@ -119,7 +119,7 @@ async def update_account_status(
     request: Request,
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    operator=Depends(_get_current_user),
+    operator=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_MANAGE)),
 ):
     """启用/禁用/解锁（需 admin_account:manage）。"""
     svc = AccountService(db, admin_security)
@@ -148,7 +148,7 @@ async def reset_password(
     account_id: str,
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_MANAGE)),
 ):
     """重置密码（需 admin_account:manage）。"""
     svc = AccountService(db, admin_security)
@@ -170,7 +170,7 @@ async def force_logout(
     account_id: str,
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_MANAGE)),
 ):
     """强制下线（需 admin_account:manage）。"""
     svc = AccountService(db, admin_security)
@@ -187,7 +187,7 @@ async def force_logout(
 async def get_account_roles(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    _account=Depends(_get_current_user),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """查询账号已分配的后台角色（需 role:view）。"""
     svc = RoleService(db)
@@ -212,7 +212,7 @@ async def assign_role_to_account(
     account_id: str,
     body: AssignRoleRequest,
     db: AsyncSession = Depends(get_db),
-    operator=Depends(_get_current_user),
+    operator=Depends(require_operation(OperationCode.ROLE_ASSIGN)),
 ):
     """给账号分配后台角色（需 role:assign）。"""
     svc = RoleService(db)
@@ -232,7 +232,7 @@ async def remove_role_from_account(
     account_id: str,
     role_id: str,
     db: AsyncSession = Depends(get_db),
-    operator=Depends(_get_current_user),
+    operator=Depends(require_operation(OperationCode.ROLE_ASSIGN)),
 ):
     """从账号移除后台角色（需 role:assign）。"""
     svc = RoleService(db)
