@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "toolhive"
 version = "0.1.0"
 description = "Agent 的工具蜂巢 - 统一托管、策略鉴权、安全执行"
-readme = "README.md"
+readme = {text = "ToolHive - Agent 的工具蜂巢：统一托管、策略鉴权、安全执行", content-type = "text/plain"}
 license = {text = "Apache-2.0"}
 requires-python = ">=3.11.6,<3.12"
 authors = [

@@ -12,102 +12,98 @@
 
 ---
 
-## Product Overview
+## Overview
 
-ToolHive is a unified tool platform for agents, business systems, and other service callers. It registers external capabilities as governed tools, then authenticates callers, evaluates tool-call policy, validates arguments, and executes approved requests.
+ToolHive is a unified tool platform for agents, business systems, and other service callers. External capabilities are registered as governed tools; before execution, ToolHive authenticates callers, evaluates tool-call policy, validates arguments, and executes approved requests. Callers can only use the tools ToolHive makes discoverable in the current context, and cannot choose target URLs, HTTP methods, authentication headers, or platform-managed credentials.
 
-Callers and LLMs can use only the tools ToolHive makes discoverable in the current context. They cannot choose target URLs, HTTP methods, authentication headers, or platform-managed credentials. External business systems remain responsible for their own data authorization and business-rule validation.
+Core capabilities:
 
-## One Application, Clear Boundaries
+- Central tool catalog: Providers, tools, versions, and capability bundles are managed centrally; only reviewed and published definitions can be called.
+- Management and runtime separation: the management entry (`/admin/**`, `/api/admin/**`) and the runtime entry (`/api/runtime/**`) use distinct identities and authentication, isolated from each other.
+- Context-aware discovery and revalidation: execution re-checks real arguments, resource scope, and high-risk actions.
+- Controlled Provider execution: Providers call external services through approved fixed request mappings, with credential references, timeouts, error normalization, and response sanitization.
+- Traceable governance: management changes, authentication, authorization decisions, and execution retain necessary redacted trace/audit records.
 
-ToolHive is **one application, one release unit, and one lifecycle unit**. Its management module and tool application module live in the same ToolHive backend and are deployed, started, stopped, and upgraded together. They are not independently deployed or independently operated backend systems.
+## Tech Stack
 
-- **Management module**: `/admin/**` and `/api/admin/**` provide management accounts, roles, caller-system configuration, and tool-catalog administration.
-- **Tool application module**: `/api/runtime/**` lets caller systems discover tools, obtain authorization decisions, and execute tools.
-- **Access separation**: the two entries use different routes, identities, authentication methods, and control rules. Management accounts cannot invoke tools merely through their administrative role, and caller credentials cannot access management APIs.
+| Module | Technology |
+| --- | --- |
+| Backend | Python 3.11.6 · FastAPI · Uvicorn · SQLAlchemy (async) |
+| Storage | PostgreSQL · Redis · Chroma (embedded) |
+| Frontend | React 18 · TypeScript · Vite · Ant Design |
+| Gateway | Nginx |
 
-```text
-Administrator browser                           Caller system / Agent
-        │                                                   │
-        └──────────── HTTPS ───────┬── Internal HTTPS + signed request ──┘
-                                   ▼
-                      ┌────────────────────────────┐
-                      │      Nginx / security gateway│
-                      │ entry protection and routing │
-                      └──────────────┬─────────────┘
-                                   ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│         One ToolHive backend application: one deployment and lifecycle │
-│  Management: accounts, roles, caller systems, and Catalog management  │
-│  Tool application: caller auth, discovery, policy, Provider, and Trace│
-│  Shared domain: Catalog · Policy · Provider · Audit · configuration     │
-└──────────────────────────────────┬───────────────────────────────────┘
-                                   │ Controlled egress
-                                   ▼
-                         ┌─────────────────────┐
-                         │ External systems/API│
-                         └─────────────────────┘
-```
-
-## Core Capabilities
-
-- **Central tool catalog**: Providers, tools, tool versions, and capability bundles describe external capabilities; only reviewed and published definitions are callable.
-- **Management and caller boundaries**: management accounts configure the platform, while caller systems use separate identities for runtime APIs.
-- **Context-aware discovery and revalidation**: ToolHive returns only tools visible to the current caller and context, then rechecks actual arguments, resource scope, and high-risk actions before execution.
-- **Controlled Provider execution**: Providers use approved fixed request mappings and handle credential references, timeouts, error normalization, response sanitization, and egress controls.
-- **Traceable governance**: management changes, authentication, policy decisions, retrieval, and execution retain necessary redacted trace or audit records.
-
-## Delivery Phases
-
-### Phase 1: Controlled HTTP Tool-Call Loop
-
-Phase 1 delivers the minimum closed loop from management configuration to governed HTTP execution:
-
-- management accounts, MFA, sessions, administrative roles, and operation permissions;
-- caller systems, public keys, source-IP rules, capability bundles, Providers, tools, versions, review, and publication;
-- signed caller requests, replay protection, tool-call scope, Discover / Execute, JSON Schema validation, and high-risk confirmation;
-- fixed HTTP mappings, credential isolation, SSRF protection, timeout/retry/idempotency controls, and foundational Trace and audit records.
-
-### Phase 2: Protocol, Governance, and Scale
-
-After the Phase 1 loop is stable and validated in real use, Phase 2 extends ToolHive with:
-
-- enterprise identity integration such as SSO, OIDC, SAML, or enterprise-specific protocols;
-- MCP Providers, an MCP Registry / gateway, gRPC Providers, and other approved protocol adapters;
-- host-tool and high-risk capability governance, asynchronous jobs, callbacks, cancellation, and dead-letter handling;
-- advanced release governance, gradual rollout, rollback, retrieval-quality evaluation, cost, and quota governance;
-- monitoring and alerts, audit reporting, compliance controls, multi-instance deployment, capacity management, and disaster recovery.
-
-## Typical Call Flow
+## Repository Layout
 
 ```text
-Administrator configures caller systems and tools
-  → Tool version is reviewed and published
-  → Caller system sends a signed request with its own credentials
-  → ToolHive validates source, identity, replay protection, and tool-call scope
-  → Discover returns tools allowed in the current context
-  → Execute revalidates actual arguments and risk conditions
-  → Provider calls an external API through its fixed mapping
-  → ToolHive returns a normalized result and writes redacted Trace / audit records
+toolhive/
+├── tool-hive/    # Backend service (FastAPI app, SQL migrations, CLI, deploy scripts)
+├── frontend/     # Admin frontend (React + Vite)
+├── deploy/       # Deployment assets (Nginx gateway sample, deployment doc)
+└── docs/         # Architecture and requirements docs
 ```
 
-## Security Principles
+## Requirements
 
-- **Deny by default**: reject unauthenticated, unauthorized, unconfigured, or security-dependency-failed requests.
-- **Fixed execution mappings**: an LLM cannot create arbitrary URLs, methods, headers, credentials, or undeclared arguments.
-- **Identity isolation**: management sessions, caller authentication material, and Provider credentials are separated and kept out of ordinary logs and model context.
-- **Two-stage control**: being discoverable does not imply being executable; execution is re-evaluated against real arguments, business context, and risk requirements.
-- **Controlled egress and traceability**: restrict destinations and network egress, sanitize sensitive results, and retain redacted records.
+- Linux (production: deploy on the same host as Nginx)
+- CPython 3.11.6 (`>=3.11.6,<3.12`)
+- PostgreSQL and Redis
+- Node.js 18+ (only needed for frontend development and builds)
 
-## Documentation
+## Deployment & Startup
 
-- [Architecture documentation index](./docs/功能架构梳理/README.md)
-- [Overall function and architecture](./docs/功能架构梳理/ToolHive总体功能与架构说明.md)
-- [Phase 1 goals](./docs/功能架构梳理/一期目标.md)
-- [Phase 2 goals](./docs/功能架构梳理/二期目标.md)
-- [Phase 1 implementation status](./docs/功能架构梳理/一期开发完成情况.md)
+### 1. Backend
 
-This README describes the finished product and its phased delivery scope. The current implementation state is maintained separately in the Phase 1 implementation-status document.
+```bash
+cd tool-hive
+
+# Install dependencies (creates .venv and installs toolhive)
+bash scripts/install.sh
+
+# Prepare the configuration file (edit DB, Redis, secrets as needed)
+cp toolhive.example.yaml config/production.yaml
+
+# Initialize the database: baseline schema + incremental migrations
+psql "$DATABASE_URL" -f sql/init.sql
+./.venv/bin/toolhive db-migrate --config config/production.yaml
+
+# Initialize the first super admin (only on an empty database)
+TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
+  ./.venv/bin/toolhive init-admin --username admin --config config/production.yaml
+
+# Start the service (listens on 127.0.0.1:8100)
+TOOLHIVE_CONFIG_FILE=config/production.yaml bash scripts/start.sh
+
+# Verify
+BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
+```
+
+All settings are documented in [toolhive.example.yaml](./tool-hive/toolhive.example.yaml); they can also be overridden with environment variables (see [.env.example](./tool-hive/.env.example)).
+
+### 2. Frontend (development)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dev server runs at `http://localhost:5173` and proxies `/api` to `http://127.0.0.1:8100`.
+
+### 3. Frontend (production build)
+
+```bash
+cd frontend
+npm run build
+```
+
+Build output goes to `frontend/dist/`.
+
+### 4. Production gateway (Nginx)
+
+In production the backend listens on loopback only and must be fronted by Nginx. See [deploy/nginx/toolhive.conf](./deploy/nginx/toolhive.conf): the management entry is exposed on public port 443, the runtime entry on internal port 8081 only, with client-supplied headers stripped and trusted ingress/client-IP headers written by Nginx.
+
+See [deploy/README.md](./deploy/README.md) for the full production deployment, configuration validation, and acceptance steps.
 
 ## License
 
