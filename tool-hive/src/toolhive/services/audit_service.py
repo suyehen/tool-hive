@@ -44,6 +44,11 @@ def get_audit_actor() -> dict[str, str | None]:
     return _current_actor.get()
 
 
+def get_current_operator_id() -> str | None:
+    """读取当前请求操作人 ID（管理 API 依赖阶段注入）。"""
+    return get_audit_actor().get("account_id")
+
+
 def _sanitize_value(key: str, value: Any) -> Any:
     lower = key.lower()
     if any(hint in lower for hint in _SENSITIVE_KEY_HINTS):

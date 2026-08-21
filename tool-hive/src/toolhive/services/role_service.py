@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,7 @@ from toolhive.models.backend_role import BackendRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.models.management_operation import ManagementOperation
 from toolhive.models.role_operation import RoleOperation
-from toolhive.services.audit_service import AuditService
+from toolhive.services.audit_service import AuditService, get_current_operator_id
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,13 @@ class RoleService:
         if existing:
             raise ConflictError(f"角色名 '{name}' 已被使用")
 
+        # 创建角色：显式写入创建时间与当前操作人 ID
         role = BackendRole(
             name=name,
             description=description,
             is_super_admin=(name == SUPER_ADMIN_ROLE_NAME),
+            create_time=datetime.now(UTC),
+            create_by=get_current_operator_id(),
         )
         self.db.add(role)
         await self.db.flush()
@@ -109,6 +113,9 @@ class RoleService:
         if description is not None:
             role.description = description
 
+        # 修改角色：记录修改时间与当前操作人
+        role.update_time = datetime.now(UTC)
+        role.update_by = get_current_operator_id()
         role.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -130,6 +137,9 @@ class RoleService:
         if status not in tuple(RoleStatus):
             raise ValidationError(f"无效状态: {status}")
         role.status = RoleStatus(status)
+        # 修改角色状态：记录修改时间与当前操作人
+        role.update_time = datetime.now(UTC)
+        role.update_by = get_current_operator_id()
         role.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -170,7 +180,13 @@ class RoleService:
                 )
             )
             if not existing:
-                op = RoleOperation(role_id=role_id, operation_code=code)
+                # 分配操作项：显式写入创建时间与当前操作人 ID
+                op = RoleOperation(
+                    role_id=role_id,
+                    operation_code=code,
+                    create_time=datetime.now(UTC),
+                    create_by=get_current_operator_id(),
+                )
                 self.db.add(op)
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -238,7 +254,13 @@ class RoleService:
         if existing:
             raise ConflictError("该账号已拥有此角色")
 
-        acct_role = AccountRole(account_id=account_id, role_id=role_id)
+        # 分配角色：显式写入创建时间与执行操作人 ID
+        acct_role = AccountRole(
+            account_id=account_id,
+            role_id=role_id,
+            create_time=datetime.now(UTC),
+            create_by=operator_id,
+        )
         self.db.add(acct_role)
         await self.db.flush()
         AuditService(self.db).add_record(

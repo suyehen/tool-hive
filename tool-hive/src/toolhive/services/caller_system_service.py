@@ -7,7 +7,7 @@ import ipaddress
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +27,7 @@ from toolhive.models.caller_public_key import CallerPublicKey
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
 from toolhive.models.caller_tool_scope import CallerToolScope
-from toolhive.services.audit_service import AuditService
+from toolhive.services.audit_service import AuditService, get_current_operator_id
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class CallerSystemService:
         if environment not in ("development", "production"):
             raise ValidationError("环境必须是 development 或 production")
 
+        # 创建调用系统：显式写入创建时间与当前操作人 ID
         system = CallerSystem(
             system_id=self.generate_system_id(),
             name=name,
@@ -72,6 +73,8 @@ class CallerSystemService:
             status=CallerSystemStatus.DRAFT,
             effective_from=effective_from,
             effective_to=effective_to,
+            create_time=datetime.now(UTC),
+            create_by=get_current_operator_id(),
         )
         self.db.add(system)
         await self.db.flush()
@@ -121,6 +124,9 @@ class CallerSystemService:
             system.effective_from = effective_from
         if effective_to is not None:
             system.effective_to = effective_to
+        # 更新调用系统：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         return system
@@ -137,10 +143,13 @@ class CallerSystemService:
             raise ValidationError("启用条件不满足: " + "; ".join(conditions))
 
         # 检查有效期
-        if system.effective_to and system.effective_to <= datetime.now(timezone.utc):
+        if system.effective_to and system.effective_to <= datetime.now(UTC):
             raise ValidationError("当前时间不在有效期内")
 
         system.status = CallerSystemStatus.ENABLED
+        # 启用调用系统：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -191,6 +200,7 @@ class CallerSystemService:
             )
         )
         if policy is None:
+            # 创建运行策略：显式写入创建时间与当前操作人 ID
             policy = CallerRuntimePolicy(
                 system_id=system_id,
                 allowed_api_patterns=json.dumps(
@@ -203,6 +213,8 @@ class CallerSystemService:
                 circuit_breaker_enabled=circuit_breaker_enabled,
                 effective_from=effective_from,
                 effective_to=effective_to,
+                create_time=datetime.now(UTC),
+                create_by=get_current_operator_id(),
             )
             self.db.add(policy)
         else:
@@ -221,6 +233,9 @@ class CallerSystemService:
             policy.circuit_breaker_enabled = circuit_breaker_enabled
             policy.effective_from = effective_from
             policy.effective_to = effective_to
+            # 更新运行策略：记录修改时间与当前操作人
+            policy.update_time = datetime.now(UTC)
+            policy.update_by = get_current_operator_id()
             policy.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -278,11 +293,14 @@ class CallerSystemService:
 
         new_scopes: list[CallerToolScope] = []
         for item in items:
+            # 写入新的工具范围：显式记录创建时间与当前操作人 ID
             scope = CallerToolScope(
                 system_id=system_id,
                 scope_type=item["scope_type"],
                 scope_code=item["scope_code"],
                 status=item["status"],
+                create_time=datetime.now(UTC),
+                create_by=get_current_operator_id(),
             )
             self.db.add(scope)
             new_scopes.append(scope)
@@ -309,7 +327,10 @@ class CallerSystemService:
             raise ConflictError("只有已启用的调用系统可以紧急禁用")
         system.emergency_disabled = True
         system.emergency_disabled_reason = reason
-        system.emergency_disabled_at = datetime.now(timezone.utc)
+        system.emergency_disabled_at = datetime.now(UTC)
+        # 紧急禁用：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -330,6 +351,9 @@ class CallerSystemService:
         system.emergency_disabled = False
         system.emergency_disabled_reason = None
         system.emergency_disabled_at = None
+        # 解除紧急禁用：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -349,6 +373,9 @@ class CallerSystemService:
             raise ConflictError("调用系统已注销，不能停用")
         system.status = CallerSystemStatus.DISABLED
         system.deactivated_reason = reason
+        # 停用调用系统：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -367,6 +394,9 @@ class CallerSystemService:
             raise ConflictError("只有已停用的调用系统可以恢复")
         system.status = CallerSystemStatus.ENABLED
         system.deactivated_reason = None
+        # 恢复调用系统：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         system.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -384,6 +414,9 @@ class CallerSystemService:
             raise ConflictError("调用系统已注销")
         system.status = CallerSystemStatus.REVOKED
         system.deactivated_reason = reason
+        # 注销调用系统：记录修改时间与当前操作人
+        system.update_time = datetime.now(UTC)
+        system.update_by = get_current_operator_id()
         # 撤销全部公钥
         keys = await self.list_public_keys(system_id)
         for key in keys:
@@ -393,6 +426,8 @@ class CallerSystemService:
             ):
                 key.status = PublicKeyStatus.REVOKED
                 self.db.add(key)
+                key.update_time = datetime.now(UTC)
+                key.update_by = get_current_operator_id()
                 key.row_version += 1
         system.row_version += 1
         await self.db.flush()
@@ -409,7 +444,7 @@ class CallerSystemService:
     async def check_and_expire(self, system_id: str) -> None:
         """超过 effective_to 自动拒绝请求（调用方检查）。"""
         system = await self.get_by_system_id(system_id)
-        if system.effective_to and system.effective_to <= datetime.now(timezone.utc):
+        if system.effective_to and system.effective_to <= datetime.now(UTC):
             if system.status == CallerSystemStatus.ENABLED:
                 system.status = CallerSystemStatus.DISABLED
                 system.deactivated_reason = "已过期（自动）"
@@ -484,6 +519,7 @@ class CallerSystemService:
         if existing:
             raise ConflictError("该公钥已绑定到其他调用系统")
 
+        # 新增公钥：显式写入创建时间与当前操作人 ID
         key = CallerPublicKey(
             key_id=self.generate_key_id(),
             system_id=system_id,
@@ -491,8 +527,10 @@ class CallerSystemService:
             fingerprint=fingerprint,
             algorithm=algorithm,
             status=PublicKeyStatus.PENDING,
-            effective_from=datetime.now(timezone.utc),
+            effective_from=datetime.now(UTC),
             effective_to=effective_to,
+            create_time=datetime.now(UTC),
+            create_by=get_current_operator_id(),
         )
         self.db.add(key)
         await self.db.flush()
@@ -516,6 +554,9 @@ class CallerSystemService:
         if key.status != PublicKeyStatus.PENDING:
             raise ConflictError("只有待启用状态的公钥可以启用")
         key.status = PublicKeyStatus.ACTIVE
+        # 启用公钥：记录修改时间与当前操作人
+        key.update_time = datetime.now(UTC)
+        key.update_by = get_current_operator_id()
         key.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -532,6 +573,9 @@ class CallerSystemService:
         if key.status not in (PublicKeyStatus.PENDING, PublicKeyStatus.ACTIVE):
             raise ConflictError("只能停用有效或待启用状态的公钥")
         key.status = PublicKeyStatus.DISABLED
+        # 停用公钥：记录修改时间与当前操作人
+        key.update_time = datetime.now(UTC)
+        key.update_by = get_current_operator_id()
         key.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -548,6 +592,9 @@ class CallerSystemService:
         if key.status == PublicKeyStatus.REVOKED:
             raise ConflictError("该公钥已撤销")
         key.status = PublicKeyStatus.REVOKED
+        # 撤销公钥：记录修改时间与当前操作人
+        key.update_time = datetime.now(UTC)
+        key.update_by = get_current_operator_id()
         key.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -568,10 +615,13 @@ class CallerSystemService:
     ) -> CallerIPRule:
         await self.get_by_system_id(system_id)
         normalized = self._normalize_cidr(ip_cidr)
+        # 新增 IP 规则：显式写入创建时间与当前操作人 ID
         rule = CallerIPRule(
             system_id=system_id,
             ip_cidr=normalized,
             description=description,
+            create_time=datetime.now(UTC),
+            create_by=get_current_operator_id(),
         )
         self.db.add(rule)
         await self.db.flush()
@@ -597,6 +647,9 @@ class CallerSystemService:
         if status not in tuple(IPRuleStatus):
             raise ValidationError("无效状态")
         rule.status = IPRuleStatus(status)
+        # 更新 IP 规则状态：记录修改时间与当前操作人
+        rule.update_time = datetime.now(UTC)
+        rule.update_by = get_current_operator_id()
         rule.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(

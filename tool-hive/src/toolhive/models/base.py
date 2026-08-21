@@ -30,7 +30,7 @@ class UUIDPrimaryKeyMixin:
 
 
 class AuditMixin:
-    """统一审计字段 mixin：时间与操作人（与 init.sql 保持一致）。"""
+    """统一审计字段 mixin：时间与操作人 ID（与 init.sql 保持一致）。"""
 
     create_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -42,7 +42,5 @@ class AuditMixin:
         onupdate=func.now(),
         nullable=True,
     )
-    create_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    update_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    create_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    update_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    create_by: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    update_by: Mapped[str | None] = mapped_column(String(32), nullable=True)

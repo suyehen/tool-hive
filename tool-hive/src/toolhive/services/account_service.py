@@ -19,7 +19,7 @@ from toolhive.core.exceptions import (
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
-from toolhive.services.audit_service import AuditService
+from toolhive.services.audit_service import AuditService, get_current_operator_id
 from toolhive.services.role_service import RoleService
 from toolhive.services.security.password import (
     generate_temp_password,
@@ -54,10 +54,12 @@ class AccountService:
             violations = validate_password_strength(password, username)
             if violations:
                 raise ValidationError("; ".join(violations))
+            # CLI 初始化无登录操作人：create_by 留空，创建时间显式写入
             account = ManagementAccount(
                 username=username,
                 password_hash=hash_password(password),
                 must_change_password=False,
+                create_time=datetime.now(UTC),
             )
             self.db.add(account)
             await self.db.flush()
@@ -125,6 +127,7 @@ class AccountService:
         if violations:
             raise ValidationError("; ".join(violations))
 
+        # 创建账号：显式写入创建时间与当前操作人 ID
         account = ManagementAccount(
             username=username,
             password_hash=hash_password(temp_pwd),
@@ -132,6 +135,8 @@ class AccountService:
             must_change_password=True,
             temp_password_expires_at=datetime.now(UTC)
             + timedelta(hours=self._admin_security.temp_password_expire_hours),
+            create_time=datetime.now(UTC),
+            create_by=get_current_operator_id(),
         )
         self.db.add(account)
         await self.db.flush()
@@ -183,6 +188,9 @@ class AccountService:
             raise AuthenticationError("当前密码不正确")
 
         await self._set_password(account, new_password)
+        # 修改密码：记录修改时间与当前操作人
+        account.update_time = datetime.now(UTC)
+        account.update_by = get_current_operator_id()
         account.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -209,6 +217,9 @@ class AccountService:
         account.temp_password_expires_at = datetime.now(UTC) + timedelta(
             hours=self._admin_security.temp_password_expire_hours
         )
+        # 重置密码：记录修改时间与当前操作人
+        account.update_time = datetime.now(UTC)
+        account.update_by = get_current_operator_id()
         account.security_version += 1
         account.row_version += 1
 
@@ -232,6 +243,9 @@ class AccountService:
         account.status = AccountStatus.ENABLED
         account.locked_until = None
         account.login_failures = 0
+        # 启用账号：记录修改时间与当前操作人
+        account.update_time = datetime.now(UTC)
+        account.update_by = get_current_operator_id()
         account.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -253,6 +267,9 @@ class AccountService:
                 raise ConflictError("账号已禁用")
             await self._check_last_super_admin(account)
             account.status = AccountStatus.DISABLED
+            # 禁用账号：记录修改时间与执行操作人
+            account.update_time = datetime.now(UTC)
+            account.update_by = operator_id
             account.security_version += 1
             account.row_version += 1
             await revoke_all_sessions(account.id)
@@ -279,6 +296,9 @@ class AccountService:
         account.status = AccountStatus.ENABLED
         account.login_failures = 0
         account.locked_until = None
+        # 提前解锁：记录修改时间与当前操作人
+        account.update_time = datetime.now(UTC)
+        account.update_by = get_current_operator_id()
         account.row_version += 1
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -298,6 +318,9 @@ class AccountService:
                 raise ValidationError("不能对自己执行离职处理")
             await self._check_last_super_admin(account)
             account.status = AccountStatus.DISABLED
+            # 离职处理：记录修改时间与执行操作人
+            account.update_time = datetime.now(UTC)
+            account.update_by = operator_id
             account.security_version += 1
             account.row_version += 1
             await revoke_all_sessions(account.id)

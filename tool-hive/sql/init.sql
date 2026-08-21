@@ -1,12 +1,11 @@
-﻿-- ============================================================
+-- ============================================================
 -- ToolHive 数据库初始化脚本
 -- 用途：开发早期/新环境建表使用；表结构变化时直接修改本脚本，
 --       不保留历史变更记录（当前阶段所有表变更均属预期内操作）。
 -- 说明：
 --   1. 所有业务主键 id 由应用层生成，DDL 不设置默认值。
 --   2. create_time/update_time 由应用层维护，create_time 有数据库
---      默认值；create_id/update_id 记录操作人 ID，
---      create_name/update_name 记录操作人名称，均可为空。
+--      默认值；create_by/update_by 记录操作人 ID，均可为空。
 --   3. 时间统一使用 TIMESTAMPTZ。
 --   4. 本脚本及后续所有字段变更一律不使用外键（FOREIGN KEY），
 --      引用完整性由应用层保证。
@@ -31,10 +30,8 @@ CREATE TABLE IF NOT EXISTS management_account (
     row_version               INTEGER NOT NULL DEFAULT 0,
     create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time                TIMESTAMPTZ,
-    create_id                VARCHAR(32),
-    update_id                VARCHAR(32),
-    create_name           VARCHAR(128),
-    update_name           VARCHAR(128),
+    create_by                VARCHAR(32),
+    update_by                VARCHAR(32),
     CONSTRAINT uq_management_account_username UNIQUE (username),
     CONSTRAINT uq_management_account_external_user_id UNIQUE (external_user_id)
 );
@@ -60,10 +57,8 @@ COMMENT ON COLUMN management_account.security_version IS '安全事件版本，�
 COMMENT ON COLUMN management_account.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN management_account.create_time IS '创建时间';
 COMMENT ON COLUMN management_account.update_time IS '最后更新时间';
-COMMENT ON COLUMN management_account.create_id IS '创建人 ID';
-COMMENT ON COLUMN management_account.update_id IS '修改人 ID';
-COMMENT ON COLUMN management_account.create_name IS '创建人名称';
-COMMENT ON COLUMN management_account.update_name IS '修改人名称';
+COMMENT ON COLUMN management_account.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_account.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 后台角色
@@ -77,10 +72,8 @@ CREATE TABLE IF NOT EXISTS backend_role (
     row_version     INTEGER NOT NULL DEFAULT 0,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128),
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
     CONSTRAINT uq_backend_role_name UNIQUE (name)
 );
 
@@ -98,10 +91,8 @@ COMMENT ON COLUMN backend_role.status IS '角色状态';
 COMMENT ON COLUMN backend_role.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN backend_role.create_time IS '创建时间';
 COMMENT ON COLUMN backend_role.update_time IS '最后更新时间';
-COMMENT ON COLUMN backend_role.create_id IS '创建人 ID';
-COMMENT ON COLUMN backend_role.update_id IS '修改人 ID';
-COMMENT ON COLUMN backend_role.create_name IS '创建人名称';
-COMMENT ON COLUMN backend_role.update_name IS '修改人名称';
+COMMENT ON COLUMN backend_role.create_by IS '创建人 ID';
+COMMENT ON COLUMN backend_role.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 管理账号 ↔ 后台角色 关联
@@ -112,10 +103,8 @@ CREATE TABLE IF NOT EXISTS account_role (
     role_id     VARCHAR(32) NOT NULL,
     create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time  TIMESTAMPTZ,
-    create_id  VARCHAR(32),
-    update_id  VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128),
+    create_by  VARCHAR(32),
+    update_by  VARCHAR(32),
     CONSTRAINT uq_account_role UNIQUE (account_id, role_id)
 );
 
@@ -130,10 +119,8 @@ COMMENT ON COLUMN account_role.account_id IS '管理账号 ID';
 COMMENT ON COLUMN account_role.role_id IS '后台角色 ID';
 COMMENT ON COLUMN account_role.create_time IS '创建时间';
 COMMENT ON COLUMN account_role.update_time IS '最后更新时间';
-COMMENT ON COLUMN account_role.create_id IS '创建人 ID';
-COMMENT ON COLUMN account_role.update_id IS '修改人 ID';
-COMMENT ON COLUMN account_role.create_name IS '创建人名称';
-COMMENT ON COLUMN account_role.update_name IS '修改人名称';
+COMMENT ON COLUMN account_role.create_by IS '创建人 ID';
+COMMENT ON COLUMN account_role.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 管理操作项
@@ -145,10 +132,8 @@ CREATE TABLE IF NOT EXISTS management_operation (
     status          VARCHAR(20) NOT NULL DEFAULT 'active',
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128)
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
 );
 
 COMMENT ON TABLE management_operation IS '管理操作项';
@@ -158,10 +143,8 @@ COMMENT ON COLUMN management_operation.description IS '操作项说明';
 COMMENT ON COLUMN management_operation.status IS '状态';
 COMMENT ON COLUMN management_operation.create_time IS '创建时间';
 COMMENT ON COLUMN management_operation.update_time IS '最后更新时间';
-COMMENT ON COLUMN management_operation.create_id IS '创建人 ID';
-COMMENT ON COLUMN management_operation.update_id IS '修改人 ID';
-COMMENT ON COLUMN management_operation.create_name IS '创建人名称';
-COMMENT ON COLUMN management_operation.update_name IS '修改人名称';
+COMMENT ON COLUMN management_operation.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_operation.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 管理操作审计（追加式，不更新、不删除）
@@ -216,10 +199,8 @@ CREATE TABLE IF NOT EXISTS role_operation (
     operation_code  VARCHAR(128) NOT NULL,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128),
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
     CONSTRAINT uq_role_operation UNIQUE (role_id, operation_code)
 );
 
@@ -234,10 +215,8 @@ COMMENT ON COLUMN role_operation.role_id IS '后台角色 ID';
 COMMENT ON COLUMN role_operation.operation_code IS '管理操作码';
 COMMENT ON COLUMN role_operation.create_time IS '创建时间';
 COMMENT ON COLUMN role_operation.update_time IS '最后更新时间';
-COMMENT ON COLUMN role_operation.create_id IS '创建人 ID';
-COMMENT ON COLUMN role_operation.update_id IS '修改人 ID';
-COMMENT ON COLUMN role_operation.create_name IS '创建人名称';
-COMMENT ON COLUMN role_operation.update_name IS '修改人名称';
+COMMENT ON COLUMN role_operation.create_by IS '创建人 ID';
+COMMENT ON COLUMN role_operation.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 密码历史
@@ -248,10 +227,8 @@ CREATE TABLE IF NOT EXISTS password_history (
     password_hash   VARCHAR(256) NOT NULL,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128)
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
 );
 
 CREATE INDEX IF NOT EXISTS idx_password_history_account_id
@@ -263,10 +240,8 @@ COMMENT ON COLUMN password_history.account_id IS '管理账号 ID';
 COMMENT ON COLUMN password_history.password_hash IS '历史密码哈希';
 COMMENT ON COLUMN password_history.create_time IS '创建时间';
 COMMENT ON COLUMN password_history.update_time IS '最后更新时间';
-COMMENT ON COLUMN password_history.create_id IS '创建人 ID';
-COMMENT ON COLUMN password_history.update_id IS '修改人 ID';
-COMMENT ON COLUMN password_history.create_name IS '创建人名称';
-COMMENT ON COLUMN password_history.update_name IS '修改人名称';
+COMMENT ON COLUMN password_history.create_by IS '创建人 ID';
+COMMENT ON COLUMN password_history.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 调用系统
@@ -290,10 +265,8 @@ CREATE TABLE IF NOT EXISTS caller_system (
     row_version        INTEGER NOT NULL DEFAULT 0,
     create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time         TIMESTAMPTZ,
-    create_id         VARCHAR(32),
-    update_id         VARCHAR(32),
-    create_name    VARCHAR(128),
-    update_name    VARCHAR(128),
+    create_by         VARCHAR(32),
+    update_by         VARCHAR(32),
     CONSTRAINT uq_caller_system_system_id UNIQUE (system_id)
 );
 
@@ -325,10 +298,8 @@ COMMENT ON COLUMN caller_system.emergency_disabled_reason IS '紧急禁用原因
 COMMENT ON COLUMN caller_system.emergency_disabled_at IS '紧急禁用时间';
 COMMENT ON COLUMN caller_system.create_time IS '创建时间';
 COMMENT ON COLUMN caller_system.update_time IS '最后更新时间';
-COMMENT ON COLUMN caller_system.create_id IS '创建人 ID';
-COMMENT ON COLUMN caller_system.update_id IS '修改人 ID';
-COMMENT ON COLUMN caller_system.create_name IS '创建人名称';
-COMMENT ON COLUMN caller_system.update_name IS '修改人名称';
+COMMENT ON COLUMN caller_system.create_by IS '创建人 ID';
+COMMENT ON COLUMN caller_system.update_by IS '修改人 ID';
 
 -- 兼容已存在的调用系统表：幂等补充紧急禁用字段
 ALTER TABLE caller_system ADD COLUMN IF NOT EXISTS emergency_disabled BOOLEAN NOT NULL DEFAULT FALSE;
@@ -352,10 +323,8 @@ CREATE TABLE IF NOT EXISTS caller_runtime_policy (
     row_version              INTEGER NOT NULL DEFAULT 0,
     create_time              TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time              TIMESTAMPTZ,
-    create_id                VARCHAR(32),
-    update_id                VARCHAR(32),
-    create_name              VARCHAR(128),
-    update_name              VARCHAR(128),
+    create_by                VARCHAR(32),
+    update_by                VARCHAR(32),
     CONSTRAINT uq_caller_runtime_policy_system UNIQUE (system_id)
 );
 
@@ -386,10 +355,8 @@ CREATE TABLE IF NOT EXISTS caller_tool_scope (
     row_version   INTEGER NOT NULL DEFAULT 0,
     create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time   TIMESTAMPTZ,
-    create_id     VARCHAR(32),
-    update_id     VARCHAR(32),
-    create_name   VARCHAR(128),
-    update_name   VARCHAR(128)
+    create_by     VARCHAR(32),
+    update_by     VARCHAR(32),
 );
 
 CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_system_id
@@ -418,10 +385,8 @@ CREATE TABLE IF NOT EXISTS caller_public_key (
     row_version     INTEGER NOT NULL DEFAULT 0,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128),
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
     CONSTRAINT uq_caller_public_key_key_id UNIQUE (key_id)
 );
 
@@ -445,10 +410,8 @@ COMMENT ON COLUMN caller_public_key.effective_from IS '生效时间';
 COMMENT ON COLUMN caller_public_key.effective_to IS '失效时间';
 COMMENT ON COLUMN caller_public_key.create_time IS '创建时间';
 COMMENT ON COLUMN caller_public_key.update_time IS '最后更新时间';
-COMMENT ON COLUMN caller_public_key.create_id IS '创建人 ID';
-COMMENT ON COLUMN caller_public_key.update_id IS '修改人 ID';
-COMMENT ON COLUMN caller_public_key.create_name IS '创建人名称';
-COMMENT ON COLUMN caller_public_key.update_name IS '修改人名称';
+COMMENT ON COLUMN caller_public_key.create_by IS '创建人 ID';
+COMMENT ON COLUMN caller_public_key.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 调用系统来源 IP 规则
@@ -462,10 +425,8 @@ CREATE TABLE IF NOT EXISTS caller_ip_rule (
     row_version INTEGER NOT NULL DEFAULT 0,
     create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time  TIMESTAMPTZ,
-    create_id  VARCHAR(32),
-    update_id  VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128)
+    create_by  VARCHAR(32),
+    update_by  VARCHAR(32),
 );
 
 CREATE INDEX IF NOT EXISTS idx_caller_ip_rule_system_id
@@ -480,10 +441,8 @@ COMMENT ON COLUMN caller_ip_rule.status IS '状态';
 COMMENT ON COLUMN caller_ip_rule.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN caller_ip_rule.create_time IS '创建时间';
 COMMENT ON COLUMN caller_ip_rule.update_time IS '最后更新时间';
-COMMENT ON COLUMN caller_ip_rule.create_id IS '创建人 ID';
-COMMENT ON COLUMN caller_ip_rule.update_id IS '修改人 ID';
-COMMENT ON COLUMN caller_ip_rule.create_name IS '创建人名称';
-COMMENT ON COLUMN caller_ip_rule.update_name IS '修改人名称';
+COMMENT ON COLUMN caller_ip_rule.create_by IS '创建人 ID';
+COMMENT ON COLUMN caller_ip_rule.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- Outbox 事件
@@ -502,10 +461,8 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     next_retry_at   TIMESTAMPTZ,
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
-    create_id      VARCHAR(32),
-    update_id      VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128)
+    create_by      VARCHAR(32),
+    update_by      VARCHAR(32),
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_retry
@@ -527,10 +484,8 @@ COMMENT ON COLUMN outbox_event.locked_until IS '任务锁到期时间';
 COMMENT ON COLUMN outbox_event.next_retry_at IS '下次重试时间';
 COMMENT ON COLUMN outbox_event.create_time IS '创建时间';
 COMMENT ON COLUMN outbox_event.update_time IS '最后更新时间';
-COMMENT ON COLUMN outbox_event.create_id IS '创建人 ID';
-COMMENT ON COLUMN outbox_event.update_id IS '修改人 ID';
-COMMENT ON COLUMN outbox_event.create_name IS '创建人名称';
-COMMENT ON COLUMN outbox_event.update_name IS '修改人名称';
+COMMENT ON COLUMN outbox_event.create_by IS '创建人 ID';
+COMMENT ON COLUMN outbox_event.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- Outbox 投递记录
@@ -546,10 +501,8 @@ CREATE TABLE IF NOT EXISTS outbox_delivery (
     worker_instance VARCHAR(64),
     create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time   TIMESTAMPTZ,
-    create_id   VARCHAR(32),
-    update_id   VARCHAR(32),
-    create_name VARCHAR(128),
-    update_name VARCHAR(128),
+    create_by   VARCHAR(32),
+    update_by   VARCHAR(32),
     CONSTRAINT uq_outbox_delivery_event_target UNIQUE (event_id, target)
 );
 
@@ -569,9 +522,7 @@ COMMENT ON COLUMN outbox_delivery.duration_ms IS '最近一次投递耗时（毫
 COMMENT ON COLUMN outbox_delivery.worker_instance IS '处理投递的 Worker 实例标识';
 COMMENT ON COLUMN outbox_delivery.create_time IS '创建时间';
 COMMENT ON COLUMN outbox_delivery.update_time IS '最后更新时间';
-COMMENT ON COLUMN outbox_delivery.create_id IS '创建人 ID';
-COMMENT ON COLUMN outbox_delivery.update_id IS '修改人 ID';
-COMMENT ON COLUMN outbox_delivery.create_name IS '创建人名称';
-COMMENT ON COLUMN outbox_delivery.update_name IS '修改人名称';
+COMMENT ON COLUMN outbox_delivery.create_by IS '创建人 ID';
+COMMENT ON COLUMN outbox_delivery.update_by IS '修改人 ID';
 
 COMMIT;

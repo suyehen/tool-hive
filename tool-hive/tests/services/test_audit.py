@@ -9,6 +9,7 @@ import pytest
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.enums import AccountStatus, CallerSystemStatus
 from toolhive.core.exceptions import ValidationError
+from toolhive.models.backend_role import BackendRole
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.management_audit_log import ManagementAuditLog
 from toolhive.services.account_service import AccountService
@@ -186,13 +187,34 @@ async def test_role_create_records_audit() -> None:
     db.scalar = AsyncMock(return_value=None)
     db.add = MagicMock()
     svc = RoleService(db)
+    set_audit_actor("acc-9", "operator")
 
-    await svc.create_role("ops")
+    role = await svc.create_role("ops")
 
     records = _audit_records(db)
     assert len(records) == 1
     assert records[0].action == "role.create"
     assert records[0].result == "success"
+    # 创建时写入创建时间与当前操作人 ID
+    assert role.create_time is not None
+    assert role.create_by == "acc-9"
+
+
+async def test_role_update_sets_audit_fields() -> None:
+    """角色更新写入修改时间与当前操作人 ID。"""
+    db = AsyncMock()
+    role = BackendRole(name="ops")
+    role.row_version = 0
+    db.get = AsyncMock(return_value=role)
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = RoleService(db)
+    set_audit_actor("acc-9", "operator")
+
+    updated = await svc.update_role("role-1", name="ops2")
+
+    assert updated.update_time is not None
+    assert updated.update_by == "acc-9"
 
 
 async def test_caller_system_enable_records_audit() -> None:

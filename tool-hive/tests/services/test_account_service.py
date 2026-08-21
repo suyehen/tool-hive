@@ -12,6 +12,15 @@ from toolhive.core.exceptions import ValidationError
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.account_service import AccountService
+from toolhive.services.audit_service import set_audit_actor
+
+
+@pytest.fixture(autouse=True)
+def _reset_actor() -> None:
+    """每个测试前后清空当前操作人。"""
+    set_audit_actor(None, None)
+    yield
+    set_audit_actor(None, None)
 
 
 def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
@@ -31,8 +40,25 @@ async def test_init_super_admin_creates_account_and_links_role():
     account = await svc.init_super_admin("admin", "StrongPass123!")
 
     assert isinstance(account, ManagementAccount)
+    # CLI 初始化无登录操作人：create_by 留空，创建时间显式写入
+    assert account.create_by is None
+    assert account.create_time is not None
     added = [call.args[0] for call in db.add.call_args_list]
     assert any(isinstance(item, AccountRole) for item in added)
+
+
+async def test_create_account_sets_audit_fields():
+    """创建账号时写入创建时间与当前操作人 ID。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    set_audit_actor("acc-9", "operator")
+
+    account, _ = await svc.create_account("alice")
+
+    assert account.create_time is not None
+    assert account.create_by == "acc-9"
 
 
 async def test_init_super_admin_rejects_when_accounts_exist():

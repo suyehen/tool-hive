@@ -12,7 +12,16 @@ from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.models.management_audit_log import ManagementAuditLog
+from toolhive.services.audit_service import set_audit_actor
 from toolhive.services.caller_system_service import CallerSystemService
+
+
+@pytest.fixture(autouse=True)
+def _reset_actor() -> None:
+    """每个测试前后清空当前操作人。"""
+    set_audit_actor(None, None)
+    yield
+    set_audit_actor(None, None)
 
 
 def _system(status: str = CallerSystemStatus.DRAFT) -> MagicMock:
@@ -37,6 +46,7 @@ async def test_save_runtime_policy_creates_when_missing() -> None:
     db.scalar = AsyncMock(side_effect=[_system(), None])
     db.add = MagicMock()
     svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
 
     policy = await svc.save_runtime_policy(
         system_id="sys_1",
@@ -52,6 +62,9 @@ async def test_save_runtime_policy_creates_when_missing() -> None:
     assert policy.system_id == "sys_1"
     assert policy.qps_limit == 10
     assert policy.get_allowed_api_patterns() == ["/api/runtime/v1/tools/execute"]
+    # 创建时写入创建时间与当前操作人 ID
+    assert policy.create_time is not None
+    assert policy.create_by == "acc-9"
     audits = [
         call.args[0]
         for call in db.add.call_args_list
@@ -77,6 +90,7 @@ async def test_save_runtime_policy_updates_existing() -> None:
     db.scalar = AsyncMock(side_effect=[_system(), existing])
     db.add = MagicMock()
     svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
 
     policy = await svc.save_runtime_policy(
         system_id="sys_1",
@@ -91,6 +105,9 @@ async def test_save_runtime_policy_updates_existing() -> None:
 
     assert policy.row_version == 3
     assert policy.qps_limit == 20
+    # 更新时写入修改时间与当前操作人 ID
+    assert policy.update_time is not None
+    assert policy.update_by == "acc-9"
     audits = [
         call.args[0]
         for call in db.add.call_args_list
@@ -135,6 +152,7 @@ async def test_replace_tool_scopes() -> None:
     db.delete = AsyncMock()
     db.add = MagicMock()
     svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
 
     scopes = await svc.replace_tool_scopes(
         "sys_1",
@@ -146,6 +164,9 @@ async def test_replace_tool_scopes() -> None:
 
     assert len(scopes) == 2
     assert all(isinstance(s, CallerToolScope) for s in scopes)
+    # 全量替换时新记录写入创建时间与当前操作人 ID
+    assert all(s.create_time is not None for s in scopes)
+    assert all(s.create_by == "acc-9" for s in scopes)
     db.delete.assert_called_once_with(old_scope)
     assert db.add.call_count == 3  # 2 条范围 + 1 条审计
 
@@ -171,14 +192,20 @@ async def test_emergency_disable_and_enable() -> None:
     db.scalar = AsyncMock(return_value=system)
     db.add = MagicMock()
     svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
 
     disabled = await svc.emergency_disable("sys_1", "安全事件")
     assert disabled.emergency_disabled is True
     assert disabled.emergency_disabled_reason == "安全事件"
+    # 状态变更写入修改时间与当前操作人 ID
+    assert disabled.update_time is not None
+    assert disabled.update_by == "acc-9"
 
     enabled = await svc.emergency_enable("sys_1")
     assert enabled.emergency_disabled is False
     assert enabled.emergency_disabled_reason is None
+    assert enabled.update_time is not None
+    assert enabled.update_by == "acc-9"
 
 
 async def test_emergency_disable_rejects_non_enabled() -> None:
