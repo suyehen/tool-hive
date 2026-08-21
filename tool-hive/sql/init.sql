@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS management_operation (
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
-    update_by      VARCHAR(32),
+    update_by      VARCHAR(32)
 );
 
 COMMENT ON TABLE management_operation IS '管理操作项';
@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS password_history (
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
-    update_by      VARCHAR(32),
+    update_by      VARCHAR(32)
 );
 
 CREATE INDEX IF NOT EXISTS idx_password_history_account_id
@@ -356,7 +356,7 @@ CREATE TABLE IF NOT EXISTS caller_tool_scope (
     create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time   TIMESTAMPTZ,
     create_by     VARCHAR(32),
-    update_by     VARCHAR(32),
+    update_by     VARCHAR(32)
 );
 
 CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_system_id
@@ -426,7 +426,7 @@ CREATE TABLE IF NOT EXISTS caller_ip_rule (
     create_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time  TIMESTAMPTZ,
     create_by  VARCHAR(32),
-    update_by  VARCHAR(32),
+    update_by  VARCHAR(32)
 );
 
 CREATE INDEX IF NOT EXISTS idx_caller_ip_rule_system_id
@@ -462,7 +462,7 @@ CREATE TABLE IF NOT EXISTS outbox_event (
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
-    update_by      VARCHAR(32),
+    update_by      VARCHAR(32)
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_event_status_next_retry

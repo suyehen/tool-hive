@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
+from toolhive.api.admin.middleware import CSRFMiddleware
 from toolhive.api.admin.router import admin_app
 
 
@@ -20,6 +24,63 @@ def test_captcha_challenge_endpoint() -> None:
     body = resp.json()
     assert set(body) == {"captcha_id", "image", "expires_in_seconds"}
     assert body["image"].startswith("data:image/png;base64,")
+
+
+def _make_request(path: str) -> Request:
+    """构造一个无会话的 POST 请求，用于中间件单元测试。"""
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "method": "POST",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "scheme": "http",
+        "root_path": "",
+        "server": ("testserver", 80),
+        "client": ("127.0.0.1", 12345),
+        "headers": [],
+        "state": {},
+    }
+    return Request(scope)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/admin/auth/login",
+        "/api/admin/auth/captcha/challenge",
+        "/api/admin/auth/csrf-token",
+    ],
+)
+async def test_csrf_skips_public_prefixes_with_mount_path(path: str) -> None:
+    """回归：带 /api/admin 挂载前缀的公开接口跳过 CSRF，不再误报 401。"""
+    passed = False
+
+    async def call_next(request: Request) -> JSONResponse:
+        nonlocal passed
+        passed = True
+        return JSONResponse({"ok": True})
+
+    middleware = CSRFMiddleware(call_next)
+    resp = await middleware.dispatch(_make_request(path), call_next)
+
+    assert resp.status_code == 200
+    assert passed is True
+
+
+async def test_csrf_still_requires_session_for_other_post() -> None:
+    """非公开 POST 无会话时仍返回 401，避免过度放行。"""
+
+    async def call_next(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    middleware = CSRFMiddleware(call_next)
+    resp = await middleware.dispatch(
+        _make_request("/api/admin/accounts"), call_next,
+    )
+
+    assert resp.status_code == 401
 
 
 def test_login_rejects_wrong_captcha() -> None:

@@ -121,7 +121,7 @@ export default function RoleListPage() {
       title: '操作', key: 'actions', width: 300,
       render: (_, record) => (
         <Space size="small">
-          {hasOperation('role:edit') && (
+          {hasOperation('role:edit') && record.status !== 'archived' && (
             <Button size="small" onClick={() => openOpsModal(record.id)}>操作项</Button>
           )}
           {hasOperation('role:manage') && !record.is_super_admin && record.status === 'active' && (

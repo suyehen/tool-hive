@@ -240,6 +240,8 @@ class AccountService:
     async def enable_account(self, account: ManagementAccount) -> None:
         if account.status == AccountStatus.ENABLED:
             raise ConflictError("账号已启用")
+        if account.status == AccountStatus.OFFBOARDED:
+            raise ValidationError("已离职账号不可启用")
         account.status = AccountStatus.ENABLED
         account.locked_until = None
         account.login_failures = 0
@@ -265,6 +267,8 @@ class AccountService:
                 raise ValidationError("不能停用自己的账号")
             if account.status == AccountStatus.DISABLED:
                 raise ConflictError("账号已禁用")
+            if account.status == AccountStatus.OFFBOARDED:
+                raise ValidationError("已离职账号不可禁用")
             await self._check_last_super_admin(account)
             account.status = AccountStatus.DISABLED
             # 禁用账号：记录修改时间与执行操作人
@@ -293,6 +297,8 @@ class AccountService:
     @transactional()
     async def unlock_account(self, account: ManagementAccount) -> None:
         """提前解锁账号。"""
+        if account.status == AccountStatus.OFFBOARDED:
+            raise ValidationError("已离职账号不可解锁")
         account.status = AccountStatus.ENABLED
         account.login_failures = 0
         account.locked_until = None
@@ -317,7 +323,7 @@ class AccountService:
             if account.id == operator_id:
                 raise ValidationError("不能对自己执行离职处理")
             await self._check_last_super_admin(account)
-            account.status = AccountStatus.DISABLED
+            account.status = AccountStatus.OFFBOARDED
             # 离职处理：记录修改时间与执行操作人
             account.update_time = datetime.now(UTC)
             account.update_by = operator_id

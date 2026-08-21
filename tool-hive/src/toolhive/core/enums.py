@@ -15,6 +15,7 @@ class AccountStatus(StrEnum):
     ENABLED = "enabled"
     DISABLED = "disabled"
     LOCKED = "locked"
+    OFFBOARDED = "offboarded"
 
 
 class RoleStatus(StrEnum):

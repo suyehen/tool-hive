@@ -37,7 +37,7 @@ ToolHive 是面向 Agent、业务系统及其他服务调用方的统一工具�
 
 ```text
 toolhive/
-├── tool-hive/    # 后端服务（FastAPI 应用、SQL 迁移、CLI、部署脚本）
+├── tool-hive/    # 后端服务（FastAPI 应用、CLI、部署脚本）
 ├── frontend/     # 管理前端（React + Vite）
 ├── deploy/       # 部署配置（Nginx 网关示例、部署文档）
 └── docs/         # 架构与需求文档
@@ -56,6 +56,8 @@ toolhive/
 
 复制 [.env.example](./tool-hive/.env.example) 为 `tool-hive/.env`，修改数据库、Redis 等连接信息（IP/端口/密码）。`.env` 支持全部配置字段（含 `network` / `chroma` 等嵌套分组），本地开发建议设置 `TOOLHIVE_DEBUG=true`、`TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true`（Vite 开发代理不携带入口 Header）。
 
+首次部署需先在服务器上用 PostgreSQL 超级用户创建应用用户和数据库（模板见 [sql/create_database.sql](./tool-hive/sql/create_database.sql)），再执行下面的建表步骤。执行顺序：先建库 → 再建表。
+
 ```bash
 cd tool-hive
 
@@ -65,9 +67,8 @@ bash scripts/install.sh
 # 准备本地配置
 cp .env.example .env
 
-# 数据库初始化：基线建表 + 增量迁移（连接信息读取 .env）
+# 数据库初始化：建表（库已由 create_database.sql 创建；连接信息读取 .env）
 psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
-./.venv/bin/toolhive db-migrate
 
 # 初始化首个超级管理员（仅空库可执行，密码建议用环境变量传入）
 TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \

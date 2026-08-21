@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -39,3 +40,28 @@ def test_init_admin_dispatches_with_username() -> None:
     assert code == 0
     load.assert_called_once_with(None)
     init.assert_awaited_once_with("admin")
+
+
+def test_init_admin_uses_initialized_session_factory() -> None:
+    """回归：init-admin 必须使用初始化后的会话工厂，而非模块导入时的旧值。"""
+    import toolhive.infrastructure.database as database
+
+    session = AsyncMock()
+    factory = MagicMock(return_value=session)
+
+    def fake_init(*args, **kwargs) -> None:
+        # 模拟真实 init_infrastructure：重新赋值模块级会话工厂
+        database.async_session_factory = factory
+
+    with patch.object(database, "async_session_factory", None):
+        with patch.object(database, "init_infrastructure", side_effect=fake_init):
+            with patch.dict("os.environ", {"TOOLHIVE_INIT_ADMIN_PASSWORD": "StrongPass123!"}):
+                with patch("toolhive.services.account_service.AccountService") as account_cls:
+                    svc = account_cls.return_value
+                    svc.init_super_admin = AsyncMock()
+                    code = asyncio.run(cli._init_admin("admin"))
+
+    assert code == 0
+    svc.init_super_admin.assert_awaited_once_with(
+        username="admin", password="StrongPass123!",
+    )

@@ -56,7 +56,9 @@ class CSRFMiddleware(BaseHTTPMiddleware):
     """
 
     def _skip_csrf(self, path: str) -> bool:
-        return any(path.startswith(p) for p in _CSRF_SKIP_PREFIXES)
+        # 兼容挂载前缀：/api/admin/auth/... 与直连 /auth/... 均命中公开接口名单
+        normalized = path.removeprefix("/api/admin")
+        return any(normalized.startswith(p) for p in _CSRF_SKIP_PREFIXES)
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]],

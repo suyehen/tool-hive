@@ -30,6 +30,13 @@ def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
     return account
 
 
+def _offboarded_account() -> MagicMock:
+    account = _account(status=AccountStatus.OFFBOARDED)
+    account.security_version = 0
+    account.row_version = 0
+    return account
+
+
 async def test_init_super_admin_creates_account_and_links_role():
     """初始化成功：创建账号并建立超管角色关联。"""
     db = AsyncMock()
@@ -59,6 +66,65 @@ async def test_create_account_sets_audit_fields():
 
     assert account.create_time is not None
     assert account.create_by == "acc-9"
+
+
+async def test_offboard_sets_offboarded_status():
+    """离职处理后账号进入 offboarded 终态。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    account = _account()
+    account.security_version = 0
+    account.row_version = 0
+    with (
+        patch("toolhive.services.account_service.revoke_all_sessions", AsyncMock()) as revoke,
+        patch("toolhive.services.account_service.RoleService") as role_cls,
+    ):
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=False)
+        await svc.offboard_account(account, operator_id="acc-2")
+
+    assert account.status == AccountStatus.OFFBOARDED
+    revoke.assert_awaited_once_with("acc-1")
+
+
+async def test_enable_rejects_offboarded():
+    """已离职账号不可启用。"""
+    db = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with pytest.raises(ValidationError) as exc_info:
+        await svc.enable_account(_offboarded_account())
+    assert "已离职" in str(exc_info.value)
+
+
+async def test_unlock_rejects_offboarded():
+    """已离职账号不可解锁。"""
+    db = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with pytest.raises(ValidationError) as exc_info:
+        await svc.unlock_account(_offboarded_account())
+    assert "已离职" in str(exc_info.value)
+
+
+async def test_disable_rejects_offboarded():
+    """已离职账号不可禁用。"""
+    db = AsyncMock()
+    audit_db = AsyncMock()
+    audit_db.__aenter__ = AsyncMock(return_value=audit_db)
+    audit_db.__aexit__ = AsyncMock(return_value=False)
+    audit_db.add = MagicMock()
+    audit_db.commit = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with patch(
+        "toolhive.services.audit_service.async_session_factory",
+        MagicMock(return_value=audit_db),
+    ):
+        with pytest.raises(ValidationError) as exc_info:
+            await svc.disable_account(_offboarded_account(), operator_id="acc-2")
+    assert "已离职" in str(exc_info.value)
 
 
 async def test_init_super_admin_rejects_when_accounts_exist():

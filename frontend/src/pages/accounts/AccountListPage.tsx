@@ -14,10 +14,10 @@ import { useAuth } from '../../contexts/AuthContext';
 const { Title } = Typography;
 
 const statusColor: Record<string, string> = {
-  enabled: 'green', disabled: 'red', locked: 'orange',
+  enabled: 'green', disabled: 'red', locked: 'orange', offboarded: 'purple',
 };
 const statusLabel: Record<string, string> = {
-  enabled: '已启用', disabled: '已禁用', locked: '已锁定',
+  enabled: '已启用', disabled: '已禁用', locked: '已锁定', offboarded: '已离职',
 };
 
 export default function AccountListPage() {
@@ -133,7 +133,7 @@ export default function AccountListPage() {
               <Button size="small">解锁</Button>
             </Popconfirm>
           )}
-          {hasOperation('admin_account:manage') && (
+          {hasOperation('admin_account:manage') && record.status !== 'offboarded' && (
             <>
               <Popconfirm title="确认重置密码？" onConfirm={() => handleResetPassword(record.id)}>
                 <Button size="small">重置密码</Button>
@@ -142,7 +142,7 @@ export default function AccountListPage() {
                 <Button size="small">强制下线</Button>
               </Popconfirm>
               <Popconfirm
-                title="确认执行离职处理？将禁用账号并撤销全部会话"
+                title="确认执行离职处理？将账号标记为已离职并撤销全部会话"
                 onConfirm={() => handleOffboard(record.id)}
               >
                 <Button size="small" danger>离职</Button>

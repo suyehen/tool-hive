@@ -56,6 +56,11 @@ class RoleService:
             raise NotFoundError(f"角色不存在: {role_id}")
         return role
 
+    def _ensure_role_mutable(self, role: BackendRole) -> None:
+        """归档角色为终态，禁止任何修改操作。"""
+        if role.status == RoleStatus.ARCHIVED:
+            raise ValidationError("已归档角色不可修改")
+
     @transactional()
     async def create_role(
         self, name: str, description: str | None = None,
@@ -95,6 +100,7 @@ class RoleService:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色")
+        self._ensure_role_mutable(role)
         if (
             expected_row_version is not None
             and role.row_version != expected_row_version
@@ -134,6 +140,8 @@ class RoleService:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色状态")
+        if role.status == RoleStatus.ARCHIVED:
+            raise ValidationError("已归档角色状态不可变更")
         if status not in tuple(RoleStatus):
             raise ValidationError(f"无效状态: {status}")
         role.status = RoleStatus(status)
@@ -171,6 +179,7 @@ class RoleService:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("超级管理员自动拥有全部操作项，无需分配")
+        self._ensure_role_mutable(role)
 
         for code in operation_codes:
             existing = await self.db.scalar(
@@ -203,6 +212,7 @@ class RoleService:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能移除超级管理员的任何操作项")
+        self._ensure_role_mutable(role)
 
         for code in operation_codes:
             existing = await self.db.scalar(
@@ -239,6 +249,7 @@ class RoleService:
         self, account_id: str, role_id: str, operator_id: str,
     ) -> None:
         role = await self.get_role(role_id)
+        self._ensure_role_mutable(role)
         if role.is_super_admin:
             # 只有超管可以授予超管角色
             operator_roles = await self.get_account_roles(operator_id)

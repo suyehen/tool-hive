@@ -28,7 +28,7 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
     # ── 状态 ──
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=AccountStatus.ENABLED, index=True,
-    )  # enabled | disabled | locked
+    )  # enabled | disabled | locked | offboarded
 
     # ── 登录安全 ──
     login_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

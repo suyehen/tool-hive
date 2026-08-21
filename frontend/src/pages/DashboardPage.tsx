@@ -8,7 +8,10 @@ export default function DashboardPage() {
   const { session, me, operationItems } = useAuth();
 
   const statusText =
-    me?.status === 'enabled' ? '正常' : me?.status === 'disabled' ? '已禁用' : me?.status || '-';
+    me?.status === 'enabled' ? '正常'
+      : me?.status === 'disabled' ? '已禁用'
+        : me?.status === 'offboarded' ? '已离职'
+          : me?.status || '-';
 
   return (
     <>

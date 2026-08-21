@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ToolHive 一期启动脚本（H11）：单 Uvicorn Worker，仅监听回环地址。
-# 生产通过 Nginx 转发；启动前请先执行 install.sh、数据库初始化和 db-migrate。
+# 生产通过 Nginx 转发；启动前请先执行 install.sh 和数据库初始化。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

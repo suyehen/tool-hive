@@ -68,6 +68,8 @@ class AuthService:
         if not account.is_active():
             if account.status == AccountStatus.DISABLED:
                 raise AuthenticationError("账号已被禁用")
+            if account.status == AccountStatus.OFFBOARDED:
+                raise AuthenticationError("账号已离职，无法登录")
             if account.is_locked():
                 raise AuthenticationError("账号已被锁定，请稍后再试")
 

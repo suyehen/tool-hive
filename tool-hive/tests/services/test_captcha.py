@@ -50,6 +50,21 @@ async def test_consume_captcha_success() -> None:
     pipe.delete.assert_called_once_with("captcha:cid-1")
 
 
+async def test_consume_captcha_case_insensitive_with_whitespace() -> None:
+    """校验不区分大小写，且忽略输入首尾空白。"""
+    redis = AsyncMock()
+    pipe = AsyncMock()
+    pipe.execute = AsyncMock(return_value=["AB12", 1])
+    pipe.get = MagicMock(return_value=pipe)
+    pipe.delete = MagicMock(return_value=pipe)
+    redis.pipeline = MagicMock(return_value=pipe)
+
+    with patch("toolhive.services.security.captcha.get_redis", return_value=redis):
+        ok = await captcha_service.consume_captcha("cid-1", "  ab12  ")
+
+    assert ok is True
+
+
 async def test_consume_captcha_wrong_answer() -> None:
     """答案错误时返回 False，且同样消费该挑战。"""
     redis = AsyncMock()

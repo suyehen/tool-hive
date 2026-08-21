@@ -16,19 +16,20 @@ class TestSettingsDefaults:
     """默认值测试。"""
 
     def test_default_app_name(self) -> None:
-        s = Settings()
+        # _env_file=None：避免读取测试工作目录下的 .env，保证默认值断言不受本地配置影响
+        s = Settings(_env_file=None)
         assert s.app_name == "ToolHive"
 
     def test_default_app_version(self) -> None:
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.app_version == "0.1.0"
 
     def test_default_debug_false(self) -> None:
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.debug is False
 
     def test_default_bind(self) -> None:
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.bind_host == "127.0.0.1"
         assert s.bind_port == 8100
 
@@ -146,7 +147,11 @@ class TestLoadSettings:
         with pytest.raises(ValueError):
             load_settings(cfg)
 
-    def test_defaults_without_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_defaults_without_config(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # 切换到无 .env 的临时目录，避免读取测试工作目录下的本地配置
+        monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("TOOLHIVE_CONFIG_FILE", raising=False)
         s = load_settings(None)
         assert s.app_name == "ToolHive"
@@ -159,11 +164,11 @@ class TestProductionValidation:
     """生产配置校验（H11）。"""
 
     def test_development_skips_validation(self) -> None:
-        s = Settings(debug=True)
+        s = Settings(_env_file=None, debug=True)
         validate_production_settings(s)  # 不应抛出
 
     def test_production_rejects_insecure_defaults(self) -> None:
-        s = Settings()
+        s = Settings(_env_file=None)
         with pytest.raises(ValueError) as exc_info:
             validate_production_settings(s)
         message = str(exc_info.value)
@@ -172,6 +177,7 @@ class TestProductionValidation:
 
     def test_production_accepts_secure_settings(self) -> None:
         s = Settings(
+            _env_file=None,
             csrf_secret="x" * 32,
             database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
             redis_url="redis://:realpass@redis:6379/0",
@@ -180,6 +186,7 @@ class TestProductionValidation:
 
     def test_production_rejects_loopback_direct(self) -> None:
         s = Settings(
+            _env_file=None,
             csrf_secret="x" * 32,
             database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
             redis_url="redis://:realpass@redis:6379/0",

@@ -61,7 +61,10 @@ async def create_captcha_challenge() -> dict[str, Any]:
 
 
 async def consume_captcha(captcha_id: str, code: str) -> bool:
-    """一次性校验验证码；无论正确与否都会消费该挑战，不可重放。"""
+    """一次性校验验证码；无论正确与否都会消费该挑战，不可重放。
+
+    校验不区分大小写，并忽略输入首尾空白，降低人工输入错误率。
+    """
     redis = await get_redis()
     key = f"{_CAPTCHA_PREFIX}{captcha_id}"
     pipe = redis.pipeline(transaction=True)
@@ -70,4 +73,5 @@ async def consume_captcha(captcha_id: str, code: str) -> bool:
     stored, _deleted = await pipe.execute()
     if stored is None:
         return False
-    return compare_digest(stored, code)
+    # 统一小写并去除首尾空白后比较，避免大小写误输导致登录失败
+    return compare_digest(stored.lower(), code.strip().lower())

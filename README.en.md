@@ -37,7 +37,7 @@ Core capabilities:
 
 ```text
 toolhive/
-├── tool-hive/    # Backend service (FastAPI app, SQL migrations, CLI, deploy scripts)
+├── tool-hive/    # Backend service (FastAPI app, CLI, deploy scripts)
 ├── frontend/     # Admin frontend (React + Vite)
 ├── deploy/       # Deployment assets (Nginx gateway sample, deployment doc)
 └── docs/         # Architecture and requirements docs
@@ -56,6 +56,8 @@ toolhive/
 
 Copy [.env.example](./tool-hive/.env.example) to `tool-hive/.env` and edit database/Redis connections (IP/port/password). `.env` supports all settings, including nested groups (`network`, `chroma`, etc.). For local development, set `TOOLHIVE_DEBUG=true` and `TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true` (the Vite dev proxy does not send ingress headers).
 
+On first deployment, create the application user and database on the server with the PostgreSQL superuser first (template: [sql/create_database.sql](./tool-hive/sql/create_database.sql)), then run the schema steps below. Order: create database → create tables.
+
 ```bash
 cd tool-hive
 
@@ -65,9 +67,8 @@ bash scripts/install.sh
 # Prepare local config
 cp .env.example .env
 
-# Initialize the database: baseline schema + incremental migrations (connection from .env)
+# Initialize the database: schema (database created by create_database.sql; connection from .env)
 psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
-./.venv/bin/toolhive db-migrate
 
 # Initialize the first super admin (only on an empty database)
 TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
