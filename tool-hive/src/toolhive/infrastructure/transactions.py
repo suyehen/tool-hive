@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import contextvars
 import functools
-from typing import Any, Awaitable, Callable, TypeVar, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

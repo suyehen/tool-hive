@@ -6,7 +6,7 @@ from sqlalchemy import ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import IPRuleStatus
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class CallerIPRule(Base, UUIDPrimaryKeyMixin, AuditMixin):

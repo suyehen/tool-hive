@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import pytest
-
 from toolhive.services.security.password import (
     generate_temp_password,
     hash_password,

@@ -12,7 +12,8 @@ _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("--config", dest="config_file", default=None)
 _args, _ = _parser.parse_known_args()
 
-from toolhive.config import load_settings
+# 延迟导入：需先解析 --config 再加载配置
+from toolhive.config import load_settings  # noqa: E402
 
 settings = load_settings(_args.config_file)
 
@@ -36,6 +37,8 @@ async def lifespan(app: FastAPI):
         csrf,
         password,
         rate_limit,
+    )
+    from toolhive.services.security import (
         session as session_security,
     )
     admin_security = settings.admin_security

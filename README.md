@@ -52,7 +52,9 @@ toolhive/
 
 ## 部署与启动
 
-### 1. 后端
+### 1. 本地开发（.env 配置）
+
+复制 [.env.example](./tool-hive/.env.example) 为 `tool-hive/.env`，修改数据库、Redis 等连接信息（IP/端口/密码）。`.env` 支持全部配置字段（含 `network` / `chroma` 等嵌套分组），本地开发建议设置 `TOOLHIVE_DEBUG=true`、`TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true`（Vite 开发代理不携带入口 Header）。
 
 ```bash
 cd tool-hive
@@ -60,25 +62,25 @@ cd tool-hive
 # 安装依赖（创建 .venv 虚拟环境并安装 toolhive）
 bash scripts/install.sh
 
-# 准备配置文件（按需修改数据库、Redis、密钥等）
-cp toolhive.example.yaml config/production.yaml
+# 准备本地配置
+cp .env.example .env
 
-# 数据库初始化：基线建表 + 增量迁移
-psql "$DATABASE_URL" -f sql/init.sql
-./.venv/bin/toolhive db-migrate --config config/production.yaml
+# 数据库初始化：基线建表 + 增量迁移（连接信息读取 .env）
+psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
+./.venv/bin/toolhive db-migrate
 
 # 初始化首个超级管理员（仅空库可执行，密码建议用环境变量传入）
 TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
-  ./.venv/bin/toolhive init-admin --username admin --config config/production.yaml
+  ./.venv/bin/toolhive init-admin --username admin
 
-# 启动（监听 127.0.0.1:8100）
-TOOLHIVE_CONFIG_FILE=config/production.yaml bash scripts/start.sh
+# 启动（监听 127.0.0.1:8100，自动读取 .env）
+./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 
 # 验证服务
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-配置字段说明见 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)，也可通过环境变量覆盖（参考 [.env.example](./tool-hive/.env.example)）。
+Windows 本地可直接 `python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100` 启动（需先激活 Python 环境）。配置优先级：真实环境变量 > 外挂 YAML > `.env` 文件 > 代码默认值；完整字段说明见 [.env.example](./tool-hive/.env.example) 与 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)。
 
 ### 2. 前端（开发模式）
 
@@ -99,11 +101,13 @@ npm run build
 
 构建产物输出到 `frontend/dist/`。
 
-### 4. 生产网关（Nginx）
+### 4. 生产部署（YAML 配置）
+
+生产环境复制 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml) 为配置文件，并通过 `TOOLHIVE_CONFIG_FILE` 指定（如 `config/production.yaml`）。完整的生产部署、配置校验与验收步骤见 [deploy/README.md](./deploy/README.md)。
+
+### 5. 生产网关（Nginx）
 
 生产环境后端只监听回环地址，必须由 Nginx 转发，配置示例见 [deploy/nginx/toolhive.conf](./deploy/nginx/toolhive.conf)：管理入口走公网 443，运行入口仅内网 8081，并负责清洗客户端伪造的 Header、写入可信入口标识与真实客户端 IP。
-
-完整的生产部署、配置校验与验收步骤见 [deploy/README.md](./deploy/README.md)。
 
 ## License
 

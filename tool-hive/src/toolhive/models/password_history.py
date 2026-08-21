@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class PasswordHistory(Base, UUIDPrimaryKeyMixin, AuditMixin):

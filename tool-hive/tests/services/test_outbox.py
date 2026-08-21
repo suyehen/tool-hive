@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,20 +18,20 @@ from toolhive.services.outbox.worker import _compute_next_retry
 
 class TestComputeNextRetry:
     def test_returns_future_time(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         value = _compute_next_retry(1, OutboxRetrySettings())
         assert value > now
 
     def test_delay_grows_with_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         d1 = _compute_next_retry(1, OutboxRetrySettings())
         d2 = _compute_next_retry(2, OutboxRetrySettings())
         assert (d1 - now) < (d2 - now)
 
     def test_delay_capped_at_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         value = _compute_next_retry(30, OutboxRetrySettings())
         assert value - now <= timedelta(seconds=1800)
 

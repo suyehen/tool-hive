@@ -6,7 +6,7 @@ from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import OperationStatus
-from toolhive.models.base import Base, AuditMixin
+from toolhive.models.base import AuditMixin, Base
 
 
 class ManagementOperation(Base, AuditMixin):

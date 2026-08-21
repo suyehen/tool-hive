@@ -14,7 +14,7 @@ import logging
 import random
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 
@@ -24,16 +24,16 @@ from toolhive.infrastructure.database import async_session_factory
 from toolhive.models.outbox_delivery import OutboxDelivery
 from toolhive.models.outbox_event import OutboxEvent
 from toolhive.services.outbox.deliveries import (
+    TARGETS,
     DeliveryError,
     DeterministicDeliveryError,
-    TARGETS,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _compute_next_retry(
@@ -76,7 +76,7 @@ class OutboxWorker:
         self._stop_event.set()
         try:
             await asyncio.wait_for(self._task, timeout=10)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
             try:
                 await self._task
@@ -98,7 +98,7 @@ class OutboxWorker:
                 await asyncio.wait_for(
                     self._stop_event.wait(), timeout=poll_interval,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
     async def _poll_once(self) -> None:

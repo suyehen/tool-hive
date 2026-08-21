@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class RoleOperation(Base, UUIDPrimaryKeyMixin, AuditMixin):

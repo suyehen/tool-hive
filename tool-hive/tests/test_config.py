@@ -188,3 +188,79 @@ class TestProductionValidation:
         with pytest.raises(ValueError) as exc_info:
             validate_production_settings(s)
         assert "allow_loopback_direct" in str(exc_info.value)
+
+
+class TestDotenvAndEnvLoading:
+    """.env 文件与复杂环境变量的加载测试（支持嵌套与列表字段）。"""
+
+    def test_dotenv_flat_field(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """.env 平铺字段可被读取。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("TOOLHIVE_DEBUG=true\n", encoding="utf-8")
+        s = load_settings(None)
+        assert s.debug is True
+
+    def test_dotenv_nested_field(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """.env 嵌套字段（network）可被读取。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            "TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true\n", encoding="utf-8",
+        )
+        s = load_settings(None)
+        assert s.network.allow_loopback_direct is True
+
+    def test_dotenv_list_field(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """.env 列表字段（JSON 数组）可被解析。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            'TOOLHIVE_NETWORK_TRUSTED_PROXIES=["127.0.0.1/32","::1/128"]\n',
+            encoding="utf-8",
+        )
+        s = load_settings(None)
+        assert s.network.trusted_proxies == ["127.0.0.1/32", "::1/128"]
+
+    def test_dotenv_chroma_field(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """.env 嵌套字段（chroma）可被读取。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            "TOOLHIVE_CHROMA_PERSIST_DIRECTORY=./chroma_data\n", encoding="utf-8",
+        )
+        s = load_settings(None)
+        assert s.chroma.persist_directory == "./chroma_data"
+
+    def test_env_list_field(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """真实环境变量的 JSON 数组字段可被解析。"""
+        monkeypatch.setenv(
+            "TOOLHIVE_NETWORK_TRUSTED_PROXIES", '["10.0.0.0/8","::1/128"]',
+        )
+        s = load_settings(None)
+        assert s.network.trusted_proxies == ["10.0.0.0/8", "::1/128"]
+
+    def test_priority_env_over_yaml_over_dotenv(
+        self, tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """优先级：真实环境变量 > 外挂 YAML > .env > 默认值。"""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            "TOOLHIVE_APP_NAME=FromDotenv\n", encoding="utf-8",
+        )
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("app_name: FromYaml\n", encoding="utf-8")
+
+        # 真实环境变量存在时最高优先级
+        monkeypatch.setenv("TOOLHIVE_APP_NAME", "FromEnv")
+        assert load_settings(cfg).app_name == "FromEnv"
+        monkeypatch.delenv("TOOLHIVE_APP_NAME")
+
+        # 未设置环境变量时，YAML 覆盖 .env
+        assert load_settings(cfg).app_name == "FromYaml"
+        # 未设置环境变量且无 YAML 时，.env 生效
+        assert load_settings(None).app_name == "FromDotenv"

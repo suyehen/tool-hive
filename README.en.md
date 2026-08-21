@@ -52,7 +52,9 @@ toolhive/
 
 ## Deployment & Startup
 
-### 1. Backend
+### 1. Local development (.env)
+
+Copy [.env.example](./tool-hive/.env.example) to `tool-hive/.env` and edit database/Redis connections (IP/port/password). `.env` supports all settings, including nested groups (`network`, `chroma`, etc.). For local development, set `TOOLHIVE_DEBUG=true` and `TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true` (the Vite dev proxy does not send ingress headers).
 
 ```bash
 cd tool-hive
@@ -60,25 +62,25 @@ cd tool-hive
 # Install dependencies (creates .venv and installs toolhive)
 bash scripts/install.sh
 
-# Prepare the configuration file (edit DB, Redis, secrets as needed)
-cp toolhive.example.yaml config/production.yaml
+# Prepare local config
+cp .env.example .env
 
-# Initialize the database: baseline schema + incremental migrations
-psql "$DATABASE_URL" -f sql/init.sql
-./.venv/bin/toolhive db-migrate --config config/production.yaml
+# Initialize the database: baseline schema + incremental migrations (connection from .env)
+psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
+./.venv/bin/toolhive db-migrate
 
 # Initialize the first super admin (only on an empty database)
 TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
-  ./.venv/bin/toolhive init-admin --username admin --config config/production.yaml
+  ./.venv/bin/toolhive init-admin --username admin
 
-# Start the service (listens on 127.0.0.1:8100)
-TOOLHIVE_CONFIG_FILE=config/production.yaml bash scripts/start.sh
+# Start the service (listens on 127.0.0.1:8100, loads .env automatically)
+./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 
 # Verify
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-All settings are documented in [toolhive.example.yaml](./tool-hive/toolhive.example.yaml); they can also be overridden with environment variables (see [.env.example](./tool-hive/.env.example)).
+On Windows you can start with `python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100` (after activating your Python environment). Settings precedence: real environment variables > external YAML > `.env` file > defaults; all fields are documented in [.env.example](./tool-hive/.env.example) and [toolhive.example.yaml](./tool-hive/toolhive.example.yaml).
 
 ### 2. Frontend (development)
 
@@ -99,11 +101,13 @@ npm run build
 
 Build output goes to `frontend/dist/`.
 
-### 4. Production gateway (Nginx)
+### 4. Production deployment (YAML)
+
+In production, copy [toolhive.example.yaml](./tool-hive/toolhive.example.yaml) as the configuration file and point `TOOLHIVE_CONFIG_FILE` to it (e.g., `config/production.yaml`). See [deploy/README.md](./deploy/README.md) for the full production deployment, configuration validation, and acceptance steps.
+
+### 5. Production gateway (Nginx)
 
 In production the backend listens on loopback only and must be fronted by Nginx. See [deploy/nginx/toolhive.conf](./deploy/nginx/toolhive.conf): the management entry is exposed on public port 443, the runtime entry on internal port 8081 only, with client-supplied headers stripped and trusted ingress/client-IP headers written by Nginx.
-
-See [deploy/README.md](./deploy/README.md) for the full production deployment, configuration validation, and acceptance steps.
 
 ## License
 

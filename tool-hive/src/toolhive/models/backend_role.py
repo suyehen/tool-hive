@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import RoleStatus
-from toolhive.models.base import Base, AuditMixin, UUIDPrimaryKeyMixin
+from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
 class BackendRole(Base, UUIDPrimaryKeyMixin, AuditMixin):

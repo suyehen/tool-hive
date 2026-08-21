@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import NamedTuple
 
-from redis.asyncio import Redis
-
 from toolhive.config import AdminSecuritySettings
-from toolhive.core.constants import SESSION_COOKIE_PATH, SESSION_ID_BYTES
+from toolhive.core.constants import SESSION_ID_BYTES
 from toolhive.infrastructure.redis import get_redis
 
 _admin_security = AdminSecuritySettings()
@@ -75,8 +73,7 @@ async def create_session(
     redis = await get_redis()
     session_id = secrets.token_hex(SESSION_ID_BYTES)
 
-    now = datetime.now(timezone.utc)
-    idle_seconds = _admin_security.session_idle_timeout_minutes * 60
+    now = datetime.now(UTC)
     absolute_seconds = _admin_security.session_absolute_timeout_hours * 3600
 
     expires_at = now.timestamp() + absolute_seconds
@@ -115,7 +112,7 @@ async def get_session(session_id: str) -> SessionData | None:
     if not data:
         return None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last_activity = data.get("last_activity", "0")
     expires_at = data.get("expires_at", "0")
 

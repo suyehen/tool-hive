@@ -1,12 +1,13 @@
 """ToolHive 全局配置。
 
-配置来源与优先级：环境变量具体值 > 外挂 YAML > 代码默认值。
+配置来源与优先级：环境变量具体值 > 外挂 YAML > ``.env`` 文件 > 代码默认值。
 外挂 YAML 通过 ``--config`` 或 ``TOOLHIVE_CONFIG_FILE`` 指定，
-在应用启动阶段统一加载（``load_settings``）。
+``.env`` 文件在启动阶段统一解析（``load_settings``）。
 """
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, get_args, get_origin
@@ -318,32 +319,71 @@ def _is_model(annotation: Any) -> bool:
 
 def _iter_env_names(
     model_cls: type[BaseModel], prefix: str = "",
-) -> list[tuple[str, str]]:
-    """遍历模型字段，返回 (字段路径, 环境变量名) 列表。"""
-    result: list[tuple[str, str]] = []
+) -> list[tuple[str, str, Any]]:
+    """遍历模型字段，返回 (字段路径, 环境变量名, 字段注解) 列表。"""
+    result: list[tuple[str, str, Any]] = []
     for name, field in model_cls.model_fields.items():
         path = f"{prefix}.{name}" if prefix else name
         env_name = "TOOLHIVE_" + path.upper().replace(".", "_")
         if _is_model(field.annotation):
             result.extend(_iter_env_names(field.annotation, path))
         else:
-            result.append((path, env_name))
+            result.append((path, env_name, field.annotation))
     return result
 
 
-def _collect_env_values() -> dict[str, Any]:
-    """收集 TOOLHIVE_ 前缀环境变量并映射为嵌套 dict。"""
+def _is_complex_annotation(annotation: Any) -> bool:
+    """判断注解是否为需要 JSON 解析的复杂类型（列表/字典/集合/元组）。"""
+    if annotation in (list, dict, set, tuple):
+        return True
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    if origin in (list, dict, set, tuple):
+        return True
+    # Union / Optional 等组合类型：递归检查成员
+    return any(_is_complex_annotation(arg) for arg in get_args(annotation))
+
+
+def _parse_env_value(value: str, annotation: Any) -> Any:
+    """解析单个配置值：复杂类型按 JSON 解析，其余保留字符串由 pydantic 强转。"""
+    if not _is_complex_annotation(annotation):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"配置项需要 JSON 格式（如 [\"a\",\"b\"]），当前值无法解析: {value[:80]}"
+        ) from exc
+
+
+def _build_nested(values: Any) -> dict[str, Any]:
+    """把 TOOLHIVE_* 配置（真实环境变量或 .env 文件）映射为嵌套 dict。"""
     data: dict[str, Any] = {}
-    for path, env_name in _iter_env_names(Settings):
-        value = os.environ.get(env_name)
-        if value is None:
+    for path, env_name, annotation in _iter_env_names(Settings):
+        value = values.get(env_name)
+        if value is None or value == "":
             continue
         node = data
         parts = path.split(".")
         for part in parts[:-1]:
             node = node.setdefault(part, {})
-        node[parts[-1]] = value
+        node[parts[-1]] = _parse_env_value(value, annotation)
     return data
+
+
+def _collect_env_values() -> dict[str, Any]:
+    """收集真实环境变量中的 TOOLHIVE_* 配置并映射为嵌套 dict。"""
+    return _build_nested(os.environ)
+
+
+def _load_dotenv_data() -> dict[str, Any]:
+    """读取 ``.env`` 文件中的 TOOLHIVE_* 配置并映射为嵌套 dict。"""
+    env_file = Path(".env")
+    if not env_file.is_file():
+        return {}
+    from dotenv import dotenv_values
+    return _build_nested(dotenv_values(env_file))
 
 
 def _load_yaml_data(config_file: str | Path | None) -> dict[str, Any]:
@@ -380,15 +420,17 @@ def _deep_merge(
 def load_settings(config_file: str | Path | None = None) -> Settings:
     """加载应用配置。
 
-    优先级：环境变量具体值 > 外挂 YAML > 代码默认值。
+    优先级：环境变量具体值 > 外挂 YAML > ``.env`` 文件 > 代码默认值。
     外挂配置文件通过 ``--config`` 或 ``TOOLHIVE_CONFIG_FILE`` 指定；
     明确指定的文件不存在、不可读或内容非法时抛出异常，服务启动失败。
     """
     global settings
     resolved = config_file or os.environ.get("TOOLHIVE_CONFIG_FILE")
     yaml_data = _load_yaml_data(resolved)
+    dotenv_data = _load_dotenv_data()
     env_data = _collect_env_values()
-    merged = _deep_merge(yaml_data, env_data)
+    merged = _deep_merge(dotenv_data, yaml_data)
+    merged = _deep_merge(merged, env_data)
     settings = Settings(**merged)
     return settings
 

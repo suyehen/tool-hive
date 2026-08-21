@@ -1,6 +1,6 @@
 # ToolHive 外挂配置文件示例
 # 通过 --config <path> 或环境变量 TOOLHIVE_CONFIG_FILE 指定。
-# 配置优先级：环境变量具体值 > 本文件 > 代码默认值。
+# 配置优先级：环境变量具体值 > 本文件 > .env 文件 > 代码默认值。
 # 生产部署建议复制为 /vdb/tool-hive/config/production.yaml 使用。
 
 # ── 应用 ──
