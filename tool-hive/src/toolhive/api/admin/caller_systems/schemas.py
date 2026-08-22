@@ -45,6 +45,7 @@ class CallerSystemResponse(BaseModel):
     owner: str | None
     contact: str | None
     status: str
+    effective_state: str
     effective_from: UTCDateTime | None
     effective_to: UTCDateTime | None
     deactivated_reason: str | None

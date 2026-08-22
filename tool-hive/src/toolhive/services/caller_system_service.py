@@ -142,10 +142,6 @@ class CallerSystemService:
         if conditions:
             raise ValidationError("启用条件不满足: " + "; ".join(conditions))
 
-        # 检查有效期
-        if system.effective_to and system.effective_to <= datetime.now(UTC):
-            raise ValidationError("当前时间不在有效期内")
-
         system.status = CallerSystemStatus.ENABLED
         # 启用调用系统：记录修改时间与当前操作人
         system.update_time = datetime.now(UTC)
@@ -439,17 +435,6 @@ class CallerSystemService:
             after_summary={"status": "revoked"},
         )
         return system
-
-    @transactional()
-    async def check_and_expire(self, system_id: str) -> None:
-        """超过 effective_to 自动拒绝请求（调用方检查）。"""
-        system = await self.get_by_system_id(system_id)
-        if system.effective_to and system.effective_to <= datetime.now(UTC):
-            if system.status == CallerSystemStatus.ENABLED:
-                system.status = CallerSystemStatus.DISABLED
-                system.deactivated_reason = "已过期（自动）"
-                system.row_version += 1
-                await self.db.flush()
 
     # ═════════════════════════════════════════════════════════════
     # 查询

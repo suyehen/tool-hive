@@ -55,7 +55,19 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
     def is_enabled(self) -> bool:
         if self.status != CallerSystemStatus.ENABLED:
             return False
+        return self.effective_state == "effective"
+
+    @property
+    def effective_state(self) -> str:
+        """有效期实时计算结果（不依赖生命周期状态）。
+
+        - ``not_started``：未到 effective_from，尚未生效；
+        - ``effective``：处于有效期内（或未配置有效期）；
+        - ``expired``：已超过 effective_to。
+        """
         now = datetime.now(UTC)
+        if self.effective_from and self.effective_from > now:
+            return "not_started"
         if self.effective_to and self.effective_to <= now:
-            return False
-        return True
+            return "expired"
+        return "effective"

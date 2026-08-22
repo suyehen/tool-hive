@@ -19,6 +19,12 @@ const statusColor: Record<string, string> = {
   draft: 'default', enabled: 'green', disabled: 'orange', revoked: 'red',
 };
 
+const effectiveStateTag: Record<string, { text: string; color: string }> = {
+  not_started: { text: '未生效', color: 'blue' },
+  effective: { text: '生效中', color: 'green' },
+  expired: { text: '已过期', color: 'red' },
+};
+
 export default function CallerSystemListPage() {
   const { hasOperation } = useAuth();
   const [systems, setSystems] = useState<CallerSystemItem[]>([]);
@@ -119,6 +125,11 @@ export default function CallerSystemListPage() {
     { title: '负责人', dataIndex: 'owner', key: 'owner', render: (v) => v || '-' },
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s) => <Tag color={statusColor[s]}>{s}</Tag> },
+    { title: '有效期', dataIndex: 'effective_state', key: 'effective_state', width: 90,
+      render: (s) => {
+        const t = effectiveStateTag[s] || { text: s || '-', color: 'default' };
+        return <Tag color={t.color}>{t.text}</Tag>;
+      } },
     {
       title: '操作', key: 'actions', width: 280,
       render: (_, record) => (

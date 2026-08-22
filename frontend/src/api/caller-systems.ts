@@ -10,6 +10,7 @@ export interface CallerSystemItem {
   owner: string | null;
   contact: string | null;
   status: string;
+  effective_state: string;
   effective_from: string | null;
   effective_to: string | null;
   deactivated_reason: string | null;

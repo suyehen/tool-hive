@@ -42,6 +42,7 @@ def _to_response(cs) -> CallerSystemResponse:
         owner=cs.owner,
         contact=cs.contact,
         status=cs.status,
+        effective_state=cs.effective_state,
         effective_from=cs.effective_from,
         effective_to=cs.effective_to,
         deactivated_reason=cs.deactivated_reason,
