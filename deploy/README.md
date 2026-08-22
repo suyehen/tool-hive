@@ -62,9 +62,12 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 - 管理入口：公网 `443`，转发 `/admin/**` 与 `/api/admin/**` 到 `127.0.0.1:8100`，写入 `X-ToolHive-Ingress: admin`；
 - 运行入口：内网 `8081`，仅转发 `/api/runtime/v1/**`，写入 `X-ToolHive-Ingress: runtime`；
 - Header 清洗：清除客户端提交的 `Forwarded` / `X-Forwarded-For` / `X-Real-IP`，按实际 TCP 连接写入 `X-ToolHive-Client-IP: $remote_addr`；
+- 限流：管理入口全局 `10 r/s`（burst 20），`/api/admin/auth/**` 登录/验证码等接口 `5 r/s`（burst 8），运行入口内网基础限流 `50 r/s`（burst 100）；zone 定义位于示例配置顶部，需处于 Nginx `http` 上下文；
 - 应用只监听回环地址，生产必须由 Nginx 转发，不允许直连应用端口。
 
 应用侧 `network.trusted_proxies` 必须包含 Nginx 来源地址（同机部署为 `127.0.0.1/32`、`::1/128`），否则入口请求会被拒绝。
+
+应用层限流：登录失败按来源 IP 在 `login_failure_window_minutes` 窗口内累计，达到 `login_max_failures` 次后拒绝；验证码挑战接口按来源 IP 每分钟最多 `captcha_challenge_max_per_minute` 次（默认 10 次）。Nginx 与应用层限流共同构成管理侧基础限流。
 
 ## 7. 启动
 

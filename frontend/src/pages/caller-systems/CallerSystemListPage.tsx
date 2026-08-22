@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions,
+  Table, Button, Modal, Form, Input, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions, DatePicker,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import dayjs, { type Dayjs } from 'dayjs';
 import {
-  listCallerSystems, createCallerSystem, enableCallerSystem, disableCallerSystem,
+  listCallerSystems, createCallerSystem, updateCallerSystem, enableCallerSystem, disableCallerSystem,
   reviveCallerSystem, revokeCallerSystem,
   listPublicKeys, addPublicKey, enablePublicKey, disablePublicKey, revokePublicKey,
   listIPRules, addIPRule, updateIPRuleStatus,
@@ -25,6 +26,22 @@ const effectiveStateTag: Record<string, { text: string; color: string }> = {
   expired: { text: '已过期', color: 'red' },
 };
 
+interface CallerSystemFormValues {
+  name: string;
+  environment: string;
+  description?: string;
+  department?: string;
+  owner?: string;
+  contact?: string;
+  effectiveFrom?: Dayjs | null;
+  effectiveTo?: Dayjs | null;
+}
+
+const renderEffectiveState = (s: string) => {
+  const t = effectiveStateTag[s] || { text: s || '-', color: 'default' };
+  return <Tag color={t.color}>{t.text}</Tag>;
+};
+
 export default function CallerSystemListPage() {
   const { hasOperation } = useAuth();
   const [systems, setSystems] = useState<CallerSystemItem[]>([]);
@@ -32,6 +49,10 @@ export default function CallerSystemListPage() {
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editRowVersion, setEditRowVersion] = useState<number | null>(null);
+  const [editForm] = Form.useForm();
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [keys, setKeys] = useState<PublicKeyItem[]>([]);
@@ -66,15 +87,61 @@ export default function CallerSystemListPage() {
     setDetailOpen(true);
   };
 
-  const handleCreate = async (values: Record<string, unknown>) => {
+  const openEdit = (record: CallerSystemItem) => {
+    setEditId(record.system_id);
+    setEditRowVersion(record.row_version);
+    editForm.setFieldsValue({
+      name: record.name,
+      description: record.description ?? undefined,
+      department: record.department ?? undefined,
+      owner: record.owner ?? undefined,
+      contact: record.contact ?? undefined,
+      effectiveFrom: record.effective_from ? dayjs(record.effective_from) : null,
+      effectiveTo: record.effective_to ? dayjs(record.effective_to) : null,
+    });
+    setEditOpen(true);
+  };
+
+  const handleCreate = async (values: CallerSystemFormValues) => {
     try {
-      await createCallerSystem(values as { name: string; environment: string });
+      await createCallerSystem({
+        name: values.name,
+        environment: values.environment,
+        description: values.description,
+        department: values.department,
+        owner: values.owner,
+        contact: values.contact,
+        effective_from: values.effectiveFrom ? values.effectiveFrom.toISOString() : null,
+        effective_to: values.effectiveTo ? values.effectiveTo.toISOString() : null,
+      });
       message.success('调用系统创建成功');
       setCreateOpen(false);
       createForm.resetFields();
       fetchSystems();
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '创建失败');
+    }
+  };
+
+  const handleEdit = async (values: CallerSystemFormValues) => {
+    if (!editId) return;
+    try {
+      await updateCallerSystem(editId, {
+        name: values.name,
+        description: values.description,
+        department: values.department,
+        owner: values.owner,
+        contact: values.contact,
+        effective_from: values.effectiveFrom ? values.effectiveFrom.toISOString() : null,
+        effective_to: values.effectiveTo ? values.effectiveTo.toISOString() : null,
+        row_version: editRowVersion,
+      });
+      message.success('调用系统修改成功');
+      setEditOpen(false);
+      editForm.resetFields();
+      fetchSystems();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '修改失败');
     }
   };
 
@@ -126,14 +193,14 @@ export default function CallerSystemListPage() {
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s) => <Tag color={statusColor[s]}>{s}</Tag> },
     { title: '有效期', dataIndex: 'effective_state', key: 'effective_state', width: 90,
-      render: (s) => {
-        const t = effectiveStateTag[s] || { text: s || '-', color: 'default' };
-        return <Tag color={t.color}>{t.text}</Tag>;
-      } },
+      render: (s) => renderEffectiveState(s) },
     {
-      title: '操作', key: 'actions', width: 280,
+      title: '操作', key: 'actions', width: 320,
       render: (_, record) => (
         <Space size="small">
+          {hasOperation('caller_system:edit') && (
+            <Button size="small" onClick={() => openEdit(record)}>编辑</Button>
+          )}
           {hasOperation('caller_system:view') && (
             <Button size="small" onClick={() => openDetail(record.system_id)}>详情</Button>
           )}
@@ -245,6 +312,35 @@ export default function CallerSystemListPage() {
           <Form.Item name="department" label="部门"><Input /></Form.Item>
           <Form.Item name="owner" label="负责人"><Input /></Form.Item>
           <Form.Item name="contact" label="联系方式"><Input /></Form.Item>
+          <Form.Item name="effectiveFrom" label="生效时间（可选）">
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
+          </Form.Item>
+          <Form.Item name="effectiveTo" label="失效时间（可选）">
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="编辑调用系统"
+        open={editOpen}
+        onCancel={() => { setEditOpen(false); editForm.resetFields(); }}
+        onOk={() => editForm.submit()}
+      >
+        <Form form={editForm} onFinish={handleEdit} layout="vertical">
+          <Form.Item name="name" label="系统名称" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="说明"><Input.TextArea /></Form.Item>
+          <Form.Item name="department" label="部门"><Input /></Form.Item>
+          <Form.Item name="owner" label="负责人"><Input /></Form.Item>
+          <Form.Item name="contact" label="联系方式"><Input /></Form.Item>
+          <Form.Item name="effectiveFrom" label="生效时间（可选）">
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
+          </Form.Item>
+          <Form.Item name="effectiveTo" label="失效时间（可选）">
+            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -255,6 +351,29 @@ export default function CallerSystemListPage() {
         footer={null}
         width={800}
       >
+        {(() => {
+          const detailSystem = systems.find((s) => s.system_id === detailId) ?? null;
+          if (!detailSystem) return null;
+          return (
+            <Descriptions size="small" column={2} style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="system_id">{detailSystem.system_id}</Descriptions.Item>
+              <Descriptions.Item label="名称">{detailSystem.name}</Descriptions.Item>
+              <Descriptions.Item label="环境">{detailSystem.environment === 'production' ? '生产' : '开发'}</Descriptions.Item>
+              <Descriptions.Item label="生命周期状态">
+                <Tag color={statusColor[detailSystem.status]}>{detailSystem.status}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="有效期状态">
+                {renderEffectiveState(detailSystem.effective_state)}
+              </Descriptions.Item>
+              <Descriptions.Item label="生效时间">
+                {detailSystem.effective_from ? dayjs(detailSystem.effective_from).format('YYYY-MM-DD HH:mm') : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="失效时间">
+                {detailSystem.effective_to ? dayjs(detailSystem.effective_to).format('YYYY-MM-DD HH:mm') : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+          );
+        })()}
         <Tabs
           items={[
             {

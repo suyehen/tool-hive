@@ -33,6 +33,8 @@ login_failure_window_minutes: 10
 captcha_ttl_seconds: 300
 # 图形验证码字符长度。
 captcha_code_length: 4
+# 验证码挑战接口按来源 IP 的每分钟获取上限。
+captcha_challenge_max_per_minute: 10
 # 临时密码有效期，单位小时。
 temp_password_expire_hours: 24
 # 密码最小长度。

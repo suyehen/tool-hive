@@ -16,7 +16,13 @@ from toolhive.api.admin.router import admin_app
 def test_captcha_challenge_endpoint() -> None:
     """POST /auth/captcha/challenge 返回验证码挑战。"""
     redis = AsyncMock()
-    with patch("toolhive.services.security.captcha.get_redis", return_value=redis):
+    with patch(
+        "toolhive.services.security.captcha.get_redis",
+        return_value=redis,
+    ), patch(
+        "toolhive.services.security.rate_limit.check_captcha_challenge_limit",
+        AsyncMock(return_value=True),
+    ):
         client = TestClient(admin_app)
         resp = client.post("/auth/captcha/challenge")
 
@@ -24,6 +30,19 @@ def test_captcha_challenge_endpoint() -> None:
     body = resp.json()
     assert set(body) == {"captcha_id", "image", "expires_in_seconds"}
     assert body["image"].startswith("data:image/png;base64,")
+
+
+def test_captcha_challenge_endpoint_rate_limited() -> None:
+    """验证码挑战按来源 IP 超限时返回 429。"""
+    with patch(
+        "toolhive.services.security.rate_limit.check_captcha_challenge_limit",
+        AsyncMock(return_value=False),
+    ):
+        client = TestClient(admin_app)
+        resp = client.post("/auth/captcha/challenge")
+
+    assert resp.status_code == 429
+    assert "频繁" in resp.json()["detail"]
 
 
 def _make_request(path: str) -> Request:
@@ -85,10 +104,16 @@ async def test_csrf_still_requires_session_for_other_post() -> None:
 
 def test_login_rejects_wrong_captcha() -> None:
     """验证码错误或已过期时登录返回 401，不进入账号校验。"""
-    with patch(
-        "toolhive.services.auth_service.consume_captcha",
-        AsyncMock(return_value=False),
-    ) as consume:
+    with (
+        patch(
+            "toolhive.services.auth_service.is_ip_blocked",
+            AsyncMock(return_value=False),
+        ),
+        patch(
+            "toolhive.services.auth_service.consume_captcha",
+            AsyncMock(return_value=False),
+        ) as consume,
+    ):
         client = TestClient(admin_app)
         resp = client.post(
             "/auth/login",
@@ -108,6 +133,10 @@ def test_login_rejects_wrong_captcha() -> None:
 def test_login_continues_after_valid_captcha() -> None:
     """验证码校验通过后继续账号流程（账号不存在返回通用密码错误）。"""
     with (
+        patch(
+            "toolhive.services.auth_service.is_ip_blocked",
+            AsyncMock(return_value=False),
+        ),
         patch(
             "toolhive.services.auth_service.consume_captcha",
             AsyncMock(return_value=True),
@@ -142,8 +171,14 @@ def test_login_success_creates_session_directly() -> None:
     account.username = "admin"
     account.security_version = "0"
     account.is_active.return_value = True
+    account.must_change_password = False
+    account.temp_password_expires_at = None
 
     with (
+        patch(
+            "toolhive.services.auth_service.is_ip_blocked",
+            AsyncMock(return_value=False),
+        ),
         patch(
             "toolhive.services.auth_service.consume_captcha",
             AsyncMock(return_value=True),

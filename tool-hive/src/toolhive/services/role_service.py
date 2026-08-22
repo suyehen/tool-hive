@@ -65,6 +65,8 @@ class RoleService:
     async def create_role(
         self, name: str, description: str | None = None,
     ) -> BackendRole:
+        if name == SUPER_ADMIN_ROLE_NAME:
+            raise ValidationError("内置超级管理员角色不可创建")
         existing = await self.db.scalar(
             select(BackendRole).where(BackendRole.name == name)
         )
@@ -75,7 +77,7 @@ class RoleService:
         role = BackendRole(
             name=name,
             description=description,
-            is_super_admin=(name == SUPER_ADMIN_ROLE_NAME),
+            is_super_admin=False,
             create_time=datetime.now(UTC),
             create_by=get_current_operator_id(),
         )
@@ -106,6 +108,8 @@ class RoleService:
             and role.row_version != expected_row_version
         ):
             raise ConflictError("数据已被他人修改，请刷新后重试")
+        if name and name == SUPER_ADMIN_ROLE_NAME:
+            raise ValidationError("内置超级管理员角色名不可使用")
 
         before = {"name": role.name, "description": role.description}
         if name and name != role.name:

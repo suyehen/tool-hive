@@ -249,3 +249,56 @@ async def test_caller_system_enable_records_audit() -> None:
 
     records = _audit_records(db)
     assert any(r.action == "caller_system.enable" for r in records)
+
+
+async def test_caller_system_update_records_audit() -> None:
+    """调用系统主记录修改写入审计记录（含变更前后摘要）。"""
+    system = MagicMock()
+    system.system_id = "sys_1"
+    system.name = "old-name"
+    system.description = "old-desc"
+    system.department = "old-dept"
+    system.owner = "old-owner"
+    system.contact = "old-contact"
+    system.effective_from = None
+    system.effective_to = None
+    system.row_version = 0
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.scalar = AsyncMock(return_value=system)
+    svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
+
+    await svc.update_system("sys_1", name="new-name", owner="new-owner")
+
+    records = _audit_records(db)
+    assert len(records) == 1
+    assert records[0].action == "caller_system.update"
+    assert records[0].result == "success"
+    assert '"name": "old-name"' in records[0].before_summary
+    assert '"name": "new-name"' in records[0].after_summary
+
+
+async def test_offboard_account_records_offboarded_status() -> None:
+    """离职审计摘要记录 offboarded 状态。"""
+    account = _account()
+    account.security_version = 0
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.scalar = AsyncMock(return_value=account)
+    svc = AccountService(db, AdminSecuritySettings())
+    set_audit_actor("acc-9", "operator")
+
+    with patch(
+        "toolhive.services.account_service.revoke_all_sessions",
+        AsyncMock(),
+    ), patch(
+        "toolhive.services.account_service.RoleService",
+    ) as role_cls:
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=False)
+        await svc.offboard_account(account, operator_id="acc-9")
+
+    records = _audit_records(db)
+    offboard = next(r for r in records if r.action == "account.offboard")
+    assert '"status": "offboarded"' in offboard.after_summary

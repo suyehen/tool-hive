@@ -260,3 +260,76 @@ async def test_enable_succeeds_with_runtime_policy() -> None:
 
     result = await svc.enable("sys_1")
     assert result.status == CallerSystemStatus.ENABLED
+
+
+async def test_revive_rejects_without_runtime_policy() -> None:
+    """恢复启用同样校验前置条件：缺少运行策略时拒绝。"""
+    system = _system(status=CallerSystemStatus.DISABLED)
+    key = MagicMock()
+    rule = MagicMock()
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[system, system, system, None])
+    db.execute = AsyncMock(
+        side_effect=[_execute_result([key]), _execute_result([rule])],
+    )
+    svc = CallerSystemService(db)
+
+    with pytest.raises(ValidationError) as exc_info:
+        await svc.revive("sys_1")
+    assert "缺少运行策略" in str(exc_info.value)
+
+
+async def test_revive_succeeds_with_conditions() -> None:
+    """前置条件满足时允许恢复启用。"""
+    system = _system(status=CallerSystemStatus.DISABLED)
+    key = MagicMock()
+    rule = MagicMock()
+    policy = CallerRuntimePolicy(
+        system_id="sys_1",
+        allowed_api_patterns=json.dumps(["/api/runtime/v1/tools/execute"]),
+        qps_limit=10,
+        concurrency_limit=5,
+        quota_per_day=1000,
+        request_timeout_seconds=30,
+        circuit_breaker_enabled=True,
+    )
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[system, system, system, policy])
+    db.execute = AsyncMock(
+        side_effect=[_execute_result([key]), _execute_result([rule])],
+    )
+    db.add = MagicMock()
+    svc = CallerSystemService(db)
+
+    result = await svc.revive("sys_1")
+    assert result.status == CallerSystemStatus.ENABLED
+
+
+async def test_revive_keeps_emergency_disabled_flag() -> None:
+    """恢复启用不清除紧急禁用标志（独立覆盖，需显式解除）。"""
+    system = _system(status=CallerSystemStatus.DISABLED)
+    system.emergency_disabled = True
+    system.emergency_disabled_reason = "安全事件"
+    key = MagicMock()
+    rule = MagicMock()
+    policy = CallerRuntimePolicy(
+        system_id="sys_1",
+        allowed_api_patterns=json.dumps(["/api/runtime/v1/tools/execute"]),
+        qps_limit=10,
+        concurrency_limit=5,
+        quota_per_day=1000,
+        request_timeout_seconds=30,
+        circuit_breaker_enabled=True,
+    )
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[system, system, system, policy])
+    db.execute = AsyncMock(
+        side_effect=[_execute_result([key]), _execute_result([rule])],
+    )
+    db.add = MagicMock()
+    svc = CallerSystemService(db)
+
+    result = await svc.revive("sys_1")
+    assert result.status == CallerSystemStatus.ENABLED
+    assert result.emergency_disabled is True
+    assert result.emergency_disabled_reason == "安全事件"

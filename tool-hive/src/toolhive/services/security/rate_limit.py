@@ -8,6 +8,7 @@ from toolhive.infrastructure.redis import get_redis
 # ── Redis key 前缀 ──
 _ACCOUNT_FAIL_PREFIX: str = "login_fail:account:"
 _IP_FAIL_PREFIX: str = "login_fail:ip:"
+_CAPTCHA_CHALLENGE_PREFIX: str = "captcha_challenge:"
 
 _admin_security = AdminSecuritySettings()
 
@@ -39,3 +40,28 @@ async def clear_login_failures(account_id: str, source_ip: str) -> None:
         f"{_ACCOUNT_FAIL_PREFIX}{account_id}",
         f"{_IP_FAIL_PREFIX}{source_ip}",
     )
+
+
+async def is_ip_blocked(source_ip: str) -> bool:
+    """判断来源 IP 在统计窗口内的登录失败次数是否达到阈值。"""
+    redis = await get_redis()
+    raw = await redis.get(f"{_IP_FAIL_PREFIX}{source_ip}")
+    if raw is None:
+        return False
+    try:
+        return int(raw) >= _admin_security.login_max_failures
+    except ValueError:
+        return False
+
+
+async def check_captcha_challenge_limit(source_ip: str) -> bool:
+    """验证码挑战按来源 IP 限流（每分钟最多 N 次）。
+
+    返回 True 表示允许创建挑战；超过上限返回 False。
+    """
+    redis = await get_redis()
+    key = f"{_CAPTCHA_CHALLENGE_PREFIX}{source_ip}"
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, 60)
+    return count <= _admin_security.captcha_challenge_max_per_minute

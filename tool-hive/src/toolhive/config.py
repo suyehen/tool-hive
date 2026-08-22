@@ -36,6 +36,7 @@ class AdminSecuritySettings(BaseModel):
     login_failure_window_minutes: int = 10
     captcha_ttl_seconds: int = 300
     captcha_code_length: int = 4
+    captcha_challenge_max_per_minute: int = 10
     temp_password_expire_hours: int = 24
     password_min_length: int = 12
     password_max_length: int = 128
@@ -216,6 +217,7 @@ class Settings(BaseSettings):
     login_failure_window_minutes: int = 10
     captcha_ttl_seconds: int = 300
     captcha_code_length: int = 4
+    captcha_challenge_max_per_minute: int = 10
     temp_password_expire_hours: int = 24
     password_min_length: int = 12
     password_max_length: int = 128
@@ -270,6 +272,7 @@ class Settings(BaseSettings):
             login_failure_window_minutes=self.login_failure_window_minutes,
             captcha_ttl_seconds=self.captcha_ttl_seconds,
             captcha_code_length=self.captcha_code_length,
+            captcha_challenge_max_per_minute=self.captcha_challenge_max_per_minute,
             temp_password_expire_hours=self.temp_password_expire_hours,
             password_min_length=self.password_min_length,
             password_max_length=self.password_max_length,

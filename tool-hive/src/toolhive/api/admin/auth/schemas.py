@@ -32,6 +32,7 @@ class LoginResponse(BaseModel):
     session_id: str
     csrf_token: str
     username: str
+    must_change_password: bool
 
 
 class SessionInfoResponse(BaseModel):

@@ -4,6 +4,7 @@ export interface LoginResponse {
   session_id: string;
   csrf_token: string;
   username: string;
+  must_change_password: boolean;
 }
 
 export interface CaptchaChallenge {
@@ -48,6 +49,7 @@ export interface MeInfo {
   username: string;
   external_user_id: string | null;
   status: string;
+  must_change_password: boolean;
 }
 
 export interface OperationItemsResponse {

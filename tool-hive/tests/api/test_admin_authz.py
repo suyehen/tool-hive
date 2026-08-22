@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from toolhive.api.admin.deps import _get_current_user, require_operation
+from toolhive.core.enums import AccountStatus
 from toolhive.core.operation_codes import OperationCode
 
 
@@ -96,3 +97,100 @@ async def test_get_current_user_rejects_security_version_mismatch():
                 admin_security=MagicMock(),
             )
     assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_rejects_locked_account():
+    """锁定账号即使 security_version 一致也拒绝访问（401）。"""
+    request = MagicMock()
+    request.state.session = MagicMock()
+    request.state.session.account_id = "acc-1"
+    request.state.session.security_version = "0"
+
+    account = _make_account()
+    account.security_version = "0"
+    account.status = AccountStatus.LOCKED
+    account.is_active.return_value = False
+
+    with patch("toolhive.services.account_service.AccountService") as acct_cls:
+        acct_svc = acct_cls.return_value
+        acct_svc.get_by_id = AsyncMock(return_value=account)
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_current_user(
+                request=request,
+                db=AsyncMock(),
+                admin_security=MagicMock(),
+            )
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_rejects_disabled_account():
+    """禁用账号即使 security_version 一致也拒绝访问（401）。"""
+    request = MagicMock()
+    request.state.session = MagicMock()
+    request.state.session.account_id = "acc-1"
+    request.state.session.security_version = "0"
+
+    account = _make_account()
+    account.security_version = "0"
+    account.status = AccountStatus.DISABLED
+    account.is_active.return_value = False
+
+    with patch("toolhive.services.account_service.AccountService") as acct_cls:
+        acct_svc = acct_cls.return_value
+        acct_svc.get_by_id = AsyncMock(return_value=account)
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_current_user(
+                request=request,
+                db=AsyncMock(),
+                admin_security=MagicMock(),
+            )
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_blocks_non_auth_when_must_change_password():
+    """未修改临时密码前，非 auth 接口返回 403。"""
+    request = MagicMock()
+    request.url.path = "/accounts"
+    request.state.session = MagicMock()
+    request.state.session.account_id = "acc-1"
+    request.state.session.security_version = "0"
+
+    account = _make_account()
+    account.security_version = "0"
+    account.is_active.return_value = True
+    account.must_change_password = True
+
+    with patch("toolhive.services.account_service.AccountService") as acct_cls:
+        acct_svc = acct_cls.return_value
+        acct_svc.get_by_id = AsyncMock(return_value=account)
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_current_user(
+                request=request,
+                db=AsyncMock(),
+                admin_security=MagicMock(),
+            )
+    assert exc_info.value.status_code == 403
+
+
+async def test_get_current_user_allows_auth_when_must_change_password():
+    """未修改临时密码前，auth 接口（含挂载前缀）放行。"""
+    request = MagicMock()
+    request.url.path = "/api/admin/auth/me"
+    request.state.session = MagicMock()
+    request.state.session.account_id = "acc-1"
+    request.state.session.security_version = "0"
+
+    account = _make_account()
+    account.security_version = "0"
+    account.is_active.return_value = True
+    account.must_change_password = True
+
+    with patch("toolhive.services.account_service.AccountService") as acct_cls:
+        acct_svc = acct_cls.return_value
+        acct_svc.get_by_id = AsyncMock(return_value=account)
+        result = await _get_current_user(
+            request=request,
+            db=AsyncMock(),
+            admin_security=MagicMock(),
+        )
+    assert result is account

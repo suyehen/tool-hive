@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,7 @@ from toolhive.services.security.csrf import generate_csrf_token
 from toolhive.services.security.password import verify_password
 from toolhive.services.security.rate_limit import (
     clear_login_failures,
+    is_ip_blocked,
     record_login_failure,
 )
 from toolhive.services.security.session import create_session
@@ -54,6 +56,9 @@ class AuthService:
         captcha_code: str,
     ) -> LoginResult:
         """图形验证码 + 账号密码校验，通过后直接创建登录会话。"""
+        # 来源 IP 限流：窗口内失败次数达阈值时直接拒绝，不消耗验证码
+        if await is_ip_blocked(source_ip):
+            raise AuthenticationError("尝试过于频繁，请稍后再试")
         # 图形验证码：先校验再进入账号流程；无论正确与否均一次性消费
         if not await consume_captcha(captcha_id, captcha_code):
             raise AuthenticationError("验证码错误或已过期，请刷新后重试")
@@ -80,6 +85,14 @@ class AuthService:
             await record_login_failure(account.id, source_ip)
             raise AuthenticationError("用户名或密码错误")
 
+        # 临时密码规则：首次登录必须改密；临时密码过期禁止登录
+        if account.must_change_password:
+            if (
+                account.temp_password_expires_at
+                and account.temp_password_expires_at <= datetime.now(UTC)
+            ):
+                raise AuthenticationError("临时密码已过期，请联系管理员重置")
+
         # 密码正确 → 升级哈希（如需要）
         if needs_rehash:
             from toolhive.services.security.password import hash_password
@@ -96,20 +109,6 @@ class AuthService:
     async def logout(self, session_id: str) -> None:
         from toolhive.services.security.session import revoke_session
         await revoke_session(session_id)
-
-    # ── 修改密码 ──
-
-    @transactional()
-    async def change_password(
-        self,
-        account: ManagementAccount,
-        old_password: str,
-        new_password: str,
-    ) -> str:
-        """修改密码，返回新的 session_id（防会话固定）。"""
-        await self.account_svc.update_password(account, old_password, new_password)
-        # 这里不轮转，由调用方传入 old_session_id 处理
-        return ""
 
     # ── 内部 ──
 

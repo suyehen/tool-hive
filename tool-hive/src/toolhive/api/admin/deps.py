@@ -37,6 +37,14 @@ async def _get_current_user(
     # security_version 不一致 → 会话已失效，要求重新登录
     if str(session.security_version) != str(account.security_version):
         raise HTTPException(status_code=401, detail="会话已失效，请重新登录")
+    # 账号不可用（禁用/锁定/离职）→ 实时拒绝，前端收到 401 后跳转登录
+    if not account.is_active():
+        raise HTTPException(status_code=401, detail="账号不可用，请重新登录")
+    # 强制改密：未修改临时密码前，只允许访问 auth 相关接口
+    if account.must_change_password:
+        path = request.url.path.removeprefix("/api/admin")
+        if not path.startswith("/auth/"):
+            raise HTTPException(status_code=403, detail="请先修改密码")
     return account
 
 

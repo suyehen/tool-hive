@@ -110,6 +110,19 @@ class CallerSystemService:
             and system.row_version != expected_row_version
         ):
             raise ConflictError("数据已被他人修改，请刷新后重试")
+
+        def _dt(value):
+            return value.isoformat() if value else None
+
+        before = {
+            "name": system.name,
+            "description": system.description,
+            "department": system.department,
+            "owner": system.owner,
+            "contact": system.contact,
+            "effective_from": _dt(system.effective_from),
+            "effective_to": _dt(system.effective_to),
+        }
         if name is not None:
             system.name = name
         if description is not None:
@@ -128,6 +141,22 @@ class CallerSystemService:
         system.update_time = datetime.now(UTC)
         system.update_by = get_current_operator_id()
         system.row_version += 1
+        after = {
+            "name": system.name,
+            "description": system.description,
+            "department": system.department,
+            "owner": system.owner,
+            "contact": system.contact,
+            "effective_from": _dt(system.effective_from),
+            "effective_to": _dt(system.effective_to),
+        }
+        AuditService(self.db).add_record(
+            action="caller_system.update",
+            object_type="caller_system",
+            object_id=system_id,
+            before_summary=before,
+            after_summary=after,
+        )
         await self.db.flush()
         return system
 
@@ -388,8 +417,13 @@ class CallerSystemService:
         system = await self.get_by_system_id(system_id)
         if system.status != CallerSystemStatus.DISABLED:
             raise ConflictError("只有已停用的调用系统可以恢复")
+        # 恢复即重新启用：必须满足启用前置条件（与 enable 一致）
+        conditions = await self._check_enable_conditions(system_id)
+        if conditions:
+            raise ValidationError("启用条件不满足: " + "; ".join(conditions))
         system.status = CallerSystemStatus.ENABLED
         system.deactivated_reason = None
+        # 紧急禁用为独立覆盖标志：不随停用/恢复清除，运行侧仍拒绝，需显式 emergency-enable
         # 恢复调用系统：记录修改时间与当前操作人
         system.update_time = datetime.now(UTC)
         system.update_by = get_current_operator_id()

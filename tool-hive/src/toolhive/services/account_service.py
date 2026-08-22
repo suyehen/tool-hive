@@ -344,7 +344,7 @@ class AccountService:
             action="account.offboard",
             object_type="account",
             object_id=account.id,
-            after_summary={"status": "disabled"},
+            after_summary={"status": "offboarded"},
         )
 
     @transactional()

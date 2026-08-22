@@ -95,6 +95,8 @@ class TestGetSession:
         import time
         now = int(time.time())
         mock_get_redis.return_value = mock_redis
+        # 索引校验：返回当前会话 ID，允许读取
+        mock_redis.get = AsyncMock(return_value="valid-session")
         mock_redis.hgetall.return_value = {
             "account_id": "acc-123",
             "username": "admin",
@@ -113,6 +115,29 @@ class TestGetSession:
         assert result.username == "admin"
         assert result.security_version == "0"
 
+    @patch("toolhive.services.security.session.get_redis")
+    async def test_returns_none_when_index_mismatch(self, mock_get_redis, mock_redis) -> None:
+        """索引指向其他会话时，旧会话立即失效（互斥登录双重校验）。"""
+        import time
+        now = int(time.time())
+        mock_get_redis.return_value = mock_redis
+        mock_redis.get = AsyncMock(return_value="newer-session")
+        mock_redis.hgetall.return_value = {
+            "account_id": "acc-123",
+            "username": "admin",
+            "security_version": "0",
+            "source_ip": "1.2.3.4",
+            "created_at": str(now - 100),
+            "last_activity": str(now - 10),
+            "expires_at": str(now + 3600),
+        }
+
+        from toolhive.services.security.session import get_session
+
+        result = await get_session("stale-session")
+        assert result is None
+        mock_redis.delete.assert_awaited_once_with("session:stale-session")
+
 
 class TestRevokeSession:
     """撤销会话。"""
@@ -120,9 +145,22 @@ class TestRevokeSession:
     @patch("toolhive.services.security.session.get_redis")
     async def test_delete_session_and_index(self, mock_get_redis, mock_redis) -> None:
         mock_get_redis.return_value = mock_redis
+        mock_redis.get = AsyncMock(return_value="session-to-delete")
         mock_redis.hgetall.return_value = {"account_id": "acc-456"}
 
         from toolhive.services.security.session import revoke_session
 
         await revoke_session("session-to-delete")
         assert mock_redis.delete.call_count == 2  # session key + account index
+
+    @patch("toolhive.services.security.session.get_redis")
+    async def test_revoking_stale_session_keeps_current_index(self, mock_get_redis, mock_redis) -> None:
+        """用旧会话 ID 登出时不误删当前会话索引。"""
+        mock_get_redis.return_value = mock_redis
+        mock_redis.get = AsyncMock(return_value="current-session")
+        mock_redis.hgetall.return_value = {"account_id": "acc-456"}
+
+        from toolhive.services.security.session import revoke_session
+
+        await revoke_session("stale-session")
+        assert mock_redis.delete.call_count == 1  # 只删旧会话 key，不清索引

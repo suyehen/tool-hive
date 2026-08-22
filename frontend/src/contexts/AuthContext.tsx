@@ -15,6 +15,7 @@ interface AuthState {
   operationItems: string[];
   loading: boolean;
   csrfToken: string | null;
+  mustChangePassword: boolean;
 }
 
 interface AuthContextValue extends AuthState {
@@ -33,6 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     operationItems: [],
     loading: true,
     csrfToken: localStorage.getItem('csrf_token'),
+    mustChangePassword: false,
   });
 
   const refreshSession = useCallback(async () => {
@@ -44,10 +46,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         fetchCsrfToken(),
       ]);
       localStorage.setItem('csrf_token', token);
-      setState({ session, me, operationItems, loading: false, csrfToken: token });
+      setState({ session, me, operationItems, loading: false, csrfToken: token, mustChangePassword: me.must_change_password });
     } catch {
       localStorage.removeItem('csrf_token');
-      setState({ session: null, me: null, operationItems: [], loading: false, csrfToken: null });
+      setState({ session: null, me: null, operationItems: [], loading: false, csrfToken: null, mustChangePassword: false });
     }
   }, []);
 
@@ -65,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       me,
       operationItems,
       loading: false,
+      mustChangePassword: me.must_change_password,
     }));
     },
     [],
@@ -77,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore
     }
     localStorage.removeItem('csrf_token');
-    setState({ session: null, me: null, operationItems: [], loading: false, csrfToken: null });
+    setState({ session: null, me: null, operationItems: [], loading: false, csrfToken: null, mustChangePassword: false });
   }, []);
 
   const hasOperation = useCallback(

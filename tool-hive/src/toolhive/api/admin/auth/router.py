@@ -65,13 +65,18 @@ def _get_client_ip(request: Request) -> str:
 
 
 @router.post("/captcha/challenge", response_model=CaptchaChallengeResponse)
-async def captcha_challenge():
+async def captcha_challenge(request: Request):
     """申请图形验证码挑战（公开接口，无需登录）。
 
     返回短期有效的验证码标识、PNG 图片（base64 data URI）与有效期；
-    登录时需携带该标识与用户输入的验证码内容。
+    登录时需携带该标识与用户输入的验证码内容；按来源 IP 限流。
     """
     from toolhive.services.security.captcha import create_captcha_challenge
+    from toolhive.services.security.rate_limit import check_captcha_challenge_limit
+
+    source_ip = _get_client_ip(request)
+    if not await check_captcha_challenge_limit(source_ip):
+        raise HTTPException(status_code=429, detail="验证码获取过于频繁，请稍后再试")
     return await create_captcha_challenge()
 
 
@@ -102,6 +107,7 @@ async def login(
         session_id=result.session_id,
         csrf_token=result.csrf_token,
         username=result.account.username,
+        must_change_password=result.account.must_change_password,
     )
 
 
@@ -158,6 +164,7 @@ async def get_me(
         "username": account.username,
         "external_user_id": account.external_user_id,
         "status": account.status,
+        "must_change_password": account.must_change_password,
     }
 
 
@@ -189,13 +196,10 @@ async def change_password(
     except (AuthenticationError, ValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 会话 ID 轮转（防会话固定）
+    # 会话 ID 轮转（防会话固定）：撤销旧会话后创建新会话
     old_session_id = request.cookies.get(SESSION_COOKIE)
     if old_session_id:
-        from toolhive.services.security.session import rotate_session_id
         await svc.logout(old_session_id)
-        await rotate_session_id(old_session_id)  # 这里需要重新创建
-        # 简化：直接重新创建会话
         from toolhive.services.security.session import create_session
         source_ip = _get_client_ip(request)
         new_sid = await create_session(

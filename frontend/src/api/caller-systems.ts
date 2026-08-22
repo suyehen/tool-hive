@@ -14,6 +14,7 @@ export interface CallerSystemItem {
   effective_from: string | null;
   effective_to: string | null;
   deactivated_reason: string | null;
+  row_version: number;
   created_at: string;
   updated_at: string | null;
 }
@@ -56,6 +57,8 @@ export async function createCallerSystem(params: {
   department?: string;
   owner?: string;
   contact?: string;
+  effective_from?: string | null;
+  effective_to?: string | null;
 }): Promise<CallerSystemItem> {
   const { data } = await client.post('/caller-systems', params);
   return data;

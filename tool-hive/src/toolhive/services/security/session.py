@@ -1,4 +1,4 @@
-"""Redis 会话管理。支持互斥登录、超时检查、原子操作。"""
+"""Redis 会话管理。支持互斥登录（账号索引双重校验）、超时检查。"""
 
 from __future__ import annotations
 
@@ -36,25 +36,6 @@ _SESSION_PREFIX: str = "session:"
 _ACCOUNT_SESSION_PREFIX: str = "account_session:"
 
 
-# ── Lua 脚本：互斥登录原子操作 ──
-# 1. 读取 account_session:<account_id> → 旧 session_id
-# 2. 删除旧 session
-# 3. 写入新 session
-# 4. 更新 account_session 索引
-_MUTEX_LOGIN_LUA = """
-local old = redis.call('GET', KEYS[1])
-if old then
-    redis.call('DEL', _PREFIX_ .. old)
-end
-redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[7])
-redis.call('SET', KEYS[1], ARGV[1])
-for i = 1, #ARGV - 1 do
-    redis.call('HSET', _PREFIX_ .. ARGV[1], ARGV[i + 7], ARGV[i])
-end
-return old
-""".replace("_PREFIX_", _SESSION_PREFIX)
-
-
 def _session_key(session_id: str) -> str:
     return f"{_SESSION_PREFIX}{session_id}"
 
@@ -69,7 +50,12 @@ async def create_session(
     security_version: int,
     source_ip: str,
 ) -> str:
-    """创建新会话（互斥登录：以原子方式撤销该账号旧会话）。"""
+    """创建新会话（互斥登录）。
+
+    账号索引 ``account_session:<account_id>`` 是唯一有效会话依据：``SET`` 索引
+    为单 key 原子操作，旧会话在读取时通过索引双重校验立即失效；删除旧会话
+    key 仅为尽力清理，不承担互斥正确性。
+    """
     redis = await get_redis()
     session_id = secrets.token_hex(SESSION_ID_BYTES)
 
@@ -89,7 +75,7 @@ async def create_session(
         "expires_at", str(int(expires_at)),
     ]
 
-    # 如果 Lua 脚本中引用了不存在的 key，Redis 会报错，这里改用事务模拟互斥操作
+    # 尽力清理旧会话 key（并发竞态下可能删不到，正确性由索引双重校验兜底）
     old_session_id = await redis.get(_account_key(account_id))
     if old_session_id:
         await redis.delete(_session_key(old_session_id))
@@ -111,6 +97,14 @@ async def get_session(session_id: str) -> SessionData | None:
     data = await redis.hgetall(_session_key(session_id))
     if not data:
         return None
+
+    account_id = data.get("account_id", "")
+    # 互斥登录双重校验：仅账号索引指向的会话有效；被新登录顶掉的旧会话立即失效
+    if account_id:
+        current = await redis.get(_account_key(account_id))
+        if current != session_id:
+            await redis.delete(_session_key(session_id))
+            return None
 
     now = datetime.now(UTC)
     last_activity = data.get("last_activity", "0")
@@ -151,12 +145,18 @@ async def get_session(session_id: str) -> SessionData | None:
 
 
 async def revoke_session(session_id: str) -> None:
-    """撤销指定会话并清理索引。"""
+    """撤销指定会话。
+
+    仅当该会话是账号当前索引指向的会话时才清理索引，避免用旧会话 ID 登出
+    误删新登录会话的索引。
+    """
     redis = await get_redis()
     data = await redis.hgetall(_session_key(session_id))
     account_id = data.get("account_id")
     if account_id:
-        await redis.delete(_account_key(account_id))
+        current = await redis.get(_account_key(account_id))
+        if current == session_id:
+            await redis.delete(_account_key(account_id))
     await redis.delete(_session_key(session_id))
 
 
@@ -167,29 +167,3 @@ async def revoke_all_sessions(account_id: str) -> None:
     if old_session_id:
         await redis.delete(_session_key(old_session_id))
     await redis.delete(_account_key(account_id))
-
-
-async def rotate_session_id(old_session_id: str) -> str | None:
-    """轮转会话 ID（防会话固定攻击）：保留会话数据，生成新 ID。"""
-    redis = await get_redis()
-    data = await redis.hgetall(_session_key(old_session_id))
-    if not data:
-        return None
-
-    new_session_id = secrets.token_hex(SESSION_ID_BYTES)
-
-    # 复制数据到新 key
-    await redis.hset(_session_key(new_session_id), mapping=data)
-    ttl = await redis.ttl(_session_key(old_session_id))
-    if ttl > 0:
-        await redis.expire(_session_key(new_session_id), ttl)
-
-    # 更新索引
-    account_id = data.get("account_id", "")
-    if account_id:
-        await redis.set(_account_key(account_id), new_session_id, ex=ttl if ttl > 0 else None)
-
-    # 删除旧会话
-    await redis.delete(_session_key(old_session_id))
-
-    return new_session_id

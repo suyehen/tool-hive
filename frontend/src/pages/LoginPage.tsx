@@ -63,7 +63,7 @@ export default function LoginPage() {
       ]);
       login(result.csrf_token, session, me, operationItems);
       message.success('登录成功');
-      navigate(from, { replace: true });
+      navigate(me.must_change_password ? '/change-password' : from, { replace: true });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       if (msg && msg.includes('验证码')) {
