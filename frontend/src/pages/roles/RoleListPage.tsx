@@ -26,6 +26,7 @@ export default function RoleListPage() {
   const [opsRoleId, setOpsRoleId] = useState<string | null>(null);
   const [allOps, setAllOps] = useState<OperationItem[]>([]);
   const [roleOps, setRoleOps] = useState<OperationItem[]>([]);
+  const [opsVersion, setOpsVersion] = useState(0);
 
   const fetchRoles = async () => {
     setLoading(true);
@@ -103,6 +104,11 @@ export default function RoleListPage() {
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '移除失败';
       message.error(msg);
+      // 后端拒绝时恢复真实状态：重取操作项并强制重挂载 Tag（antd Tag 关闭后会自行隐藏）
+      try {
+        setRoleOps(await getRoleOperations(opsRoleId));
+        setOpsVersion((v) => v + 1);
+      } catch { /* 忽略恢复失败 */ }
     }
   };
 
@@ -121,7 +127,7 @@ export default function RoleListPage() {
       title: '操作', key: 'actions', width: 300,
       render: (_, record) => (
         <Space size="small">
-          {hasOperation('role:edit') && record.status !== 'archived' && (
+          {hasOperation('role:edit') && !record.is_super_admin && record.status !== 'archived' && (
             <Button size="small" onClick={() => openOpsModal(record.id)}>操作项</Button>
           )}
           {hasOperation('role:manage') && !record.is_super_admin && record.status === 'active' && (
@@ -146,6 +152,8 @@ export default function RoleListPage() {
 
   const assignedCodes = new Set(roleOps.map((o) => o.operation_code));
   const availableOps = allOps.filter((o) => !assignedCodes.has(o.operation_code));
+  const currentRole = roles.find((r) => r.id === opsRoleId);
+  const isSuperAdminRole = currentRole?.is_super_admin ?? false;
 
   return (
     <>
@@ -192,8 +200,8 @@ export default function RoleListPage() {
           <div style={{ marginTop: 8 }}>
             {roleOps.map((op) => (
               <Tag
-                key={op.operation_code}
-                closable
+                key={`${op.operation_code}-${opsVersion}`}
+                closable={!isSuperAdminRole}
                 onClose={() => handleRemoveOp(op.operation_code)}
                 style={{ marginBottom: 8 }}
               >
@@ -202,20 +210,22 @@ export default function RoleListPage() {
             ))}
           </div>
         </div>
-        <div>
-          <Typography.Text strong>添加操作项：</Typography.Text>
-          <Select
-            mode="multiple"
-            style={{ width: '100%', marginTop: 8 }}
-            placeholder="搜索并选择操作项"
-            options={availableOps.map((op) => ({
-              label: `${op.display_name} (${op.operation_code})`,
-              value: op.operation_code,
-            }))}
-            onChange={handleAssignOps}
-            value={[]}
-          />
-        </div>
+        {!isSuperAdminRole && (
+          <div>
+            <Typography.Text strong>添加操作项：</Typography.Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%', marginTop: 8 }}
+              placeholder="搜索并选择操作项"
+              options={availableOps.map((op) => ({
+                label: `${op.display_name} (${op.operation_code})`,
+                value: op.operation_code,
+              }))}
+              onChange={handleAssignOps}
+              value={[]}
+            />
+          </div>
+        )}
       </Modal>
     </>
   );

@@ -44,3 +44,16 @@ async def test_update_role_rejects_renaming_to_reserved_name() -> None:
     with pytest.raises(ValidationError) as exc_info:
         await svc.update_role("role-1", name=SUPER_ADMIN_ROLE_NAME)
     assert "不可使用" in str(exc_info.value)
+
+
+async def test_remove_operations_rejects_super_admin_without_deleting() -> None:
+    """超管角色移除操作项被拒绝，且不会执行任何删除。"""
+    role = BackendRole(name="super_admin", is_super_admin=True)
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=role)
+    svc = RoleService(db)
+
+    with pytest.raises(ValidationError) as exc_info:
+        await svc.remove_operations("role-1", ["account:view"])
+    assert "不能移除" in str(exc_info.value)
+    db.delete.assert_not_called()
