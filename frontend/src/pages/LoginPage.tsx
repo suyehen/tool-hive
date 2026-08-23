@@ -76,12 +76,9 @@ export default function LoginPage() {
       navigate(me.must_change_password ? '/change-password' : from, { replace: true });
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      if (msg && msg.includes('验证码')) {
-        loadCaptcha();
-        message.error(msg);
-      } else {
-        message.error(msg || '登录失败');
-      }
+      // 验证码为一次性消费，无论密码/验证码/其他错误，旧验证码均已失效，统一刷新
+      loadCaptcha();
+      message.error(msg || '登录失败');
     } finally {
       setLoading(false);
     }
