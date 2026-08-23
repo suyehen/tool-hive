@@ -57,8 +57,19 @@ async def _init_admin(username: str) -> int:
     return 0
 
 
+def _reconfigure_console_encoding() -> None:
+    """Windows 控制台代码页可能不支持中文，统一以 UTF-8 输出避免 UnicodeEncodeError。"""
+    # 对标准输出与错误输出分别重配置编码，兼容不支持 reconfigure 的流
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
     """ToolHive 管理命令入口。"""
+    # 入口处先修正控制台编码，避免中文提示在 cp936/cp950 等代码页下抛 UnicodeEncodeError
+    _reconfigure_console_encoding()
     parser = argparse.ArgumentParser(
         prog="toolhive", description="ToolHive 管理命令",
     )

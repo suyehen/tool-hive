@@ -81,7 +81,26 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-On Windows you can start with `python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100` (after activating your Python environment). Settings precedence: real environment variables > external YAML > `.env` file > defaults; all fields are documented in [.env.example](./tool-hive/.env.example) and [toolhive.example.yaml](./tool-hive/toolhive.example.yaml).
+On Windows (PowerShell), use the equivalent commands:
+
+```powershell
+cd tool-hive
+
+# Prepare local config
+Copy-Item .env.example .env
+
+# Initialize the database schema (database created by create_database.sql; connection from .env)
+psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
+
+# Initialize the first super admin (only on an empty database; set the env var with $env: in PowerShell)
+$env:TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>'
+toolhive init-admin --username admin
+
+# Start the service (activate the Python environment first, e.g. conda activate toolhive or .\.venv\Scripts\Activate.ps1)
+python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
+```
+
+> If the `toolhive` command is not installed, use `python -m toolhive.cli init-admin --username admin` instead. `scripts/verify.sh` is a bash script; on Windows run it with Git Bash / WSL. Settings precedence: real environment variables > external YAML > `.env` file > defaults; all fields are documented in [.env.example](./tool-hive/.env.example) and [toolhive.example.yaml](./tool-hive/toolhive.example.yaml).
 
 ### 2. Frontend (development)
 

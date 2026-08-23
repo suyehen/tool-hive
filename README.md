@@ -83,7 +83,26 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-Windows 本地可直接 `python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100` 启动（需先激活 Python 环境）。配置优先级：真实环境变量 > 外挂 YAML > `.env` 文件 > 代码默认值；完整字段说明见 [.env.example](./tool-hive/.env.example) 与 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)。
+Windows 本地（PowerShell）对应命令：
+
+```powershell
+cd tool-hive
+
+# 准备本地配置
+Copy-Item .env.example .env
+
+# 数据库初始化：建表（库已由 create_database.sql 创建；连接信息读取 .env）
+psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
+
+# 初始化首个超级管理员（仅空库可执行；PowerShell 使用 $env: 设置环境变量）
+$env:TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>'
+toolhive init-admin --username admin
+
+# 启动（需先激活 Python 环境，如 conda activate toolhive 或 .\.venv\Scripts\Activate.ps1）
+python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
+```
+
+> 若未安装 `toolhive` 命令，可用 `python -m toolhive.cli init-admin --username admin` 替代；`scripts/verify.sh` 为 bash 脚本，Windows 下可用 Git Bash / WSL 执行。配置优先级：真实环境变量 > 外挂 YAML > `.env` 文件 > 代码默认值；完整字段说明见 [.env.example](./tool-hive/.env.example) 与 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)。
 
 ### 2. 前端（开发模式）
 
