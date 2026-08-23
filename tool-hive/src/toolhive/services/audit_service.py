@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.infrastructure.database import async_session_factory
+from toolhive.infrastructure import database
 from toolhive.models.management_audit_log import ManagementAuditLog
 
 # 摘要键名包含以下片段时视为敏感字段，写入前替换为 ***
@@ -144,7 +144,7 @@ class AuditService:
     ) -> None:
         """使用独立事务立即写入审计记录（失败审计专用）。"""
         actor = get_audit_actor()
-        async with async_session_factory() as db:
+        async with database.async_session_factory() as db:
             record = ManagementAuditLog(
                 actor_account_id=(
                     actor_account_id if actor_account_id is not None

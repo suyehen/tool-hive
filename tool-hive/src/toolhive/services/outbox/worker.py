@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 
 from toolhive.config import OutboxRetrySettings, OutboxSettings
 from toolhive.core.enums import OutboxStatus
-from toolhive.infrastructure.database import async_session_factory
+from toolhive.infrastructure import database
 from toolhive.models.outbox_delivery import OutboxDelivery
 from toolhive.models.outbox_event import OutboxEvent
 from toolhive.services.outbox.deliveries import (
@@ -117,7 +117,7 @@ class OutboxWorker:
         """领取一批待处理事件（短事务）。"""
         now = _utcnow()
         locked_until = now + timedelta(seconds=self._outbox.lock_timeout_seconds)
-        async with async_session_factory() as session:
+        async with database.async_session_factory() as session:
             # 回收锁超时的 PROCESSING 事件
             await session.execute(
                 update(OutboxEvent)
@@ -166,7 +166,7 @@ class OutboxWorker:
 
     async def _process_event(self, event_id: str) -> None:
         """处理一个事件的所有投递目标。"""
-        async with async_session_factory() as session:
+        async with database.async_session_factory() as session:
             event = await session.get(OutboxEvent, event_id)
             if event is None:
                 return
@@ -239,7 +239,7 @@ class OutboxWorker:
                     event.event_id, delivery.target, attempts, last_error,
                 )
 
-        async with async_session_factory() as session:
+        async with database.async_session_factory() as session:
             await session.execute(
                 update(OutboxDelivery)
                 .where(OutboxDelivery.delivery_id == delivery.delivery_id)
@@ -257,7 +257,7 @@ class OutboxWorker:
     async def _refresh_event_status(self, event_id: str) -> None:
         """根据所有投递状态聚合更新事件状态。"""
         now = _utcnow()
-        async with async_session_factory() as session:
+        async with database.async_session_factory() as session:
             rows = (
                 await session.execute(
                     select(

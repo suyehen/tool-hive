@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions, DatePicker,
+  Table, Button, Modal, Form, Input, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions, DatePicker, Dropdown,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import {
   listCallerSystems, createCallerSystem, updateCallerSystem, enableCallerSystem, disableCallerSystem,
@@ -158,6 +159,32 @@ export default function CallerSystemListPage() {
     }
   };
 
+  const confirmLifecycle = (systemId: string, action: 'enable' | 'revive') => {
+    Modal.confirm({
+      title: action === 'enable' ? '确认启用？' : '确认恢复？',
+      content: action === 'enable' ? '确认启用该系统？' : '确认恢复该系统？',
+      onOk: () => handleLifecycle(systemId, action),
+    });
+  };
+
+  const confirmLifecycleWithReason = (
+    systemId: string,
+    action: 'disable' | 'revoke',
+  ) => {
+    Modal.confirm({
+      title: action === 'disable' ? '确认停用？' : '确认注销？',
+      content: action === 'disable' ? '确认停用该系统？' : '确认注销该系统？注销后 system_id 不可复用！',
+      onOk: () => {
+        const reason = prompt(action === 'revoke' ? '注销原因（必填）：' : '停用原因（可选）：') || '';
+        if (action === 'revoke' && !reason) {
+          message.warning('注销原因必填');
+          return;
+        }
+        handleLifecycle(systemId, action, reason);
+      },
+    });
+  };
+
   const handleAddKey = async () => {
     if (!detailId) return;
     const values = await keyForm.validateFields();
@@ -195,43 +222,45 @@ export default function CallerSystemListPage() {
     { title: '有效期', dataIndex: 'effective_state', key: 'effective_state', width: 90,
       render: (s) => renderEffectiveState(s) },
     {
-      title: '操作', key: 'actions', width: 320,
-      render: (_, record) => (
-        <Space size="small">
-          {hasOperation('caller_system:edit') && (
-            <Button size="small" onClick={() => openEdit(record)}>编辑</Button>
-          )}
-          {hasOperation('caller_system:view') && (
-            <Button size="small" onClick={() => openDetail(record.system_id)}>详情</Button>
-          )}
-          {hasOperation('caller_system:manage') && record.status === 'draft' && (
-            <Popconfirm title="确认启用？" onConfirm={() => handleLifecycle(record.system_id, 'enable')}>
-              <Button size="small" type="primary">启用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('caller_system:manage') && record.status === 'enabled' && (
-            <Popconfirm title="确认停用？" onConfirm={() => {
-              const reason = prompt('停用原因（可选）：') || '';
-              handleLifecycle(record.system_id, 'disable', reason);
-            }}>
-              <Button size="small" danger>停用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('caller_system:manage') && record.status === 'disabled' && (
-            <Space size="small">
-              <Popconfirm title="确认恢复？" onConfirm={() => handleLifecycle(record.system_id, 'revive')}>
-                <Button size="small">恢复</Button>
-              </Popconfirm>
-              <Popconfirm title="确认注销？注销后 system_id 不可复用！" onConfirm={() => {
-                const reason = prompt('注销原因（必填）：');
-                if (reason) handleLifecycle(record.system_id, 'revoke', reason);
-              }}>
-                <Button size="small" danger>注销</Button>
-              </Popconfirm>
-            </Space>
-          )}
-        </Space>
-      ),
+      title: '操作', key: 'actions', width: 80,
+      render: (_, record) => {
+        const items: MenuProps['items'] = [];
+        if (hasOperation('caller_system:edit')) {
+          items.push({ key: 'edit', label: '编辑', onClick: () => openEdit(record) });
+        }
+        if (hasOperation('caller_system:view')) {
+          items.push({ key: 'detail', label: '详情', onClick: () => openDetail(record.system_id) });
+        }
+        if (hasOperation('caller_system:manage')) {
+          if (record.status === 'draft') {
+            items.push({ key: 'enable', label: '启用', onClick: () => confirmLifecycle(record.system_id, 'enable') });
+          }
+          if (record.status === 'enabled') {
+            items.push({
+              key: 'disable',
+              label: '停用',
+              danger: true,
+              onClick: () => confirmLifecycleWithReason(record.system_id, 'disable'),
+            });
+          }
+          if (record.status === 'disabled') {
+            items.push({ key: 'revive', label: '恢复', onClick: () => confirmLifecycle(record.system_id, 'revive') });
+            items.push({
+              key: 'revoke',
+              label: '注销',
+              danger: true,
+              onClick: () => confirmLifecycleWithReason(record.system_id, 'revoke'),
+            });
+          }
+        }
+
+        if (items.length === 0) return null;
+        return (
+          <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+            <Button type="text" size="small" icon={<EllipsisOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 

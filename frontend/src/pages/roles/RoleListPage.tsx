@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Select, Popconfirm,
+  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Select, Dropdown,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
 import {
   listRoles, createRole, updateRole, updateRoleStatus,
   getRoleOperations, assignOperations, removeOperations, listAllOperations,
@@ -73,6 +74,14 @@ export default function RoleListPage() {
     }
   };
 
+  const confirmStatus = (record: RoleItem, status: string, action: string) => {
+    Modal.confirm({
+      title: `确认${action}？`,
+      content: `确认${action}角色「${record.name}」？`,
+      onOk: () => handleStatus(record.id, status),
+    });
+  };
+
   const openOpsModal = async (roleId: string) => {
     setOpsRoleId(roleId);
     try {
@@ -124,29 +133,46 @@ export default function RoleListPage() {
       render: (s) => <Tag color={statusColor[s]}>{s}</Tag>,
     },
     {
-      title: '操作', key: 'actions', width: 300,
-      render: (_, record) => (
-        <Space size="small">
-          {hasOperation('role:edit') && !record.is_super_admin && record.status !== 'archived' && (
-            <Button size="small" onClick={() => openOpsModal(record.id)}>操作项</Button>
-          )}
-          {hasOperation('role:manage') && !record.is_super_admin && record.status === 'active' && (
-            <Popconfirm title="确认停用？" onConfirm={() => handleStatus(record.id, 'disabled')}>
-              <Button size="small">停用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('role:manage') && record.status === 'disabled' && (
-            <Popconfirm title="确认启用？" onConfirm={() => handleStatus(record.id, 'active')}>
-              <Button size="small">启用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('role:manage') && record.status !== 'archived' && !record.is_super_admin && (
-            <Popconfirm title="确认归档？" onConfirm={() => handleStatus(record.id, 'archived')}>
-              <Button size="small">归档</Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+      title: '操作', key: 'actions', width: 80,
+      render: (_, record) => {
+        const items: MenuProps['items'] = [];
+        if (hasOperation('role:edit') && !record.is_super_admin && record.status !== 'archived') {
+          items.push({
+            key: 'ops',
+            label: '操作项',
+            onClick: () => openOpsModal(record.id),
+          });
+        }
+        if (hasOperation('role:manage') && !record.is_super_admin && record.status === 'active') {
+          items.push({
+            key: 'disable',
+            label: '停用',
+            onClick: () => confirmStatus(record, 'disabled', '停用'),
+          });
+        }
+        if (hasOperation('role:manage') && record.status === 'disabled') {
+          items.push({
+            key: 'enable',
+            label: '启用',
+            onClick: () => confirmStatus(record, 'active', '启用'),
+          });
+        }
+        if (hasOperation('role:manage') && record.status !== 'archived' && !record.is_super_admin) {
+          items.push({
+            key: 'archive',
+            label: '归档',
+            danger: true,
+            onClick: () => confirmStatus(record, 'archived', '归档'),
+          });
+        }
+
+        if (items.length === 0) return null;
+        return (
+          <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+            <Button type="text" size="small" icon={<EllipsisOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 

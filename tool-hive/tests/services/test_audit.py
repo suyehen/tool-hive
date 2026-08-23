@@ -100,7 +100,7 @@ async def test_record_standalone_commits_independently() -> None:
     db.add = MagicMock()
     db.commit = AsyncMock()
     factory = MagicMock(return_value=db)
-    with patch("toolhive.services.audit_service.async_session_factory", factory):
+    with patch("toolhive.infrastructure.database.async_session_factory", factory):
         await AuditService.record_standalone(
             action="admin.init",
             object_type="account",
@@ -144,7 +144,7 @@ async def test_init_super_admin_failure_records_standalone() -> None:
     factory = MagicMock(return_value=audit_db)
     svc = AccountService(db, AdminSecuritySettings())
 
-    with patch("toolhive.services.audit_service.async_session_factory", factory):
+    with patch("toolhive.infrastructure.database.async_session_factory", factory):
         with pytest.raises(ValidationError):
             await svc.init_super_admin("admin", "管理员", "WeakPass!")
 
@@ -167,7 +167,7 @@ async def test_disable_last_super_admin_records_failure() -> None:
     factory = MagicMock(return_value=audit_db)
     svc = AccountService(db, AdminSecuritySettings())
 
-    with patch("toolhive.services.audit_service.async_session_factory", factory), patch(
+    with patch("toolhive.infrastructure.database.async_session_factory", factory), patch(
         "toolhive.services.account_service.RoleService",
     ) as role_cls:
         role_svc = role_cls.return_value

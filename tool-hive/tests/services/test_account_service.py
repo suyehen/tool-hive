@@ -188,7 +188,7 @@ async def test_record_login_failure_updates_auth_state_only():
     svc = AccountService(AsyncMock(), AdminSecuritySettings())
 
     with patch(
-        "toolhive.infrastructure.transactions.async_session_factory",
+        "toolhive.infrastructure.database.async_session_factory",
         MagicMock(return_value=new_db),
     ):
         await svc.record_login_failure(_account())
@@ -217,7 +217,7 @@ async def test_record_login_failure_locks_at_threshold():
     svc = AccountService(AsyncMock(), AdminSecuritySettings())
 
     with patch(
-        "toolhive.infrastructure.transactions.async_session_factory",
+        "toolhive.infrastructure.database.async_session_factory",
         MagicMock(return_value=new_db),
     ):
         await svc.record_login_failure(_account())
@@ -225,6 +225,33 @@ async def test_record_login_failure_locks_at_threshold():
     assert fresh.auth_state.login_failures == settings.login_max_failures
     assert fresh.status == AccountStatus.LOCKED
     assert fresh.auth_state.locked_until is not None
+
+
+async def test_requires_new_reads_database_factory_at_call_time():
+    """回归：requires_new 独立事务在调用时动态读取当前会话工厂，不依赖导入时机。"""
+    fresh = MagicMock()
+    fresh.status = AccountStatus.ENABLED
+    fresh.auth_state = MagicMock()
+    fresh.auth_state.login_failures = 0
+    fresh.auth_state.locked_until = None
+
+    new_db = AsyncMock()
+    new_db.__aenter__ = AsyncMock(return_value=new_db)
+    new_db.__aexit__ = AsyncMock(return_value=False)
+    new_db.get = AsyncMock(return_value=fresh)
+    new_db.commit = AsyncMock()
+
+    svc = AccountService(AsyncMock(), AdminSecuritySettings())
+
+    # 仅 patch database 模块的工厂（等价于 init_infrastructure 初始化后的运行时状态）
+    with patch(
+        "toolhive.infrastructure.database.async_session_factory",
+        MagicMock(return_value=new_db),
+    ):
+        await svc.record_login_failure(_account())
+
+    assert fresh.auth_state.login_failures == 1
+    new_db.commit.assert_awaited_once()
 
 
 def test_account_domain_tablenames_share_prefix():
@@ -302,7 +329,7 @@ async def test_disable_rejects_offboarded():
     svc = AccountService(db, AdminSecuritySettings())
 
     with patch(
-        "toolhive.services.audit_service.async_session_factory",
+        "toolhive.infrastructure.database.async_session_factory",
         MagicMock(return_value=audit_db),
     ):
         with pytest.raises(ValidationError) as exc_info:
@@ -322,7 +349,7 @@ async def test_init_super_admin_rejects_when_accounts_exist():
     svc = AccountService(db, AdminSecuritySettings())
 
     with patch(
-        "toolhive.services.audit_service.async_session_factory",
+        "toolhive.infrastructure.database.async_session_factory",
         MagicMock(return_value=audit_db),
     ):
         with pytest.raises(ValidationError):
@@ -341,7 +368,7 @@ async def test_init_super_admin_rejects_weak_password():
     svc = AccountService(db, AdminSecuritySettings())
 
     with patch(
-        "toolhive.services.audit_service.async_session_factory",
+        "toolhive.infrastructure.database.async_session_factory",
         MagicMock(return_value=audit_db),
     ):
         with pytest.raises(ValidationError):

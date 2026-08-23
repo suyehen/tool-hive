@@ -17,7 +17,7 @@ from typing import Any, TypeVar, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from toolhive.infrastructure.database import async_session_factory
+from toolhive.infrastructure import database
 
 _TX_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
     "toolhive_tx_depth", default=0
@@ -44,7 +44,7 @@ def transactional(*, requires_new: bool = False) -> Callable[[_F], _F]:
             if requires_new:
                 # 独立事务：临时替换 self.db 为独立 session
                 original_db: AsyncSession = db
-                async with async_session_factory() as new_db:
+                async with database.async_session_factory() as new_db:
                     self.db = new_db
                     token = _TX_DEPTH.set(1)
                     try:
