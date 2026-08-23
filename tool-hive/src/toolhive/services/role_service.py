@@ -16,10 +16,10 @@ from toolhive.core.operation_codes import (
 )
 from toolhive.infrastructure.transactions import transactional
 from toolhive.models.account_role import AccountRole
-from toolhive.models.backend_role import BackendRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.models.management_operation import ManagementOperation
-from toolhive.models.role_operation import RoleOperation
+from toolhive.models.management_role import ManagementRole
+from toolhive.models.management_role_operation import ManagementRoleOperation
 from toolhive.services.audit_service import AuditService, get_current_operator_id
 
 logger = logging.getLogger(__name__)
@@ -37,26 +37,26 @@ class RoleService:
 
     async def list_roles(
         self, offset: int = 0, limit: int = 50,
-    ) -> tuple[list[BackendRole], int]:
+    ) -> tuple[list[ManagementRole], int]:
         result = await self.db.execute(
-            select(BackendRole)
-            .order_by(BackendRole.create_time.desc())
+            select(ManagementRole)
+            .order_by(ManagementRole.create_time.desc())
             .offset(offset)
             .limit(limit)
         )
         items = list(result.scalars().all())
         total = await self.db.scalar(
-            select(func.count()).select_from(BackendRole)
+            select(func.count()).select_from(ManagementRole)
         )
         return items, total or 0
 
-    async def get_role(self, role_id: str) -> BackendRole:
-        role = await self.db.get(BackendRole, role_id)
+    async def get_role(self, role_id: str) -> ManagementRole:
+        role = await self.db.get(ManagementRole, role_id)
         if role is None:
             raise NotFoundError(f"角色不存在: {role_id}")
         return role
 
-    def _ensure_role_mutable(self, role: BackendRole) -> None:
+    def _ensure_role_mutable(self, role: ManagementRole) -> None:
         """归档角色为终态，禁止任何修改操作。"""
         if role.status == RoleStatus.ARCHIVED:
             raise ValidationError("已归档角色不可修改")
@@ -64,17 +64,17 @@ class RoleService:
     @transactional()
     async def create_role(
         self, name: str, description: str | None = None,
-    ) -> BackendRole:
+    ) -> ManagementRole:
         if name == SUPER_ADMIN_ROLE_NAME:
             raise ValidationError("内置超级管理员角色不可创建")
         existing = await self.db.scalar(
-            select(BackendRole).where(BackendRole.name == name)
+            select(ManagementRole).where(ManagementRole.name == name)
         )
         if existing:
             raise ConflictError(f"角色名 '{name}' 已被使用")
 
         # 创建角色：显式写入创建时间与当前操作人 ID
-        role = BackendRole(
+        role = ManagementRole(
             name=name,
             description=description,
             is_super_admin=False,
@@ -98,7 +98,7 @@ class RoleService:
         name: str | None = None,
         description: str | None = None,
         expected_row_version: int | None = None,
-    ) -> BackendRole:
+    ) -> ManagementRole:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色")
@@ -114,7 +114,7 @@ class RoleService:
         before = {"name": role.name, "description": role.description}
         if name and name != role.name:
             existing = await self.db.scalar(
-                select(BackendRole).where(BackendRole.name == name)
+                select(ManagementRole).where(ManagementRole.name == name)
             )
             if existing:
                 raise ConflictError(f"角色名 '{name}' 已被使用")
@@ -140,7 +140,7 @@ class RoleService:
     @transactional()
     async def update_role_status(
         self, role_id: str, status: str,
-    ) -> BackendRole:
+    ) -> ManagementRole:
         role = await self.get_role(role_id)
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色状态")
@@ -170,8 +170,12 @@ class RoleService:
         await self.get_role(role_id)
         result = await self.db.execute(
             select(ManagementOperation)
-            .join(RoleOperation, RoleOperation.operation_code == ManagementOperation.operation_code)
-            .where(RoleOperation.role_id == role_id)
+            .join(
+                ManagementRoleOperation,
+                ManagementRoleOperation.operation_code
+                == ManagementOperation.operation_code,
+            )
+            .where(ManagementRoleOperation.role_id == role_id)
             .where(ManagementOperation.status == OperationStatus.ACTIVE)
         )
         return list(result.scalars().all())
@@ -187,14 +191,14 @@ class RoleService:
 
         for code in operation_codes:
             existing = await self.db.scalar(
-                select(RoleOperation).where(
-                    RoleOperation.role_id == role_id,
-                    RoleOperation.operation_code == code,
+                select(ManagementRoleOperation).where(
+                    ManagementRoleOperation.role_id == role_id,
+                    ManagementRoleOperation.operation_code == code,
                 )
             )
             if not existing:
                 # 分配操作项：显式写入创建时间与当前操作人 ID
-                op = RoleOperation(
+                op = ManagementRoleOperation(
                     role_id=role_id,
                     operation_code=code,
                     create_time=datetime.now(UTC),
@@ -220,9 +224,9 @@ class RoleService:
 
         for code in operation_codes:
             existing = await self.db.scalar(
-                select(RoleOperation).where(
-                    RoleOperation.role_id == role_id,
-                    RoleOperation.operation_code == code,
+                select(ManagementRoleOperation).where(
+                    ManagementRoleOperation.role_id == role_id,
+                    ManagementRoleOperation.operation_code == code,
                 )
             )
             if existing:
@@ -239,12 +243,12 @@ class RoleService:
     # 账号 — 角色关联
     # ═════════════════════════════════════════════════════════════
 
-    async def get_account_roles(self, account_id: str) -> list[BackendRole]:
+    async def get_account_roles(self, account_id: str) -> list[ManagementRole]:
         result = await self.db.execute(
-            select(BackendRole)
-            .join(AccountRole, AccountRole.role_id == BackendRole.id)
+            select(ManagementRole)
+            .join(AccountRole, AccountRole.role_id == ManagementRole.id)
             .where(AccountRole.account_id == account_id)
-            .where(BackendRole.status == RoleStatus.ACTIVE)
+            .where(ManagementRole.status == RoleStatus.ACTIVE)
         )
         return list(result.scalars().all())
 
@@ -349,8 +353,8 @@ class RoleService:
         ops: set[OperationCode] = set()
         for role in roles:
             result = await self.db.execute(
-                select(RoleOperation.operation_code).where(
-                    RoleOperation.role_id == role.id,
+                select(ManagementRoleOperation.operation_code).where(
+                    ManagementRoleOperation.role_id == role.id,
                 )
             )
             for row in result:
@@ -370,10 +374,10 @@ class RoleService:
         """账号是否持有 active 的超管角色。"""
         result = await self.db.execute(
             select(AccountRole.id)
-            .join(BackendRole, AccountRole.role_id == BackendRole.id)
+            .join(ManagementRole, AccountRole.role_id == ManagementRole.id)
             .where(AccountRole.account_id == account_id)
-            .where(BackendRole.is_super_admin.is_(True))
-            .where(BackendRole.status == RoleStatus.ACTIVE)
+            .where(ManagementRole.is_super_admin.is_(True))
+            .where(ManagementRole.status == RoleStatus.ACTIVE)
             .limit(1)
         )
         return result.first() is not None
@@ -382,10 +386,10 @@ class RoleService:
         """统计启用状态且持有 active 超管角色的账号数。"""
         count = await self.db.scalar(
             select(func.count(func.distinct(AccountRole.account_id)))
-            .join(BackendRole, AccountRole.role_id == BackendRole.id)
+            .join(ManagementRole, AccountRole.role_id == ManagementRole.id)
             .join(ManagementAccount, ManagementAccount.id == AccountRole.account_id)
-            .where(BackendRole.is_super_admin.is_(True))
-            .where(BackendRole.status == RoleStatus.ACTIVE)
+            .where(ManagementRole.is_super_admin.is_(True))
+            .where(ManagementRole.status == RoleStatus.ACTIVE)
             .where(ManagementAccount.status == AccountStatus.ENABLED)
         )
         return count or 0
@@ -420,13 +424,13 @@ class RoleService:
             super_admin_roles = await self._get_super_admin_role_ids()
             for sa_role_id in super_admin_roles:
                 existing = await self.db.scalar(
-                    select(RoleOperation).where(
-                        RoleOperation.role_id == sa_role_id,
-                        RoleOperation.operation_code == code,
+                    select(ManagementRoleOperation).where(
+                        ManagementRoleOperation.role_id == sa_role_id,
+                        ManagementRoleOperation.operation_code == code,
                     )
                 )
                 if not existing:
-                    self.db.add(RoleOperation(
+                    self.db.add(ManagementRoleOperation(
                         role_id=sa_role_id,
                         operation_code=code,
                     ))
@@ -443,13 +447,13 @@ class RoleService:
         await self.db.flush()
 
     @transactional()
-    async def ensure_super_admin_role(self) -> BackendRole:
+    async def ensure_super_admin_role(self) -> ManagementRole:
         """确保超级管理员角色存在（首次启动时创建）。"""
         role = await self.db.scalar(
-            select(BackendRole).where(BackendRole.name == SUPER_ADMIN_ROLE_NAME)
+            select(ManagementRole).where(ManagementRole.name == SUPER_ADMIN_ROLE_NAME)
         )
         if role is None:
-            role = BackendRole(
+            role = ManagementRole(
                 name=SUPER_ADMIN_ROLE_NAME,
                 description="内置超级管理员角色，不可删除、不可修改",
                 is_super_admin=True,
@@ -465,6 +469,6 @@ class RoleService:
 
     async def _get_super_admin_role_ids(self) -> list[str]:
         result = await self.db.execute(
-            select(BackendRole.id).where(BackendRole.is_super_admin)
+            select(ManagementRole.id).where(ManagementRole.is_super_admin)
         )
         return [r[0] for r in result]

@@ -9,12 +9,12 @@ import pytest
 from toolhive.core.enums import RoleStatus
 from toolhive.core.exceptions import ValidationError
 from toolhive.models.account_role import AccountRole
-from toolhive.models.backend_role import BackendRole
+from toolhive.models.management_role import ManagementRole
 from toolhive.services.role_service import RoleService
 
 
-def _archived_role() -> BackendRole:
-    role = BackendRole(name="ops", status=RoleStatus.ARCHIVED)
+def _archived_role() -> ManagementRole:
+    role = ManagementRole(name="ops", status=RoleStatus.ARCHIVED)
     role.row_version = 0
     return role
 

@@ -8,8 +8,15 @@ import pytest
 
 from toolhive.core.exceptions import ValidationError
 from toolhive.core.operation_codes import SUPER_ADMIN_ROLE_NAME
-from toolhive.models.backend_role import BackendRole
+from toolhive.models.management_role import ManagementRole
+from toolhive.models.management_role_operation import ManagementRoleOperation
 from toolhive.services.role_service import RoleService
+
+
+def test_role_domain_tablenames_share_prefix() -> None:
+    """角色域表名与类名统一 management_role 前缀。"""
+    assert ManagementRole.__tablename__ == "management_role"
+    assert ManagementRoleOperation.__tablename__ == "management_role_operation"
 
 
 async def test_create_role_rejects_reserved_super_admin_name() -> None:
@@ -35,7 +42,7 @@ async def test_create_role_normal_role_not_super_admin() -> None:
 
 async def test_update_role_rejects_renaming_to_reserved_name() -> None:
     """禁止把普通角色改名为 super_admin。"""
-    role = BackendRole(name="ops")
+    role = ManagementRole(name="ops")
     role.row_version = 0
     db = AsyncMock()
     db.get = AsyncMock(return_value=role)
@@ -48,7 +55,7 @@ async def test_update_role_rejects_renaming_to_reserved_name() -> None:
 
 async def test_remove_operations_rejects_super_admin_without_deleting() -> None:
     """超管角色移除操作项被拒绝，且不会执行任何删除。"""
-    role = BackendRole(name="super_admin", is_super_admin=True)
+    role = ManagementRole(name="super_admin", is_super_admin=True)
     db = AsyncMock()
     db.get = AsyncMock(return_value=role)
     svc = RoleService(db)

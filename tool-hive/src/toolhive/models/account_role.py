@@ -24,7 +24,7 @@ class AccountRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )
     role_id: Mapped[str] = mapped_column(
         String(32),
-        ForeignKey("backend_role.id", ondelete="CASCADE"),
+        ForeignKey("management_role.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

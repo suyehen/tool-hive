@@ -97,7 +97,7 @@ COMMENT ON COLUMN management_account_auth_state.update_by IS '修改人 ID';
 -- ------------------------------------------------------------
 -- 后台角色
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS backend_role (
+CREATE TABLE IF NOT EXISTS management_role (
     id              VARCHAR(32) PRIMARY KEY,
     name            VARCHAR(128) NOT NULL,
     description     VARCHAR(512),
@@ -108,25 +108,25 @@ CREATE TABLE IF NOT EXISTS backend_role (
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
     update_by      VARCHAR(32),
-    CONSTRAINT uq_backend_role_name UNIQUE (name)
+    CONSTRAINT uq_management_role_name UNIQUE (name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_backend_role_name
-    ON backend_role (name);
-CREATE INDEX IF NOT EXISTS idx_backend_role_status
-    ON backend_role (status);
+CREATE INDEX IF NOT EXISTS idx_management_role_name
+    ON management_role (name);
+CREATE INDEX IF NOT EXISTS idx_management_role_status
+    ON management_role (status);
 
-COMMENT ON TABLE backend_role IS '后台角色';
-COMMENT ON COLUMN backend_role.id IS '主键，应用层生成';
-COMMENT ON COLUMN backend_role.name IS '角色名称，唯一';
-COMMENT ON COLUMN backend_role.description IS '角色说明';
-COMMENT ON COLUMN backend_role.is_super_admin IS '是否为超级管理员角色';
-COMMENT ON COLUMN backend_role.status IS '角色状态';
-COMMENT ON COLUMN backend_role.row_version IS '乐观锁版本号，用于并发更新保护';
-COMMENT ON COLUMN backend_role.create_time IS '创建时间';
-COMMENT ON COLUMN backend_role.update_time IS '最后更新时间';
-COMMENT ON COLUMN backend_role.create_by IS '创建人 ID';
-COMMENT ON COLUMN backend_role.update_by IS '修改人 ID';
+COMMENT ON TABLE management_role IS '后台角色';
+COMMENT ON COLUMN management_role.id IS '主键，应用层生成';
+COMMENT ON COLUMN management_role.name IS '角色名称，唯一';
+COMMENT ON COLUMN management_role.description IS '角色说明';
+COMMENT ON COLUMN management_role.is_super_admin IS '是否为超级管理员角色';
+COMMENT ON COLUMN management_role.status IS '角色状态';
+COMMENT ON COLUMN management_role.row_version IS '乐观锁版本号，用于并发更新保护';
+COMMENT ON COLUMN management_role.create_time IS '创建时间';
+COMMENT ON COLUMN management_role.update_time IS '最后更新时间';
+COMMENT ON COLUMN management_role.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_role.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 管理账号 ↔ 后台角色 关联
@@ -200,13 +200,13 @@ CREATE TABLE IF NOT EXISTS management_audit_log (
     occurred_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_log_actor_account
+CREATE INDEX IF NOT EXISTS idx_management_audit_log_actor_account
     ON management_audit_log (actor_account_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_object
+CREATE INDEX IF NOT EXISTS idx_management_audit_log_object
     ON management_audit_log (object_type, object_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_action
+CREATE INDEX IF NOT EXISTS idx_management_audit_log_action
     ON management_audit_log (action);
-CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at
+CREATE INDEX IF NOT EXISTS idx_management_audit_log_occurred_at
     ON management_audit_log (occurred_at);
 
 COMMENT ON TABLE management_audit_log IS '管理操作审计记录（追加式）';
@@ -227,7 +227,7 @@ COMMENT ON COLUMN management_audit_log.occurred_at IS '事件发生时间';
 -- ------------------------------------------------------------
 -- 后台角色 ↔ 管理操作项 关联
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS role_operation (
+CREATE TABLE IF NOT EXISTS management_role_operation (
     id              VARCHAR(32) PRIMARY KEY,
     role_id         VARCHAR(32) NOT NULL,
     operation_code  VARCHAR(128) NOT NULL,
@@ -235,22 +235,22 @@ CREATE TABLE IF NOT EXISTS role_operation (
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
     update_by      VARCHAR(32),
-    CONSTRAINT uq_role_operation UNIQUE (role_id, operation_code)
+    CONSTRAINT uq_management_role_operation UNIQUE (role_id, operation_code)
 );
 
-CREATE INDEX IF NOT EXISTS idx_role_operation_role_id
-    ON role_operation (role_id);
-CREATE INDEX IF NOT EXISTS idx_role_operation_operation_code
-    ON role_operation (operation_code);
+CREATE INDEX IF NOT EXISTS idx_management_role_operation_role_id
+    ON management_role_operation (role_id);
+CREATE INDEX IF NOT EXISTS idx_management_role_operation_operation_code
+    ON management_role_operation (operation_code);
 
-COMMENT ON TABLE role_operation IS '后台角色与管理操作项关联';
-COMMENT ON COLUMN role_operation.id IS '主键，应用层生成';
-COMMENT ON COLUMN role_operation.role_id IS '后台角色 ID';
-COMMENT ON COLUMN role_operation.operation_code IS '管理操作码';
-COMMENT ON COLUMN role_operation.create_time IS '创建时间';
-COMMENT ON COLUMN role_operation.update_time IS '最后更新时间';
-COMMENT ON COLUMN role_operation.create_by IS '创建人 ID';
-COMMENT ON COLUMN role_operation.update_by IS '修改人 ID';
+COMMENT ON TABLE management_role_operation IS '后台角色与管理操作项关联';
+COMMENT ON COLUMN management_role_operation.id IS '主键，应用层生成';
+COMMENT ON COLUMN management_role_operation.role_id IS '后台角色 ID';
+COMMENT ON COLUMN management_role_operation.operation_code IS '管理操作码';
+COMMENT ON COLUMN management_role_operation.create_time IS '创建时间';
+COMMENT ON COLUMN management_role_operation.update_time IS '最后更新时间';
+COMMENT ON COLUMN management_role_operation.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_role_operation.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 密码历史

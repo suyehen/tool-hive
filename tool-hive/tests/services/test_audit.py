@@ -9,9 +9,9 @@ import pytest
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.enums import AccountStatus, CallerSystemStatus
 from toolhive.core.exceptions import ValidationError
-from toolhive.models.backend_role import BackendRole
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.management_audit_log import ManagementAuditLog
+from toolhive.models.management_role import ManagementRole
 from toolhive.services.account_service import AccountService
 from toolhive.services.audit_service import (
     AuditService,
@@ -204,7 +204,7 @@ async def test_role_create_records_audit() -> None:
 async def test_role_update_sets_audit_fields() -> None:
     """角色更新写入修改时间与当前操作人 ID。"""
     db = AsyncMock()
-    role = BackendRole(name="ops")
+    role = ManagementRole(name="ops")
     role.row_version = 0
     db.get = AsyncMock(return_value=role)
     db.scalar = AsyncMock(return_value=None)

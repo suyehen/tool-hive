@@ -8,17 +8,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
-class RoleOperation(Base, UUIDPrimaryKeyMixin, AuditMixin):
+class ManagementRoleOperation(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """后台角色 ↔ 管理操作项 关联。"""
 
-    __tablename__ = "role_operation"
+    __tablename__ = "management_role_operation"
     __table_args__ = (
-        UniqueConstraint("role_id", "operation_code", name="uq_role_operation"),
+        UniqueConstraint(
+            "role_id", "operation_code", name="uq_management_role_operation",
+        ),
     )
 
     role_id: Mapped[str] = mapped_column(
         String(32),
-        ForeignKey("backend_role.id", ondelete="CASCADE"),
+        ForeignKey("management_role.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

@@ -9,10 +9,10 @@ from toolhive.core.enums import RoleStatus
 from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 
 
-class BackendRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
+class ManagementRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """后台角色。"""
 
-    __tablename__ = "backend_role"
+    __tablename__ = "management_role"
 
     name: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False, index=True,
