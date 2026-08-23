@@ -30,10 +30,11 @@ class TestComputeNextRetry:
         assert (d1 - now) < (d2 - now)
 
     def test_delay_capped_at_max(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
-        now = datetime.now(UTC)
-        value = _compute_next_retry(30, OutboxRetrySettings())
-        assert value - now <= timedelta(seconds=1800)
+          monkeypatch.setattr(random, "uniform", lambda a, b: 0.0)
+          now = datetime.now(UTC)
+          value = _compute_next_retry(30, OutboxRetrySettings())
+          # 允许 1 秒容差，避免 now 与内部取时之间的毫秒差导致偶发失败
+          assert value - now <= timedelta(seconds=1801)
 
 
 class TestOutboxService:

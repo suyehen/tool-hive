@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from toolhive.core.snowflake import generate_id
 
 
 class Base(DeclarativeBase):
@@ -14,9 +15,9 @@ class Base(DeclarativeBase):
     pass
 
 
-def gen_uuid() -> str:
-    """生成不带连字符的 UUID 字符串。"""
-    return uuid.uuid4().hex
+def gen_id() -> str:
+    """生成业务主键雪花 ID（十进制字符串）。"""
+    return generate_id()
 
 
 class UUIDPrimaryKeyMixin:
@@ -24,7 +25,7 @@ class UUIDPrimaryKeyMixin:
 
     id: Mapped[str] = mapped_column(
         primary_key=True,
-        default=gen_uuid,
+        default=gen_id,
         index=True,
     )
 

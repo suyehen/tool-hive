@@ -258,9 +258,11 @@ async def test_caller_system_update_records_audit() -> None:
     system.system_id = "sys_1"
     system.name = "old-name"
     system.description = "old-desc"
-    system.department = "old-dept"
+    system.belonging_party = "old-party"
     system.owner = "old-owner"
     system.contact = "old-contact"
+    system.owner_email = None
+    system.get_tags.return_value = []
     system.effective_from = None
     system.effective_to = None
     system.row_version = 0

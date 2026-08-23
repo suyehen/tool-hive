@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 import time
 
+from toolhive.config import SnowflakeSettings
+
 
 class SnowflakeGenerator:
     """线程安全的雪花 ID 生成器。"""
@@ -77,3 +79,29 @@ class SnowflakeGenerator:
                 | self._sequence
             )
             return str(value)
+
+
+# 全局生成器：默认使用配置默认值，启动阶段由 configure_snowflake 覆盖
+_default_settings = SnowflakeSettings()
+_generator = SnowflakeGenerator(
+    epoch_ms=_default_settings.epoch_ms,
+    datacenter_id=_default_settings.datacenter_id,
+    worker_id=_default_settings.worker_id,
+    clock_rollback_tolerance_ms=_default_settings.clock_rollback_tolerance_ms,
+)
+
+
+def configure_snowflake(settings: SnowflakeSettings) -> None:
+    """启动阶段绑定雪花配置（多实例需保证 datacenter_id + worker_id 唯一）。"""
+    global _generator
+    _generator = SnowflakeGenerator(
+        epoch_ms=settings.epoch_ms,
+        datacenter_id=settings.datacenter_id,
+        worker_id=settings.worker_id,
+        clock_rollback_tolerance_ms=settings.clock_rollback_tolerance_ms,
+    )
+
+
+def generate_id() -> str:
+    """生成全局业务主键雪花 ID（十进制字符串）。"""
+    return _generator.next_id()

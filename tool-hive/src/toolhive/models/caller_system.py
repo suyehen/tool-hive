@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from toolhive.core.enums import CallerSystemStatus
@@ -15,6 +15,11 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """调用系统：调用 ToolHive 运行接口的外部软件系统。"""
 
     __tablename__ = "caller_system"
+    __table_args__ = (
+        UniqueConstraint(
+            "environment", "code", name="uq_caller_system_environment_code",
+        ),
+    )
 
     system_id: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False, index=True,
@@ -26,9 +31,16 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
     environment: Mapped[str] = mapped_column(
         String(20), nullable=False, index=True,
     )  # development | production
-    department: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    belonging_party: Mapped[str | None] = mapped_column(
+        String(256), nullable=True,
+    )
+    code: Mapped[str] = mapped_column(
+        String(128), nullable=False, index=True,
+    )
     owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
     contact: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    owner_email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=CallerSystemStatus.DRAFT, index=True,
     )  # draft | enabled | disabled | revoked
@@ -71,3 +83,18 @@ class CallerSystem(Base, UUIDPrimaryKeyMixin, AuditMixin):
         if self.effective_to and self.effective_to <= now:
             return "expired"
         return "effective"
+
+    def get_tags(self) -> list[str]:
+        """解析标签 JSON 数组。"""
+        import json
+        if not self.tags:
+            return []
+        try:
+            return json.loads(self.tags)
+        except (ValueError, TypeError):
+            return []
+
+    def set_tags(self, tags: list[str]) -> None:
+        """序列化标签为 JSON 数组字符串。"""
+        import json
+        self.tags = json.dumps(tags or [], ensure_ascii=False)

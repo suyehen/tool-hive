@@ -6,9 +6,12 @@ export interface CallerSystemItem {
   name: string;
   description: string | null;
   environment: string;
-  department: string | null;
+  belonging_party: string | null;
+  code: string;
   owner: string | null;
   contact: string | null;
+  owner_email: string | null;
+  tags: string[];
   status: string;
   effective_state: string;
   effective_from: string | null;
@@ -51,12 +54,15 @@ export async function listCallerSystems(offset = 0, limit = 50): Promise<CallerS
 }
 
 export async function createCallerSystem(params: {
+  code: string;
   name: string;
   environment: string;
   description?: string;
-  department?: string;
+  belonging_party?: string;
   owner?: string;
   contact?: string;
+  owner_email?: string;
+  tags?: string[];
   effective_from?: string | null;
   effective_to?: string | null;
 }): Promise<CallerSystemItem> {

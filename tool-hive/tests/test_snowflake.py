@@ -79,3 +79,29 @@ class TestSnowflakeGenerator:
             gen.next_id()
             value = gen.next_id()
             assert int(value) > 0
+
+
+def test_module_generate_id_returns_snowflake_string() -> None:
+    """模块级生成器返回十进制数字字符串。"""
+    from toolhive.core.snowflake import generate_id
+    value = generate_id()
+    assert isinstance(value, str)
+    assert value.isdigit()
+
+
+def test_model_pk_default_uses_snowflake() -> None:
+    """ORM 主键默认值生成雪花 ID（非 UUID 十六进制）。"""
+    from toolhive.models.base import gen_id
+    assert gen_id().isdigit()
+
+
+def test_configure_snowflake_binds_settings() -> None:
+    """启动阶段绑定配置后，生成器使用指定的机器位。"""
+    from toolhive.config import SnowflakeSettings
+    from toolhive.core import snowflake
+    snowflake.configure_snowflake(
+        SnowflakeSettings(datacenter_id=5, worker_id=7),
+    )
+    value = int(snowflake.generate_id())
+    assert ((value >> 17) & 0x1F) == 5
+    assert ((value >> 12) & 0x1F) == 7

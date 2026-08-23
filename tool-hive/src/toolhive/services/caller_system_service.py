@@ -50,16 +50,28 @@ class CallerSystemService:
     async def create_draft(
         self,
         name: str,
+        code: str,
         environment: str,
         description: str | None = None,
-        department: str | None = None,
+        belonging_party: str | None = None,
         owner: str | None = None,
         contact: str | None = None,
+        owner_email: str | None = None,
+        tags: list[str] | None = None,
         effective_from: datetime | None = None,
         effective_to: datetime | None = None,
     ) -> CallerSystem:
-        if environment not in ("development", "production"):
-            raise ValidationError("环境必须是 development 或 production")
+        if environment not in ("development", "staging", "production"):
+            raise ValidationError("环境必须是 development、staging 或 production")
+        # 同一环境下系统编码不可重复
+        existing = await self.db.scalar(
+            select(CallerSystem).where(
+                CallerSystem.environment == environment,
+                CallerSystem.code == code,
+            )
+        )
+        if existing:
+            raise ConflictError(f"该环境下系统编码 '{code}' 已被使用")
 
         # 创建调用系统：显式写入创建时间与当前操作人 ID
         system = CallerSystem(
@@ -67,15 +79,19 @@ class CallerSystemService:
             name=name,
             description=description,
             environment=environment,
-            department=department,
+            belonging_party=belonging_party,
+            code=code,
             owner=owner,
             contact=contact,
+            owner_email=owner_email,
             status=CallerSystemStatus.DRAFT,
             effective_from=effective_from,
             effective_to=effective_to,
             create_time=datetime.now(UTC),
             create_by=get_current_operator_id(),
         )
+        if tags is not None:
+            system.set_tags(tags)
         self.db.add(system)
         await self.db.flush()
         AuditService(self.db).add_record(
@@ -85,6 +101,7 @@ class CallerSystemService:
             after_summary={
                 "system_id": system.system_id,
                 "name": name,
+                "code": code,
                 "environment": environment,
             },
         )
@@ -96,9 +113,11 @@ class CallerSystemService:
         system_id: str,
         name: str | None = None,
         description: str | None = None,
-        department: str | None = None,
+        belonging_party: str | None = None,
         owner: str | None = None,
         contact: str | None = None,
+        owner_email: str | None = None,
+        tags: list[str] | None = None,
         effective_from: datetime | None = None,
         effective_to: datetime | None = None,
         expected_row_version: int | None = None,
@@ -117,9 +136,11 @@ class CallerSystemService:
         before = {
             "name": system.name,
             "description": system.description,
-            "department": system.department,
+            "belonging_party": system.belonging_party,
             "owner": system.owner,
             "contact": system.contact,
+            "owner_email": system.owner_email,
+            "tags": system.get_tags(),
             "effective_from": _dt(system.effective_from),
             "effective_to": _dt(system.effective_to),
         }
@@ -127,12 +148,16 @@ class CallerSystemService:
             system.name = name
         if description is not None:
             system.description = description
-        if department is not None:
-            system.department = department
+        if belonging_party is not None:
+            system.belonging_party = belonging_party
         if owner is not None:
             system.owner = owner
         if contact is not None:
             system.contact = contact
+        if owner_email is not None:
+            system.owner_email = owner_email
+        if tags is not None:
+            system.set_tags(tags)
         if effective_from is not None:
             system.effective_from = effective_from
         if effective_to is not None:
@@ -144,9 +169,11 @@ class CallerSystemService:
         after = {
             "name": system.name,
             "description": system.description,
-            "department": system.department,
+            "belonging_party": system.belonging_party,
             "owner": system.owner,
             "contact": system.contact,
+            "owner_email": system.owner_email,
+            "tags": system.get_tags(),
             "effective_from": _dt(system.effective_from),
             "effective_to": _dt(system.effective_to),
         }

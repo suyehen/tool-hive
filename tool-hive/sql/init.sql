@@ -1,18 +1,5 @@
 -- ============================================================
--- ToolHive 数据库初始化脚本
--- 用途：开发早期/新环境建表使用；表结构变化时直接修改本脚本，
---       不保留历史变更记录（当前阶段所有表变更均属预期内操作）。
--- 说明：
---   1. 所有业务主键 id 由应用层生成，DDL 不设置默认值。
---   2. create_time/update_time 由应用层维护，create_time 有数据库
---      默认值；create_by/update_by 记录操作人 ID，均可为空。
---   3. 时间统一使用 TIMESTAMPTZ。
---   4. 本脚本及后续所有字段变更一律不使用外键（FOREIGN KEY），
---      引用完整性由应用层保证。
---   5. 一期开发中所有 DDL 改动一律直接修改本脚本，不保留历史迁移记录，
---      不使用增量迁移机制。
---   6. 相关业务功能的表名必须使用相同前缀；账号域统一使用
---      management_account_* 前缀。
+-- ToolHive 数据库建表脚本
 -- ============================================================
 
 BEGIN;
@@ -51,7 +38,7 @@ COMMENT ON TABLE management_account IS '管理账号';
 COMMENT ON COLUMN management_account.id IS '主键，应用层生成';
 COMMENT ON COLUMN management_account.account IS '登录账号，全局唯一';
 COMMENT ON COLUMN management_account.real_name IS '姓名';
-COMMENT ON COLUMN management_account.external_user_id IS '外部身份唯一标识，保存工号或外部系统唯一标识，用于 SSO 登录时匹配内部账号';
+COMMENT ON COLUMN management_account.external_user_id IS '外部身份唯一标识（工号），用于 SSO 登录匹配内部账号';
 COMMENT ON COLUMN management_account.email IS '邮箱';
 COMMENT ON COLUMN management_account.mobile IS '手机号';
 COMMENT ON COLUMN management_account.department IS '部门';
@@ -186,7 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_management_operation_category
 
 COMMENT ON TABLE management_operation IS '管理操作项';
 COMMENT ON COLUMN management_operation.operation_code IS '操作码（主键），唯一';
-COMMENT ON COLUMN management_operation.category IS '操作权限分类（account/role/caller_system/tool/provider/system_task）';
+COMMENT ON COLUMN management_operation.category IS '操作权限分类';
 COMMENT ON COLUMN management_operation.display_name IS '显示名称';
 COMMENT ON COLUMN management_operation.description IS '操作项说明';
 COMMENT ON COLUMN management_operation.sort_order IS '分类内排序值，越小越靠前';
@@ -302,9 +289,12 @@ CREATE TABLE IF NOT EXISTS caller_system (
     name               VARCHAR(256) NOT NULL,
     description        TEXT,
     environment        VARCHAR(20) NOT NULL,
-    department         VARCHAR(256),
+    belonging_party    VARCHAR(256),
+    code               VARCHAR(128) NOT NULL,
     owner              VARCHAR(256),
     contact            VARCHAR(256),
+    owner_email        VARCHAR(256),
+    tags               TEXT,
     status             VARCHAR(20) NOT NULL DEFAULT 'draft',
     effective_from     TIMESTAMPTZ,
     effective_to       TIMESTAMPTZ,
@@ -317,7 +307,8 @@ CREATE TABLE IF NOT EXISTS caller_system (
     update_time         TIMESTAMPTZ,
     create_by         VARCHAR(32),
     update_by         VARCHAR(32),
-    CONSTRAINT uq_caller_system_system_id UNIQUE (system_id)
+    CONSTRAINT uq_caller_system_system_id UNIQUE (system_id),
+    CONSTRAINT uq_caller_system_environment_code UNIQUE (environment, code)
 );
 
 CREATE INDEX IF NOT EXISTS idx_caller_system_system_id
@@ -328,6 +319,8 @@ CREATE INDEX IF NOT EXISTS idx_caller_system_environment
     ON caller_system (environment);
 CREATE INDEX IF NOT EXISTS idx_caller_system_status
     ON caller_system (status);
+CREATE INDEX IF NOT EXISTS idx_caller_system_code
+    ON caller_system (code);
 
 COMMENT ON TABLE caller_system IS '调用系统';
 COMMENT ON COLUMN caller_system.id IS '主键，应用层生成';
@@ -335,9 +328,12 @@ COMMENT ON COLUMN caller_system.system_id IS '调用系统公开标识，唯一'
 COMMENT ON COLUMN caller_system.name IS '系统名称';
 COMMENT ON COLUMN caller_system.description IS '系统说明';
 COMMENT ON COLUMN caller_system.environment IS '所属环境';
-COMMENT ON COLUMN caller_system.department IS '所属部门或团队';
+COMMENT ON COLUMN caller_system.belonging_party IS '归属方（纯描述）';
+COMMENT ON COLUMN caller_system.code IS '系统编码，必填';
 COMMENT ON COLUMN caller_system.owner IS '负责人';
 COMMENT ON COLUMN caller_system.contact IS '联系方式';
+COMMENT ON COLUMN caller_system.owner_email IS '负责人邮箱（通知收件人）';
+COMMENT ON COLUMN caller_system.tags IS '标签（JSON 数组）';
 COMMENT ON COLUMN caller_system.status IS '状态';
 COMMENT ON COLUMN caller_system.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN caller_system.effective_from IS '生效时间';

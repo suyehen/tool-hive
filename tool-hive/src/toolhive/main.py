@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     init_infrastructure(settings.infrastructure, debug=settings.debug)
     init_redis(settings.infrastructure)
 
+    from toolhive.core import snowflake
     from toolhive.services.security import (
         captcha,
         csrf,
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
         session as session_security,
     )
     admin_security = settings.admin_security
+    snowflake.configure_snowflake(settings.snowflake)
     captcha.configure_security(admin_security)
     csrf.configure_security(admin_security)
     password.configure_security(admin_security)

@@ -11,11 +11,16 @@ from toolhive.core.time_utils import UTCDateTime
 
 class CreateCallerSystemRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
-    environment: str = Field(default="production", pattern="^(development|production)$")
+    code: str = Field(min_length=1, max_length=128, description="系统编码，必填")
+    environment: str = Field(
+        default="production", pattern="^(development|staging|production)$",
+    )
     description: str | None = Field(None)
-    department: str | None = Field(None, max_length=256)
+    belonging_party: str | None = Field(None, max_length=256)
     owner: str | None = Field(None, max_length=256)
     contact: str | None = Field(None, max_length=256)
+    owner_email: str | None = Field(None, max_length=256)
+    tags: list[str] = Field(default_factory=list)
     effective_from: datetime | None = None
     effective_to: datetime | None = None
 
@@ -23,9 +28,11 @@ class CreateCallerSystemRequest(BaseModel):
 class UpdateCallerSystemRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=256)
     description: str | None = None
-    department: str | None = None
+    belonging_party: str | None = None
     owner: str | None = None
     contact: str | None = None
+    owner_email: str | None = None
+    tags: list[str] | None = None
     effective_from: datetime | None = None
     effective_to: datetime | None = None
     row_version: int | None = Field(None, ge=0, description="乐观锁版本号，可选")
@@ -41,9 +48,12 @@ class CallerSystemResponse(BaseModel):
     name: str
     description: str | None
     environment: str
-    department: str | None
+    belonging_party: str | None
+    code: str
     owner: str | None
     contact: str | None
+    owner_email: str | None
+    tags: list[str]
     status: str
     effective_state: str
     effective_from: UTCDateTime | None

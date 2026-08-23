@@ -28,12 +28,15 @@ const effectiveStateTag: Record<string, { text: string; color: string }> = {
 };
 
 interface CallerSystemFormValues {
+  code: string;
   name: string;
   environment: string;
   description?: string;
-  department?: string;
+  belongingParty?: string;
   owner?: string;
   contact?: string;
+  ownerEmail?: string;
+  tags?: string[];
   effectiveFrom?: Dayjs | null;
   effectiveTo?: Dayjs | null;
 }
@@ -92,11 +95,14 @@ export default function CallerSystemListPage() {
     setEditId(record.system_id);
     setEditRowVersion(record.row_version);
     editForm.setFieldsValue({
+      code: record.code,
       name: record.name,
       description: record.description ?? undefined,
-      department: record.department ?? undefined,
+      belongingParty: record.belonging_party ?? undefined,
       owner: record.owner ?? undefined,
       contact: record.contact ?? undefined,
+      ownerEmail: record.owner_email ?? undefined,
+      tags: record.tags ?? [],
       effectiveFrom: record.effective_from ? dayjs(record.effective_from) : null,
       effectiveTo: record.effective_to ? dayjs(record.effective_to) : null,
     });
@@ -106,12 +112,15 @@ export default function CallerSystemListPage() {
   const handleCreate = async (values: CallerSystemFormValues) => {
     try {
       await createCallerSystem({
+        code: values.code,
         name: values.name,
         environment: values.environment,
         description: values.description,
-        department: values.department,
+        belonging_party: values.belongingParty,
         owner: values.owner,
         contact: values.contact,
+        owner_email: values.ownerEmail,
+        tags: values.tags,
         effective_from: values.effectiveFrom ? values.effectiveFrom.toISOString() : null,
         effective_to: values.effectiveTo ? values.effectiveTo.toISOString() : null,
       });
@@ -130,9 +139,11 @@ export default function CallerSystemListPage() {
       await updateCallerSystem(editId, {
         name: values.name,
         description: values.description,
-        department: values.department,
+        belonging_party: values.belongingParty,
         owner: values.owner,
         contact: values.contact,
+        owner_email: values.ownerEmail,
+        tags: values.tags,
         effective_from: values.effectiveFrom ? values.effectiveFrom.toISOString() : null,
         effective_to: values.effectiveTo ? values.effectiveTo.toISOString() : null,
         row_version: editRowVersion,
@@ -215,9 +226,13 @@ export default function CallerSystemListPage() {
 
   const columns: ColumnsType<CallerSystemItem> = [
     { title: 'system_id', dataIndex: 'system_id', key: 'system_id', width: 200, render: (v) => <Tag>{v}</Tag> },
+    { title: '编码', dataIndex: 'code', key: 'code' },
     { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '归属方', dataIndex: 'belonging_party', key: 'belonging_party', render: (v) => v || '-' },
     { title: '环境', dataIndex: 'environment', key: 'environment', width: 80,
-      render: (v) => v === 'production' ? <Tag color="blue">生产</Tag> : <Tag>开发</Tag> },
+      render: (v) => v === 'production' ? <Tag color="blue">生产</Tag>
+        : v === 'staging' ? <Tag color="orange">测试</Tag>
+          : <Tag>开发</Tag> },
     { title: '负责人', dataIndex: 'owner', key: 'owner', render: (v) => v || '-' },
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s) => <Tag color={statusColor[s]}>{s}</Tag> },
@@ -336,22 +351,37 @@ export default function CallerSystemListPage() {
         onOk={() => createForm.submit()}
       >
         <Form form={createForm} onFinish={handleCreate} layout="vertical">
+          <Form.Item name="code" label="系统编码" rules={[{ required: true }]}>
+            <Input placeholder="如 erp-order" />
+          </Form.Item>
           <Form.Item name="name" label="系统名称" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
           <Form.Item name="environment" label="环境" rules={[{ required: true }]} initialValue="development">
-            <Select options={[{ label: '开发', value: 'development' }, { label: '生产', value: 'production' }]} />
+            <Select options={[
+              { label: '开发', value: 'development' },
+              { label: '测试', value: 'staging' },
+              { label: '生产', value: 'production' },
+            ]} />
           </Form.Item>
-          <Form.Item name="description" label="说明"><Input.TextArea /></Form.Item>
-          <Form.Item name="department" label="部门"><Input /></Form.Item>
+          <Form.Item name="belongingParty" label="归属方（可选）">
+            <Input placeholder="如 xx 事业部 / xx 客户" />
+          </Form.Item>
           <Form.Item name="owner" label="负责人"><Input /></Form.Item>
           <Form.Item name="contact" label="联系方式"><Input /></Form.Item>
+          <Form.Item name="ownerEmail" label="负责人邮箱（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="tags" label="标签（可选）">
+            <Select mode="tags" placeholder="输入后回车添加" style={{ width: '100%' }} />
+          </Form.Item>
           <Form.Item name="effectiveFrom" label="生效时间（可选）">
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
           </Form.Item>
           <Form.Item name="effectiveTo" label="失效时间（可选）">
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
           </Form.Item>
+          <Form.Item name="description" label="说明"><Input.TextArea /></Form.Item>
         </Form>
       </Modal>
 
@@ -362,19 +392,30 @@ export default function CallerSystemListPage() {
         onOk={() => editForm.submit()}
       >
         <Form form={editForm} onFinish={handleEdit} layout="vertical">
+          <Form.Item name="code" label="系统编码">
+            <Input disabled />
+          </Form.Item>
           <Form.Item name="name" label="系统名称" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="description" label="说明"><Input.TextArea /></Form.Item>
-          <Form.Item name="department" label="部门"><Input /></Form.Item>
+          <Form.Item name="belongingParty" label="归属方（可选）">
+            <Input placeholder="如 xx 事业部 / xx 客户" />
+          </Form.Item>
           <Form.Item name="owner" label="负责人"><Input /></Form.Item>
           <Form.Item name="contact" label="联系方式"><Input /></Form.Item>
+          <Form.Item name="ownerEmail" label="负责人邮箱（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="tags" label="标签（可选）">
+            <Select mode="tags" placeholder="输入后回车添加" style={{ width: '100%' }} />
+          </Form.Item>
           <Form.Item name="effectiveFrom" label="生效时间（可选）">
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
           </Form.Item>
           <Form.Item name="effectiveTo" label="失效时间（可选）">
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} placeholder="留空表示不限" />
           </Form.Item>
+          <Form.Item name="description" label="说明"><Input.TextArea /></Form.Item>
         </Form>
       </Modal>
 
@@ -392,7 +433,17 @@ export default function CallerSystemListPage() {
             <Descriptions size="small" column={2} style={{ marginBottom: 16 }}>
               <Descriptions.Item label="system_id">{detailSystem.system_id}</Descriptions.Item>
               <Descriptions.Item label="名称">{detailSystem.name}</Descriptions.Item>
-              <Descriptions.Item label="环境">{detailSystem.environment === 'production' ? '生产' : '开发'}</Descriptions.Item>
+              <Descriptions.Item label="环境">
+                {detailSystem.environment === 'production' ? '生产'
+                  : detailSystem.environment === 'staging' ? '测试'
+                    : '开发'}
+              </Descriptions.Item>
+              <Descriptions.Item label="编码">{detailSystem.code || '-'}</Descriptions.Item>
+              <Descriptions.Item label="归属方">{detailSystem.belonging_party || '-'}</Descriptions.Item>
+              <Descriptions.Item label="负责人邮箱">{detailSystem.owner_email || '-'}</Descriptions.Item>
+              <Descriptions.Item label="标签">
+                {detailSystem.tags?.length ? detailSystem.tags.join('、') : '-'}
+              </Descriptions.Item>
               <Descriptions.Item label="生命周期状态">
                 <Tag color={statusColor[detailSystem.status]}>{detailSystem.status}</Tag>
               </Descriptions.Item>
