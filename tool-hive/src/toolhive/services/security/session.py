@@ -23,7 +23,7 @@ class SessionData(NamedTuple):
     """会话数据结构。"""
     session_id: str
     account_id: str
-    username: str
+    account: str
     security_version: str
     source_ip: str
     created_at: str
@@ -46,7 +46,7 @@ def _account_key(account_id: str) -> str:
 
 async def create_session(
     account_id: str,
-    username: str,
+    account: str,
     security_version: int,
     source_ip: str,
 ) -> str:
@@ -67,7 +67,7 @@ async def create_session(
 
     fields: list[str] = [
         "account_id", account_id,
-        "username", username,
+        "account", account,
         "security_version", str(security_version),
         "source_ip", source_ip,
         "created_at", str(int(now.timestamp())),
@@ -135,7 +135,7 @@ async def get_session(session_id: str) -> SessionData | None:
     return SessionData(
         session_id=session_id,
         account_id=data.get("account_id", ""),
-        username=data.get("username", ""),
+        account=data.get("account", ""),
         security_version=data.get("security_version", "0"),
         source_ip=data.get("source_ip", ""),
         created_at=data.get("created_at", ""),

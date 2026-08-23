@@ -60,7 +60,7 @@ def require_operation(code: OperationCode):
         db: AsyncSession = Depends(get_db),
     ):
         # 记录当前请求操作人，供 Service 层审计埋点读取
-        set_audit_actor(account.id, account.username)
+        set_audit_actor(account.id, account.account)
         from toolhive.services.role_service import RoleService
         svc = RoleService(db)
         if not await svc.check_operation(account.id, code):

@@ -8,10 +8,11 @@ import pytest
 
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.enums import AccountStatus
-from toolhive.core.exceptions import ValidationError
+from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
+from toolhive.models.management_audit_log import ManagementAuditLog
 from toolhive.services.account_service import AccountService
 from toolhive.services.audit_service import set_audit_actor
 
@@ -48,7 +49,7 @@ async def test_init_super_admin_creates_account_and_links_role():
     db.scalar = AsyncMock(side_effect=[0, MagicMock(id="role-1")])
     svc = AccountService(db, AdminSecuritySettings())
 
-    account = await svc.init_super_admin("admin", "StrongPass123!")
+    account = await svc.init_super_admin("admin", "管理员", "StrongPass123!")
 
     assert isinstance(account, ManagementAccount)
     # CLI 初始化无登录操作人：create_by 留空，创建时间显式写入
@@ -72,7 +73,7 @@ async def test_create_account_creates_auth_state_row():
     svc = AccountService(db, AdminSecuritySettings())
     set_audit_actor("acc-9", "operator")
 
-    account, _ = await svc.create_account("alice")
+    account, _ = await svc.create_account("alice", "Alice")
 
     added = [call.args[0] for call in db.add.call_args_list]
     auth_rows = [
@@ -82,6 +83,92 @@ async def test_create_account_creates_auth_state_row():
     assert auth_rows[0].account_id == account.id
     assert auth_rows[0].must_change_password is True
     assert auth_rows[0].temp_password_expires_at is not None
+
+
+async def test_create_account_sets_profile_fields():
+    """创建账号时写入姓名/邮箱/手机号/部门/备注等资料字段。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    set_audit_actor("acc-9", "operator")
+
+    account, _ = await svc.create_account(
+        "alice",
+        "Alice",
+        external_user_id="EMP001",
+        email="alice@example.com",
+        mobile="13800000000",
+        department="研发部",
+        remark="备注",
+    )
+
+    assert account.account == "alice"
+    assert account.real_name == "Alice"
+    assert account.external_user_id == "EMP001"
+    assert account.email == "alice@example.com"
+    assert account.mobile == "13800000000"
+    assert account.department == "研发部"
+    assert account.remark == "备注"
+
+
+async def test_init_super_admin_sets_real_name():
+    """初始化超管时通过参数写入姓名。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.scalar = AsyncMock(side_effect=[0, MagicMock(id="role-1")])
+    svc = AccountService(db, AdminSecuritySettings())
+
+    account = await svc.init_super_admin("admin", "管理员", "StrongPass123!")
+
+    assert account.account == "admin"
+    assert account.real_name == "管理员"
+
+
+async def test_update_profile_updates_fields_with_audit():
+    """编辑账号资料更新字段、自增版本号并写审计记录。"""
+    account = _account()
+    account.account = "alice"
+    account.real_name = "Alice"
+    account.email = None
+    account.mobile = None
+    account.department = None
+    account.remark = None
+    account.row_version = 3
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    set_audit_actor("acc-9", "operator")
+
+    updated = await svc.update_profile(
+        account,
+        real_name="Alice2",
+        email="a@b.com",
+        expected_row_version=3,
+    )
+
+    assert updated.real_name == "Alice2"
+    assert updated.email == "a@b.com"
+    assert updated.row_version == 4
+    records = [
+        call.args[0] for call in db.add.call_args_list
+        if isinstance(call.args[0], ManagementAuditLog)
+    ]
+    assert len(records) == 1
+    assert records[0].action == "account.update"
+    assert '"real_name": "Alice"' in records[0].before_summary
+    assert '"real_name": "Alice2"' in records[0].after_summary
+
+
+async def test_update_profile_row_version_conflict():
+    """编辑资料时 row_version 不一致抛出乐观锁冲突。"""
+    account = _account()
+    account.row_version = 1
+    db = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with pytest.raises(ConflictError):
+        await svc.update_profile(account, real_name="X", expected_row_version=0)
 
 
 async def test_record_login_failure_updates_auth_state_only():
@@ -159,7 +246,7 @@ async def test_create_account_sets_audit_fields():
     svc = AccountService(db, AdminSecuritySettings())
     set_audit_actor("acc-9", "operator")
 
-    account, _ = await svc.create_account("alice")
+    account, _ = await svc.create_account("alice", "Alice")
 
     assert account.create_time is not None
     assert account.create_by == "acc-9"
@@ -239,7 +326,7 @@ async def test_init_super_admin_rejects_when_accounts_exist():
         MagicMock(return_value=audit_db),
     ):
         with pytest.raises(ValidationError):
-            await svc.init_super_admin("admin", "StrongPass123!")
+            await svc.init_super_admin("admin", "管理员", "StrongPass123!")
 
 
 async def test_init_super_admin_rejects_weak_password():
@@ -258,7 +345,7 @@ async def test_init_super_admin_rejects_weak_password():
         MagicMock(return_value=audit_db),
     ):
         with pytest.raises(ValidationError):
-            await svc.init_super_admin("admin", "weak")
+            await svc.init_super_admin("admin", "管理员", "weak")
 
 
 async def test_has_any_account():

@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import {
   listAccounts, createAccount, updateAccountStatus, resetPassword, forceLogout,
-  offboardAccount,
+  offboardAccount, updateAccountProfile,
   type AccountItem,
 } from '../../api/accounts';
 import { useAuth } from '../../contexts/AuthContext';
@@ -28,6 +28,10 @@ export default function AccountListPage() {
   const [loading, setLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
+  const [editOpen, setEditOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editRowVersion, setEditRowVersion] = useState<number | null>(null);
+  const [editForm] = Form.useForm();
   const [resetResult, setResetResult] = useState<string | null>(null);
 
   const fetchAccounts = async () => {
@@ -45,9 +49,23 @@ export default function AccountListPage() {
 
   useEffect(() => { fetchAccounts(); }, []);
 
-  const handleCreate = async (values: { username: string; external_user_id?: string }) => {
+  const handleCreate = async (values: {
+    account: string;
+    real_name: string;
+    external_user_id?: string;
+    email?: string;
+    mobile?: string;
+    department?: string;
+    remark?: string;
+  }) => {
     try {
-      const result = await createAccount(values.username, values.external_user_id);
+      const result = await createAccount(values.account, values.real_name, {
+        external_user_id: values.external_user_id || undefined,
+        email: values.email || undefined,
+        mobile: values.mobile || undefined,
+        department: values.department || undefined,
+        remark: values.remark || undefined,
+      });
       message.success('账号创建成功');
       setResetResult(`临时密码：${result.temp_password}（请通知用户首次登录修改）`);
       setCreateOpen(false);
@@ -55,6 +73,46 @@ export default function AccountListPage() {
       fetchAccounts();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '创建失败';
+      message.error(msg);
+    }
+  };
+
+  const openEdit = (record: AccountItem) => {
+    setEditId(record.id);
+    setEditRowVersion(record.row_version);
+    editForm.setFieldsValue({
+      real_name: record.real_name,
+      email: record.email ?? undefined,
+      mobile: record.mobile ?? undefined,
+      department: record.department ?? undefined,
+      remark: record.remark ?? undefined,
+    });
+    setEditOpen(true);
+  };
+
+  const handleEdit = async (values: {
+    real_name: string;
+    email?: string;
+    mobile?: string;
+    department?: string;
+    remark?: string;
+  }) => {
+    if (!editId || editRowVersion === null) return;
+    try {
+      await updateAccountProfile(editId, {
+        real_name: values.real_name,
+        email: values.email || undefined,
+        mobile: values.mobile || undefined,
+        department: values.department || undefined,
+        remark: values.remark || undefined,
+        row_version: editRowVersion,
+      });
+      message.success('账号资料已更新');
+      setEditOpen(false);
+      editForm.resetFields();
+      fetchAccounts();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '修改失败';
       message.error(msg);
     }
   };
@@ -105,7 +163,8 @@ export default function AccountListPage() {
 
   const columns: ColumnsType<AccountItem> = [
     { title: '工号', dataIndex: 'external_user_id', key: 'external_user_id', render: (v) => v || '-' },
-    { title: '用户名', dataIndex: 'username', key: 'username' },
+    { title: '账号', dataIndex: 'account', key: 'account' },
+    { title: '姓名', dataIndex: 'real_name', key: 'real_name' },
     {
       title: '状态', dataIndex: 'status', key: 'status',
       render: (s) => <Tag color={statusColor[s] || 'default'}>{statusLabel[s] || s}</Tag>,
@@ -125,11 +184,18 @@ export default function AccountListPage() {
         };
 
         const items: MenuProps['items'] = [];
+        if (record.status !== 'offboarded') {
+          items.push({
+            key: 'edit',
+            label: '编辑',
+            onClick: () => openEdit(record),
+          });
+        }
         if (record.status === 'disabled') {
           items.push({
             key: 'enable',
             label: '启用',
-            onClick: () => confirmAction('启用账号', `确认启用 ${record.username}？`, () => handleAction(record.id, 'enable')),
+            onClick: () => confirmAction('启用账号', `确认启用 ${record.account}？`, () => handleAction(record.id, 'enable')),
           });
         }
         if (record.status === 'enabled') {
@@ -137,14 +203,14 @@ export default function AccountListPage() {
             key: 'disable',
             label: '禁用',
             danger: true,
-            onClick: () => confirmAction('禁用账号', `确认禁用 ${record.username}？`, () => handleAction(record.id, 'disable')),
+            onClick: () => confirmAction('禁用账号', `确认禁用 ${record.account}？`, () => handleAction(record.id, 'disable')),
           });
         }
         if (record.status === 'locked') {
           items.push({
             key: 'unlock',
             label: '解锁',
-            onClick: () => confirmAction('解锁账号', `确认解锁 ${record.username}？`, () => handleAction(record.id, 'unlock')),
+            onClick: () => confirmAction('解锁账号', `确认解锁 ${record.account}？`, () => handleAction(record.id, 'unlock')),
           });
         }
         if (record.status !== 'offboarded') {
@@ -154,12 +220,12 @@ export default function AccountListPage() {
           items.push({
             key: 'reset-password',
             label: '重置密码',
-            onClick: () => confirmAction('重置密码', `确认重置 ${record.username} 的密码？`, () => handleResetPassword(record.id)),
+            onClick: () => confirmAction('重置密码', `确认重置 ${record.account} 的密码？`, () => handleResetPassword(record.id)),
           });
           items.push({
             key: 'force-logout',
             label: '强制下线',
-            onClick: () => confirmAction('强制下线', `确认将 ${record.username} 强制下线？`, () => handleForceLogout(record.id)),
+            onClick: () => confirmAction('强制下线', `确认将 ${record.account} 强制下线？`, () => handleForceLogout(record.id)),
           });
           items.push({
             key: 'offboard',
@@ -167,7 +233,7 @@ export default function AccountListPage() {
             danger: true,
             onClick: () => confirmAction(
               '离职处理',
-              `确认对 ${record.username} 执行离职处理？账号将标记为已离职并撤销全部会话。`,
+              `确认对 ${record.account} 执行离职处理？账号将标记为已离职并撤销全部会话。`,
               () => handleOffboard(record.id),
             ),
           });
@@ -213,11 +279,51 @@ export default function AccountListPage() {
         onOk={() => createForm.submit()}
       >
         <Form form={createForm} onFinish={handleCreate} layout="vertical">
-          <Form.Item name="username" label="用户名" rules={[{ required: true }]}>
+          <Form.Item name="account" label="账号" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="real_name" label="姓名" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
           <Form.Item name="external_user_id" label="工号（可选）">
             <Input />
+          </Form.Item>
+          <Form.Item name="email" label="邮箱（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="mobile" label="手机号（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="department" label="部门（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="remark" label="备注（可选）">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="编辑账号资料"
+        open={editOpen}
+        onCancel={() => { setEditOpen(false); editForm.resetFields(); }}
+        onOk={() => editForm.submit()}
+      >
+        <Form form={editForm} onFinish={handleEdit} layout="vertical">
+          <Form.Item name="real_name" label="姓名" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="email" label="邮箱（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="mobile" label="手机号（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="department" label="部门（可选）">
+            <Input />
+          </Form.Item>
+          <Form.Item name="remark" label="备注（可选）">
+            <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
       </Modal>

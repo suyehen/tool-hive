@@ -49,7 +49,7 @@ class AuthService:
     @transactional()
     async def login_password(
         self,
-        username: str,
+        account: str,
         password: str,
         source_ip: str,
         captcha_id: str,
@@ -63,12 +63,12 @@ class AuthService:
         if not await consume_captcha(captcha_id, captcha_code):
             raise AuthenticationError("验证码错误或已过期，请刷新后重试")
 
-        account = await self.account_svc.get_by_username(username)
+        account = await self.account_svc.get_by_account(account)
 
         if account is None:
             # 账号不存在：按 IP 记录失败
             await record_login_failure(None, source_ip)
-            raise AuthenticationError("用户名或密码错误")
+            raise AuthenticationError("账号或密码错误")
 
         if not account.is_active():
             if account.status == AccountStatus.DISABLED:
@@ -85,7 +85,7 @@ class AuthService:
         if not is_valid:
             await self.account_svc.record_login_failure(account)
             await record_login_failure(account.id, source_ip)
-            raise AuthenticationError("用户名或密码错误")
+            raise AuthenticationError("账号或密码错误")
 
         # 临时密码规则：首次登录必须改密；临时密码过期禁止登录
         if account.auth_state.must_change_password:
@@ -120,7 +120,7 @@ class AuthService:
         """完成登录的最后一步：创建会话 + CSRF Token。"""
         session_id = await create_session(
             account_id=account.id,
-            username=account.username,
+            account=account.account,
             security_version=account.auth_state.security_version,
             source_ip=source_ip,
         )

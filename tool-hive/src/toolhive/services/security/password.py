@@ -55,7 +55,7 @@ def verify_password(password: str, password_hash: str) -> tuple[bool, bool]:
 
 def validate_password_strength(
     password: str,
-    username: str | None = None,
+    account: str | None = None,
     external_user_id: str | None = None,
 ) -> list[str]:
     """校验密码强度，返回违规项列表。"""
@@ -71,8 +71,8 @@ def validate_password_strength(
         )
     if password.lower() in _COMMON_WEAK_PASSWORDS:
         violations.append("密码过于常见")
-    if username and username.lower() in password.lower():
-        violations.append("密码不能包含用户名")
+    if account and account.lower() in password.lower():
+        violations.append("密码不能包含账号")
     if external_user_id and external_user_id.lower() in password.lower():
         violations.append("密码不能包含工号")
 

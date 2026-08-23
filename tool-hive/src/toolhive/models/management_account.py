@@ -18,11 +18,29 @@ class ManagementAccount(Base, UUIDPrimaryKeyMixin, AuditMixin):
     __tablename__ = "management_account"
 
     # ── 身份 ──
-    username: Mapped[str] = mapped_column(
+    account: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False, index=True,
+    )
+    real_name: Mapped[str] = mapped_column(
+        String(128), nullable=False,
     )
     external_user_id: Mapped[str | None] = mapped_column(
         String(256), unique=True, nullable=True, index=True,
+    )
+    email: Mapped[str | None] = mapped_column(
+        String(256), nullable=True,
+    )
+    mobile: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    department: Mapped[str | None] = mapped_column(
+        String(256), nullable=True,
+    )
+    remark: Mapped[str | None] = mapped_column(
+        String(512), nullable=True,
+    )
+    account_type: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
     )
 
     # ── 状态 ──

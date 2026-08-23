@@ -24,7 +24,7 @@ class NotFoundError(ToolHiveError):
 
 
 class ConflictError(ToolHiveError):
-    """状态冲突（如重复启用、用户名已被占用）。"""
+    """状态冲突（如重复启用、账号已被占用）。"""
 
 
 class ServiceUnavailableError(ToolHiveError):

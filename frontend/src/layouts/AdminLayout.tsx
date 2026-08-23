@@ -103,7 +103,7 @@ export default function AdminLayout() {
             }}
           >
             <Button type="text" icon={<UserOutlined />}>
-              {session?.username || '管理员'}
+              {session?.account || '管理员'}
             </Button>
           </Dropdown>
         </Header>

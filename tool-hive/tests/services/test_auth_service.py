@@ -26,7 +26,7 @@ async def test_login_rejects_blocked_ip() -> None:
     ) as consume:
         with pytest.raises(AuthenticationError) as exc_info:
             await svc.login_password(
-                username="admin",
+                account="admin",
                 password="whatever",
                 source_ip="1.2.3.4",
                 captcha_id="cid-1",
@@ -45,7 +45,7 @@ async def test_login_rejects_offboarded_account() -> None:
 
     db = AsyncMock()
     svc = AuthService(db, AdminSecuritySettings())
-    svc.account_svc.get_by_username = AsyncMock(return_value=account)
+    svc.account_svc.get_by_account = AsyncMock(return_value=account)
 
     with patch(
         "toolhive.services.auth_service.is_ip_blocked",
@@ -56,7 +56,7 @@ async def test_login_rejects_offboarded_account() -> None:
     ):
         with pytest.raises(AuthenticationError) as exc_info:
             await svc.login_password(
-                username="admin",
+                account="admin",
                 password="whatever",
                 source_ip="127.0.0.1",
                 captcha_id="cid-1",
@@ -78,7 +78,7 @@ async def test_login_rejects_expired_temp_password() -> None:
 
     db = AsyncMock()
     svc = AuthService(db, AdminSecuritySettings())
-    svc.account_svc.get_by_username = AsyncMock(return_value=account)
+    svc.account_svc.get_by_account = AsyncMock(return_value=account)
     svc.account_svc.record_login_success = AsyncMock()
 
     with patch(
@@ -93,7 +93,7 @@ async def test_login_rejects_expired_temp_password() -> None:
     ):
         with pytest.raises(AuthenticationError) as exc_info:
             await svc.login_password(
-                username="admin",
+                account="admin",
                 password="whatever",
                 source_ip="127.0.0.1",
                 captcha_id="cid-1",
@@ -116,11 +116,11 @@ async def test_login_allows_unexpired_temp_password() -> None:
     account.auth_state.temp_password_expires_at = datetime.now(UTC) + timedelta(hours=1)
     account.auth_state.security_version = 0
     account.id = "acc-1"
-    account.username = "admin"
+    account.account = "admin"
 
     db = AsyncMock()
     svc = AuthService(db, AdminSecuritySettings())
-    svc.account_svc.get_by_username = AsyncMock(return_value=account)
+    svc.account_svc.get_by_account = AsyncMock(return_value=account)
     svc.account_svc.record_login_success = AsyncMock()
 
     with patch(
@@ -143,7 +143,7 @@ async def test_login_allows_unexpired_temp_password() -> None:
         return_value="csrf-1",
     ):
         result = await svc.login_password(
-            username="admin",
+            account="admin",
             password="whatever",
             source_ip="127.0.0.1",
             captcha_id="cid-1",

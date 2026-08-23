@@ -118,7 +118,7 @@ def test_login_rejects_wrong_captcha() -> None:
         resp = client.post(
             "/auth/login",
             json={
-                "username": "admin",
+                "account": "admin",
                 "password": "whatever",
                 "captcha_id": "cid-1",
                 "captcha_code": "AB12",
@@ -148,12 +148,12 @@ def test_login_continues_after_valid_captcha() -> None:
         ),
     ):
         acct_svc = acct_cls.return_value
-        acct_svc.get_by_username = AsyncMock(return_value=None)
+        acct_svc.get_by_account = AsyncMock(return_value=None)
         client = TestClient(admin_app)
         resp = client.post(
             "/auth/login",
             json={
-                "username": "nobody",
+                "account": "nobody",
                 "password": "wrong-password",
                 "captcha_id": "cid-2",
                 "captcha_code": "CD34",
@@ -161,14 +161,14 @@ def test_login_continues_after_valid_captcha() -> None:
         )
 
     assert resp.status_code == 401
-    assert "用户名或密码错误" in resp.json()["detail"]
+    assert "账号或密码错误" in resp.json()["detail"]
 
 
 def test_login_success_creates_session_directly() -> None:
     """验证码与密码均正确时，直接创建会话并返回 session_id/csrf_token（H05）。"""
     account = MagicMock()
     account.id = "acc-1"
-    account.username = "admin"
+    account.account = "admin"
     account.is_active.return_value = True
     account.auth_state = MagicMock()
     account.auth_state.security_version = "0"
@@ -203,13 +203,13 @@ def test_login_success_creates_session_directly() -> None:
         ),
     ):
         acct_svc = acct_cls.return_value
-        acct_svc.get_by_username = AsyncMock(return_value=account)
+        acct_svc.get_by_account = AsyncMock(return_value=account)
         acct_svc.record_login_success = AsyncMock()
         client = TestClient(admin_app)
         resp = client.post(
             "/auth/login",
             json={
-                "username": "admin",
+                "account": "admin",
                 "password": "correct-password",
                 "captcha_id": "cid-3",
                 "captcha_code": "EF56",
@@ -220,5 +220,5 @@ def test_login_success_creates_session_directly() -> None:
     body = resp.json()
     assert body["session_id"] == "sid-1"
     assert body["csrf_token"] == "csrf-1"
-    assert body["username"] == "admin"
+    assert body["account"] == "admin"
     assert "set-cookie" in resp.headers

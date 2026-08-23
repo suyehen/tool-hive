@@ -8,20 +8,32 @@ from toolhive.core.time_utils import UTCDateTime
 
 
 class CreateAccountRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=128)
+    account: str = Field(min_length=1, max_length=128)
+    real_name: str = Field(min_length=1, max_length=128)
     external_user_id: str | None = Field(None, max_length=256)
+    email: str | None = Field(None, max_length=256)
+    mobile: str | None = Field(None, max_length=32)
+    department: str | None = Field(None, max_length=256)
+    remark: str | None = Field(None, max_length=512)
 
 
 class CreateAccountResponse(BaseModel):
     id: str
-    username: str
+    account: str
+    real_name: str
     status: str
     temp_password: str
 
 
 class AccountResponse(BaseModel):
     id: str
-    username: str
+    account: str
+    real_name: str
+    email: str | None
+    mobile: str | None
+    department: str | None
+    remark: str | None
+    account_type: str | None
     external_user_id: str | None
     status: str
     login_failures: int
@@ -38,6 +50,15 @@ class AccountListResponse(BaseModel):
 
 class StatusUpdateRequest(BaseModel):
     action: str = Field(description="enable | disable | unlock")
+
+
+class UpdateAccountProfileRequest(BaseModel):
+    real_name: str | None = Field(None, min_length=1, max_length=128)
+    email: str | None = Field(None, max_length=256)
+    mobile: str | None = Field(None, max_length=32)
+    department: str | None = Field(None, max_length=256)
+    remark: str | None = Field(None, max_length=512)
+    row_version: int = Field(ge=0)
 
 
 class AssignRoleRequest(BaseModel):

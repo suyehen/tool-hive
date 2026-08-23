@@ -3,7 +3,7 @@ import client from './client';
 export interface LoginResponse {
   session_id: string;
   csrf_token: string;
-  username: string;
+  account: string;
   must_change_password: boolean;
 }
 
@@ -19,13 +19,13 @@ export async function getCaptchaChallenge(): Promise<CaptchaChallenge> {
 }
 
 export async function loginPassword(
-  username: string,
+  account: string,
   password: string,
   captchaId: string,
   captchaCode: string,
 ): Promise<LoginResponse> {
   const { data } = await client.post('/auth/login', {
-    username,
+    account,
     password,
     captcha_id: captchaId,
     captcha_code: captchaCode,
@@ -39,14 +39,14 @@ export async function logout(): Promise<void> {
 
 export interface SessionInfo {
   account_id: string;
-  username: string;
+  account: string;
   source_ip: string;
   created_at: string;
 }
 
 export interface MeInfo {
   account_id: string;
-  username: string;
+  account: string;
   external_user_id: string | null;
   status: string;
   must_change_password: boolean;

@@ -44,7 +44,7 @@ class TestCreateSession:
 
         session_id = await create_session(
             account_id="test-account-123",
-            username="admin",
+            account="admin",
             security_version=0,
             source_ip="192.168.1.1",
         )
@@ -69,7 +69,7 @@ class TestCreateSession:
 
         await create_session(
             account_id="test-account-123",
-            username="admin",
+            account="admin",
             security_version=1,
             source_ip="10.0.0.1",
         )
@@ -99,7 +99,7 @@ class TestGetSession:
         mock_redis.get = AsyncMock(return_value="valid-session")
         mock_redis.hgetall.return_value = {
             "account_id": "acc-123",
-            "username": "admin",
+            "account": "admin",
             "security_version": "0",
             "source_ip": "1.2.3.4",
             "created_at": str(now - 100),
@@ -112,7 +112,7 @@ class TestGetSession:
         result = await get_session("valid-session")
         assert result is not None
         assert result.account_id == "acc-123"
-        assert result.username == "admin"
+        assert result.account == "admin"
         assert result.security_version == "0"
 
     @patch("toolhive.services.security.session.get_redis")
@@ -124,7 +124,7 @@ class TestGetSession:
         mock_redis.get = AsyncMock(return_value="newer-session")
         mock_redis.hgetall.return_value = {
             "account_id": "acc-123",
-            "username": "admin",
+            "account": "admin",
             "security_version": "0",
             "source_ip": "1.2.3.4",
             "created_at": str(now - 100),
@@ -154,7 +154,9 @@ class TestRevokeSession:
         assert mock_redis.delete.call_count == 2  # session key + account index
 
     @patch("toolhive.services.security.session.get_redis")
-    async def test_revoking_stale_session_keeps_current_index(self, mock_get_redis, mock_redis) -> None:
+    async def test_revoking_stale_session_keeps_current_index(
+        self, mock_get_redis, mock_redis,
+    ) -> None:
         """用旧会话 ID 登出时不误删当前会话索引。"""
         mock_get_redis.return_value = mock_redis
         mock_redis.get = AsyncMock(return_value="current-session")

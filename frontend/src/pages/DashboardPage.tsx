@@ -16,7 +16,7 @@ export default function DashboardPage() {
   return (
     <>
       <Title level={4} style={{ marginBottom: 24 }}>
-        欢迎，{session?.username}
+        欢迎，{session?.account}
       </Title>
       <Row gutter={24}>
         <Col span={8}>

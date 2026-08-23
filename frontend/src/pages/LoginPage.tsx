@@ -52,7 +52,7 @@ export default function LoginPage() {
     loadCaptcha();
   }, [loadCaptcha]);
 
-  const handleSubmit = async (values: { username: string; password: string; captchaCode: string }) => {
+  const handleSubmit = async (values: { account: string; password: string; captchaCode: string }) => {
     if (!captcha) {
       message.warning('请先加载验证码');
       return;
@@ -60,7 +60,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const result = await loginPassword(
-        values.username,
+        values.account,
         values.password,
         captcha.captcha_id,
         values.captchaCode,
@@ -107,13 +107,13 @@ export default function LoginPage() {
         </Title>
         <Form form={form} onFinish={handleSubmit} layout="vertical">
           <Form.Item
-            name="username"
-            rules={[{ required: true, message: '请输入用户名' }]}
+            name="account"
+            rules={[{ required: true, message: '请输入账号' }]}
             normalize={(value) => stripCJKChars(value ?? '')}
           >
             <Input
               prefix={<UserOutlined />}
-              placeholder="用户名"
+              placeholder="账号"
               size="large"
               autoComplete="username"
               onBeforeInput={blockCJKInput}

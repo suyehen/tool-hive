@@ -48,9 +48,9 @@ class TestPasswordStrength:
         violations = validate_password_strength("Abc1", "testuser")
         assert any("长度" in v for v in violations)
 
-    def test_contains_username(self) -> None:
+    def test_contains_account(self) -> None:
         violations = validate_password_strength("MyTestuser123!", "testuser")
-        assert any("用户名" in v for v in violations)
+        assert any("账号" in v for v in violations)
 
     def test_contains_external_id(self) -> None:
         violations = validate_password_strength(

@@ -27,19 +27,19 @@ def test_init_admin_help_documents_password_env(capsys) -> None:
     assert "TOOLHIVE_INIT_ADMIN_PASSWORD" in out
 
 
-def test_init_admin_requires_username() -> None:
+def test_init_admin_requires_account_and_real_name() -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["init-admin"])
     assert exc.value.code == 2
 
 
-def test_init_admin_dispatches_with_username() -> None:
+def test_init_admin_dispatches_with_account_and_real_name() -> None:
     with patch("toolhive.cli.load_settings") as load:
         with patch("toolhive.cli._init_admin", new=AsyncMock(return_value=0)) as init:
-            code = cli.main(["init-admin", "--username", "admin"])
+            code = cli.main(["init-admin", "--account", "admin", "--real-name", "管理员"])
     assert code == 0
     load.assert_called_once_with(None)
-    init.assert_awaited_once_with("admin")
+    init.assert_awaited_once_with("admin", "管理员")
 
 
 def test_init_admin_uses_initialized_session_factory() -> None:
@@ -59,9 +59,9 @@ def test_init_admin_uses_initialized_session_factory() -> None:
                 with patch("toolhive.services.account_service.AccountService") as account_cls:
                     svc = account_cls.return_value
                     svc.init_super_admin = AsyncMock()
-                    code = asyncio.run(cli._init_admin("admin"))
+                    code = asyncio.run(cli._init_admin("admin", "管理员"))
 
     assert code == 0
     svc.init_super_admin.assert_awaited_once_with(
-        username="admin", password="StrongPass123!",
+        account="admin", real_name="管理员", password="StrongPass123!",
     )

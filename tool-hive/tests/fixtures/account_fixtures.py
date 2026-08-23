@@ -10,20 +10,22 @@ from toolhive.models.management_account import ManagementAccount
 
 def _build_account(
     account_id: str,
-    username: str,
+    account: str,
     status: str,
     *,
+    real_name: str = "测试管理员",
     external_user_id: str | None = None,
     must_change_password: bool = False,
 ) -> ManagementAccount:
     """构造账号及其 1:1 认证状态（未持久化）。"""
-    account = ManagementAccount(
+    record = ManagementAccount(
         id=account_id,
-        username=username,
+        account=account,
+        real_name=real_name,
         external_user_id=external_user_id,
         status=status,
     )
-    account.auth_state = ManagementAccountAuthState(
+    record.auth_state = ManagementAccountAuthState(
         account_id=account_id,
         password_hash="$argon2id$...",
         login_failures=0,
@@ -32,7 +34,7 @@ def _build_account(
         temp_password_expires_at=None,
         security_version=0,
     )
-    return account
+    return record
 
 
 @pytest.fixture

@@ -40,7 +40,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
             if session:
                 request.state.session = session
                 request.state.account_id = session.account_id
-                request.state.username = session.username
+                request.state.account = session.account
             else:
                 request.state.session = None
         else:

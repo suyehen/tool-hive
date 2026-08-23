@@ -43,7 +43,9 @@ class AccountService:
     # ── 初始化 ──
 
     @transactional()
-    async def init_super_admin(self, username: str, password: str) -> ManagementAccount:
+    async def init_super_admin(
+        self, account: str, real_name: str, password: str,
+    ) -> ManagementAccount:
         """CLI 调用：仅当无任何账号时创建首个超级管理员并授予超管角色。"""
         audit = AuditService(self.db)
         try:
@@ -52,21 +54,22 @@ class AccountService:
             )
             if count and count > 0:
                 raise ValidationError("已存在管理账号，不能重复初始化超管")
-            violations = validate_password_strength(password, username)
+            violations = validate_password_strength(password, account)
             if violations:
                 raise ValidationError("; ".join(violations))
             # CLI 初始化无登录操作人：create_by 留空，创建时间显式写入
-            account = ManagementAccount(
-                username=username,
+            new_account = ManagementAccount(
+                account=account,
+                real_name=real_name,
                 status=AccountStatus.ENABLED,
                 create_time=datetime.now(UTC),
             )
-            self.db.add(account)
+            self.db.add(new_account)
             await self.db.flush()
 
             # 同步创建 1:1 认证状态：初始密码不需要强制修改
             self.db.add(ManagementAccountAuthState(
-                account_id=account.id,
+                account_id=new_account.id,
                 password_hash=hash_password(password),
                 login_failures=0,
                 locked_until=None,
@@ -78,25 +81,29 @@ class AccountService:
 
             # 确保内置超管角色存在，并建立账号 → 超管角色关联
             super_role = await RoleService(self.db).ensure_super_admin_role()
-            self.db.add(AccountRole(account_id=account.id, role_id=super_role.id))
+            self.db.add(AccountRole(account_id=new_account.id, role_id=super_role.id))
             await self.db.flush()
 
             audit.add_record(
                 action="admin.init",
                 object_type="account",
-                object_id=account.id,
-                actor_account_name=username,
-                after_summary={"username": username, "role": "super_admin"},
+                object_id=new_account.id,
+                actor_account_name=account,
+                after_summary={
+                    "account": account,
+                    "real_name": real_name,
+                    "role": "super_admin",
+                },
             )
             logger.info(
-                "首个超级管理员初始化完成: username=%s source=cli", username,
+                "首个超级管理员初始化完成: account=%s source=cli", account,
             )
-            return account
+            return new_account
         except ValidationError as exc:
             await AuditService.record_standalone(
                 action="admin.init",
                 object_type="account",
-                actor_account_name=username,
+                actor_account_name=account,
                 result="failure",
                 reason=str(exc),
             )
@@ -114,16 +121,21 @@ class AccountService:
     @transactional()
     async def create_account(
         self,
-        username: str,
+        account: str,
+        real_name: str,
         external_user_id: str | None = None,
+        email: str | None = None,
+        mobile: str | None = None,
+        department: str | None = None,
+        remark: str | None = None,
     ) -> tuple[ManagementAccount, str]:
         """创建新账号，返回 (账号对象, 临时密码)。"""
-        # 检查用户名历史（不可重复分配给历史账号）
+        # 检查登录账号历史（不可重复分配给历史账号）
         existing = await self.db.scalar(
-            select(ManagementAccount).where(ManagementAccount.username == username)
+            select(ManagementAccount).where(ManagementAccount.account == account)
         )
         if existing:
-            raise ConflictError(f"用户名 '{username}' 已被占用")
+            raise ConflictError(f"账号 '{account}' 已被占用")
 
         if external_user_id:
             dup = await self.db.scalar(
@@ -135,24 +147,29 @@ class AccountService:
                 raise ConflictError(f"工号 '{external_user_id}' 已被绑定")
 
         temp_pwd = generate_temp_password()
-        violations = validate_password_strength(temp_pwd, username, external_user_id)
+        violations = validate_password_strength(temp_pwd, account, external_user_id)
         if violations:
             raise ValidationError("; ".join(violations))
 
         # 创建账号：显式写入创建时间与当前操作人 ID
-        account = ManagementAccount(
-            username=username,
+        new_account = ManagementAccount(
+            account=account,
+            real_name=real_name,
             external_user_id=external_user_id,
+            email=email,
+            mobile=mobile,
+            department=department,
+            remark=remark,
             status=AccountStatus.ENABLED,
             create_time=datetime.now(UTC),
             create_by=get_current_operator_id(),
         )
-        self.db.add(account)
+        self.db.add(new_account)
         await self.db.flush()
 
         # 同步创建 1:1 认证状态：临时密码首次登录必须修改并设置过期时间
         self.db.add(ManagementAccountAuthState(
-            account_id=account.id,
+            account_id=new_account.id,
             password_hash=hash_password(temp_pwd),
             login_failures=0,
             locked_until=None,
@@ -165,10 +182,68 @@ class AccountService:
         AuditService(self.db).add_record(
             action="account.create",
             object_type="account",
-            object_id=account.id,
-            after_summary={"username": username, "external_user_id": external_user_id},
+            object_id=new_account.id,
+            after_summary={
+                "account": account,
+                "real_name": real_name,
+                "external_user_id": external_user_id,
+            },
         )
-        return account, temp_pwd
+        return new_account, temp_pwd
+
+    @transactional()
+    async def update_profile(
+        self,
+        account: ManagementAccount,
+        *,
+        real_name: str | None = None,
+        email: str | None = None,
+        mobile: str | None = None,
+        department: str | None = None,
+        remark: str | None = None,
+        expected_row_version: int,
+    ) -> ManagementAccount:
+        """管理员编辑账号资料（姓名/邮箱/手机号/部门/备注），带乐观锁并写审计。"""
+        # 乐观锁：版本不一致说明已被他人修改，拒绝覆盖
+        if account.row_version != expected_row_version:
+            raise ConflictError("账号资料已被他人修改，请刷新后重试")
+        before = {
+            "real_name": account.real_name,
+            "email": account.email,
+            "mobile": account.mobile,
+            "department": account.department,
+            "remark": account.remark,
+        }
+        # 仅更新请求中携带的字段；姓名不允许被清空
+        if real_name is not None:
+            account.real_name = real_name
+        if email is not None:
+            account.email = email
+        if mobile is not None:
+            account.mobile = mobile
+        if department is not None:
+            account.department = department
+        if remark is not None:
+            account.remark = remark
+        # 记录修改时间与当前操作人，版本号自增用于并发保护
+        account.update_time = datetime.now(UTC)
+        account.update_by = get_current_operator_id()
+        account.row_version += 1
+        await self.db.flush()
+        AuditService(self.db).add_record(
+            action="account.update",
+            object_type="account",
+            object_id=account.id,
+            before_summary=before,
+            after_summary={
+                "real_name": account.real_name,
+                "email": account.email,
+                "mobile": account.mobile,
+                "department": account.department,
+                "remark": account.remark,
+            },
+        )
+        return account
 
     # ── 查询 ──
 
@@ -178,9 +253,9 @@ class AccountService:
             raise NotFoundError(f"账号不存在: {account_id}")
         return account
 
-    async def get_by_username(self, username: str) -> ManagementAccount | None:
+    async def get_by_account(self, account: str) -> ManagementAccount | None:
         return await self.db.scalar(
-            select(ManagementAccount).where(ManagementAccount.username == username)
+            select(ManagementAccount).where(ManagementAccount.account == account)
         )
 
     async def list_accounts(
@@ -230,7 +305,7 @@ class AccountService:
         """管理员重置他人密码，返回临时密码。"""
         temp_pwd = generate_temp_password()
         violations = validate_password_strength(
-            temp_pwd, account.username, account.external_user_id,
+            temp_pwd, account.account, account.external_user_id,
         )
         if violations:
             raise ValidationError("; ".join(violations))
@@ -433,7 +508,7 @@ class AccountService:
         from toolhive.models.password_history import PasswordHistory
 
         violations = validate_password_strength(
-            new_password, account.username, account.external_user_id,
+            new_password, account.account, account.external_user_id,
         )
         if violations:
             raise ValidationError("; ".join(violations))

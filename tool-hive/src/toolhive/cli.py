@@ -20,7 +20,7 @@ async def _rebuild_chroma() -> int:
     return 0
 
 
-async def _init_admin(username: str) -> int:
+async def _init_admin(account: str, real_name: str) -> int:
     """初始化首个超级管理员（仅当无任何管理账号时可用）。"""
     from toolhive.config import settings
     from toolhive.core.exceptions import ToolHiveError
@@ -48,7 +48,9 @@ async def _init_admin(username: str) -> int:
     async with database.async_session_factory() as session:
         svc = AccountService(session, settings.admin_security)
         try:
-            await svc.init_super_admin(username=username, password=password)
+            await svc.init_super_admin(
+                account=account, real_name=real_name, password=password,
+            )
         except ToolHiveError as exc:
             print(f"初始化失败: {exc}", file=sys.stderr)
             return 1
@@ -92,9 +94,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     init_parser.add_argument(
-        "--username",
+        "--account",
         required=True,
-        help="首个超级管理员用户名（必填）",
+        help="首个超级管理员账号（必填）",
+    )
+    init_parser.add_argument(
+        "--real-name",
+        dest="real_name",
+        required=True,
+        help="首个超级管理员姓名（必填）",
     )
     args = parser.parse_args(argv)
 
@@ -103,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "rebuild-chroma":
         return asyncio.run(_rebuild_chroma())
     if args.command == "init-admin":
-        return asyncio.run(_init_admin(args.username))
+        return asyncio.run(_init_admin(args.account, args.real_name))
     parser.error(f"未知命令: {args.command}")
     return 2
 

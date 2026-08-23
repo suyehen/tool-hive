@@ -22,20 +22,26 @@ BEGIN;
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS management_account (
     id                        VARCHAR(32) PRIMARY KEY,
-    username                  VARCHAR(128) NOT NULL,
+    account                   VARCHAR(128) NOT NULL,
+    real_name                 VARCHAR(128) NOT NULL,
     external_user_id          VARCHAR(256),
+    email                     VARCHAR(256),
+    mobile                    VARCHAR(32),
+    department                VARCHAR(256),
+    remark                    VARCHAR(512),
+    account_type              VARCHAR(32),
     status                    VARCHAR(20) NOT NULL DEFAULT 'enabled',
     row_version               INTEGER NOT NULL DEFAULT 0,
     create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time                TIMESTAMPTZ,
     create_by                VARCHAR(32),
     update_by                VARCHAR(32),
-    CONSTRAINT uq_management_account_username UNIQUE (username),
+    CONSTRAINT uq_management_account_account UNIQUE (account),
     CONSTRAINT uq_management_account_external_user_id UNIQUE (external_user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_management_account_username
-    ON management_account (username);
+CREATE INDEX IF NOT EXISTS idx_management_account_account
+    ON management_account (account);
 CREATE INDEX IF NOT EXISTS idx_management_account_external_user_id
     ON management_account (external_user_id);
 CREATE INDEX IF NOT EXISTS idx_management_account_status
@@ -43,8 +49,14 @@ CREATE INDEX IF NOT EXISTS idx_management_account_status
 
 COMMENT ON TABLE management_account IS '管理账号';
 COMMENT ON COLUMN management_account.id IS '主键，应用层生成';
-COMMENT ON COLUMN management_account.username IS '登录用户名，全局唯一';
+COMMENT ON COLUMN management_account.account IS '登录账号，全局唯一';
+COMMENT ON COLUMN management_account.real_name IS '姓名';
 COMMENT ON COLUMN management_account.external_user_id IS '外部身份唯一标识，保存工号或外部系统唯一标识，用于 SSO 登录时匹配内部账号';
+COMMENT ON COLUMN management_account.email IS '邮箱';
+COMMENT ON COLUMN management_account.mobile IS '手机号';
+COMMENT ON COLUMN management_account.department IS '部门';
+COMMENT ON COLUMN management_account.remark IS '备注';
+COMMENT ON COLUMN management_account.account_type IS '账号类型/来源（预留二期 SSO 使用）';
 COMMENT ON COLUMN management_account.status IS '账号状态';
 COMMENT ON COLUMN management_account.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN management_account.create_time IS '创建时间';

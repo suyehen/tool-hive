@@ -48,7 +48,7 @@ psql "$DATABASE_URL" -f sql/init.sql
 
 ```bash
 TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
-  ./.venv/bin/toolhive init-admin --username admin --config /vdb/tool-hive/config/production.yaml
+  ./.venv/bin/toolhive init-admin --account admin --real-name '<姓名>' --config /vdb/tool-hive/config/production.yaml
 ```
 
 - 密码优先读环境变量 `TOOLHIVE_INIT_ADMIN_PASSWORD`；未设置时交互式输入两次（不显示）。

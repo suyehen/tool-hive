@@ -25,7 +25,7 @@ from toolhive.services.role_service import RoleService
 def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
     account = MagicMock()
     account.id = "acc-1"
-    account.username = "admin"
+    account.account = "admin"
     account.status = status
     account.auth_state = MagicMock()
     account.auth_state.security_version = 0
@@ -58,14 +58,14 @@ def _reset_actor() -> None:
 def test_sanitize_summary_masks_sensitive_fields() -> None:
     """密码、公钥等敏感字段在摘要中脱敏。"""
     out = sanitize_summary({
-        "username": "admin",
+        "account": "admin",
         "password": "p@ss",
         "nested": {"public_key": "abc"},
         "codes": ["x", "y"],
     })
     assert out["password"] == "***"
     assert out["nested"]["public_key"] == "***"
-    assert out["username"] == "admin"
+    assert out["account"] == "admin"
     assert out["codes"] == ["x", "y"]
 
 
@@ -123,7 +123,7 @@ async def test_init_super_admin_success_records_audit_in_tx() -> None:
     db.scalar = AsyncMock(side_effect=[0, MagicMock(id="role-1")])
     svc = AccountService(db, AdminSecuritySettings())
 
-    await svc.init_super_admin("admin", "StrongPass123!")
+    await svc.init_super_admin("admin", "管理员", "StrongPass123!")
 
     records = _audit_records(db)
     assert len(records) == 1
@@ -146,7 +146,7 @@ async def test_init_super_admin_failure_records_standalone() -> None:
 
     with patch("toolhive.services.audit_service.async_session_factory", factory):
         with pytest.raises(ValidationError):
-            await svc.init_super_admin("admin", "WeakPass!")
+            await svc.init_super_admin("admin", "管理员", "WeakPass!")
 
     audit_db.add.assert_called_once()
     record = audit_db.add.call_args.args[0]

@@ -114,10 +114,10 @@ snowflake:
   clock_rollback_tolerance_ms: 5
 
 # ── 首个超级管理员初始化（H03） ──
-# 新环境部署后执行：toolhive init-admin --username <名称>
+# 新环境部署后执行：toolhive init-admin --account <账号> --real-name <姓名>
 # 初始密码来源（二选一）：
 #   1. 环境变量 TOOLHIVE_INIT_ADMIN_PASSWORD（推荐，适合部署脚本）。示例：
-#      TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' toolhive init-admin --username admin
+#      TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' toolhive init-admin --account admin --real-name '<姓名>'
 #   2. 未设置该环境变量时，命令会交互式提示输入两次密码（不显示输入内容）。
 # 仅当管理账号表为空时可执行；已存在账号时拒绝执行并返回非零退出码，不覆盖任何数据。
 # 初始化成功后账号自动授予内置超管角色；超级管理员默认拥有全部有效管理操作项，

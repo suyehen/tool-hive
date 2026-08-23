@@ -74,7 +74,7 @@ psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
 
 # 初始化首个超级管理员（仅空库可执行，密码建议用环境变量传入）
 TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
-  ./.venv/bin/toolhive init-admin --username admin
+  ./.venv/bin/toolhive init-admin --account admin --real-name '<姓名>'
 
 # 启动（监听 127.0.0.1:8100，自动读取 .env）
 ./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
@@ -96,13 +96,13 @@ psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
 
 # 初始化首个超级管理员（仅空库可执行；PowerShell 使用 $env: 设置环境变量）
 $env:TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>'
-toolhive init-admin --username admin
+toolhive init-admin --account admin --real-name '<姓名>'
 
 # 启动（需先激活 Python 环境，如 conda activate toolhive 或 .\.venv\Scripts\Activate.ps1）
 python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 ```
 
-> 若未安装 `toolhive` 命令，可用 `python -m toolhive.cli init-admin --username admin` 替代；`scripts/verify.sh` 为 bash 脚本，Windows 下可用 Git Bash / WSL 执行。配置优先级：真实环境变量 > 外挂 YAML > `.env` 文件 > 代码默认值；完整字段说明见 [.env.example](./tool-hive/.env.example) 与 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)。
+> 若未安装 `toolhive` 命令，可用 `python -m toolhive.cli init-admin --account admin --real-name '<姓名>'` 替代；`scripts/verify.sh` 为 bash 脚本，Windows 下可用 Git Bash / WSL 执行。配置优先级：真实环境变量 > 外挂 YAML > `.env` 文件 > 代码默认值；完整字段说明见 [.env.example](./tool-hive/.env.example) 与 [toolhive.example.yaml](./tool-hive/toolhive.example.yaml)。
 
 ### 2. 前端（开发模式）
 

@@ -13,6 +13,7 @@ from toolhive.api.admin.accounts.schemas import (
     CreateAccountResponse,
     ResetPasswordResponse,
     StatusUpdateRequest,
+    UpdateAccountProfileRequest,
 )
 from toolhive.api.admin.deps import require_operation
 from toolhive.api.admin.roles.schemas import RoleResponse
@@ -46,7 +47,13 @@ async def list_accounts(
         items=[
             AccountResponse(
                 id=a.id,
-                username=a.username,
+                account=a.account,
+                real_name=a.real_name,
+                email=a.email,
+                mobile=a.mobile,
+                department=a.department,
+                remark=a.remark,
+                account_type=a.account_type,
                 external_user_id=a.external_user_id,
                 status=a.status,
                 login_failures=a.auth_state.login_failures,
@@ -72,15 +79,21 @@ async def create_account(
     svc = AccountService(db, admin_security)
     try:
         account, temp_pwd = await svc.create_account(
-            username=body.username,
+            account=body.account,
+            real_name=body.real_name,
             external_user_id=body.external_user_id,
+            email=body.email,
+            mobile=body.mobile,
+            department=body.department,
+            remark=body.remark,
         )
     except (ConflictError, ValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     return CreateAccountResponse(
         id=account.id,
-        username=account.username,
+        account=account.account,
+        real_name=account.real_name,
         status=account.status,
         temp_password=temp_pwd,
     )
@@ -101,7 +114,13 @@ async def get_account(
         raise HTTPException(status_code=404, detail=str(e))
     return AccountResponse(
         id=a.id,
-        username=a.username,
+        account=a.account,
+        real_name=a.real_name,
+        email=a.email,
+        mobile=a.mobile,
+        department=a.department,
+        remark=a.remark,
+        account_type=a.account_type,
         external_user_id=a.external_user_id,
         status=a.status,
         login_failures=a.auth_state.login_failures,
@@ -109,6 +128,55 @@ async def get_account(
         row_version=a.row_version,
         created_at=a.create_time,
         updated_at=a.update_time,
+    )
+
+
+@router.patch("/{account_id}", response_model=AccountResponse)
+async def update_account_profile(
+    account_id: str,
+    body: UpdateAccountProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    admin_security: AdminSecuritySettings = Depends(get_admin_security),
+    _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_MANAGE)),
+):
+    """编辑账号资料：姓名/邮箱/手机号/部门/备注（需 admin_account:manage）。"""
+    svc = AccountService(db, admin_security)
+    try:
+        target = await svc.get_by_id(account_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # 只透传请求中实际携带的字段，row_version 用于乐观锁
+    payload = body.model_dump(exclude_unset=True)
+    row_version = payload.pop("row_version")
+    try:
+        updated = await svc.update_profile(
+            target,
+            real_name=payload.get("real_name"),
+            email=payload.get("email"),
+            mobile=payload.get("mobile"),
+            department=payload.get("department"),
+            remark=payload.get("remark"),
+            expected_row_version=row_version,
+        )
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return AccountResponse(
+        id=updated.id,
+        account=updated.account,
+        real_name=updated.real_name,
+        email=updated.email,
+        mobile=updated.mobile,
+        department=updated.department,
+        remark=updated.remark,
+        account_type=updated.account_type,
+        external_user_id=updated.external_user_id,
+        status=updated.status,
+        login_failures=updated.auth_state.login_failures,
+        must_change_password=updated.auth_state.must_change_password,
+        row_version=updated.row_version,
+        created_at=updated.create_time,
+        updated_at=updated.update_time,
     )
 
 

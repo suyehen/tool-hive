@@ -93,7 +93,7 @@ async def login(
     try:
         source_ip = _get_client_ip(request)
         result = await svc.login_password(
-            username=body.username,
+            account=body.account,
             password=body.password,
             source_ip=source_ip,
             captcha_id=body.captcha_id,
@@ -106,7 +106,7 @@ async def login(
     return LoginResponse(
         session_id=result.session_id,
         csrf_token=result.csrf_token,
-        username=result.account.username,
+        account=result.account.account,
         must_change_password=result.account.auth_state.must_change_password,
     )
 
@@ -148,7 +148,7 @@ async def get_session_info(
             created_at_dt = None
     return SessionInfoResponse(
         account_id=session.account_id,
-        username=session.username,
+        account=session.account,
         source_ip=session.source_ip,
         created_at=created_at_dt,
     )
@@ -161,7 +161,7 @@ async def get_me(
     """获取当前账号信息（权限实时生效，前端据此刷新展示）。"""
     return {
         "account_id": account.id,
-        "username": account.username,
+        "account": account.account,
         "external_user_id": account.external_user_id,
         "status": account.status,
         "must_change_password": account.auth_state.must_change_password,
@@ -204,7 +204,7 @@ async def change_password(
         source_ip = _get_client_ip(request)
         new_sid = await create_session(
             account_id=account.id,
-            username=account.username,
+            account=account.account,
             security_version=account.auth_state.security_version,
             source_ip=source_ip,
         )
