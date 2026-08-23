@@ -78,25 +78,27 @@ class AuthService:
             if account.is_locked():
                 raise AuthenticationError("账号已被锁定，请稍后再试")
 
-        # 校验密码
-        is_valid, needs_rehash = verify_password(password, account.password_hash)
+        # 校验密码（密码哈希在认证状态表中）
+        is_valid, needs_rehash = verify_password(
+            password, account.auth_state.password_hash,
+        )
         if not is_valid:
             await self.account_svc.record_login_failure(account)
             await record_login_failure(account.id, source_ip)
             raise AuthenticationError("用户名或密码错误")
 
         # 临时密码规则：首次登录必须改密；临时密码过期禁止登录
-        if account.must_change_password:
+        if account.auth_state.must_change_password:
             if (
-                account.temp_password_expires_at
-                and account.temp_password_expires_at <= datetime.now(UTC)
+                account.auth_state.temp_password_expires_at
+                and account.auth_state.temp_password_expires_at <= datetime.now(UTC)
             ):
                 raise AuthenticationError("临时密码已过期，请联系管理员重置")
 
         # 密码正确 → 升级哈希（如需要）
         if needs_rehash:
             from toolhive.services.security.password import hash_password
-            account.password_hash = hash_password(password)
+            account.auth_state.password_hash = hash_password(password)
             await self.db.flush()
 
         # 登录成功：记录成功并清除失败计数
@@ -119,7 +121,7 @@ class AuthService:
         session_id = await create_session(
             account_id=account.id,
             username=account.username,
-            security_version=account.security_version,
+            security_version=account.auth_state.security_version,
             source_ip=source_ip,
         )
         csrf_token = generate_csrf_token(session_id)

@@ -107,7 +107,7 @@ async def login(
         session_id=result.session_id,
         csrf_token=result.csrf_token,
         username=result.account.username,
-        must_change_password=result.account.must_change_password,
+        must_change_password=result.account.auth_state.must_change_password,
     )
 
 
@@ -164,7 +164,7 @@ async def get_me(
         "username": account.username,
         "external_user_id": account.external_user_id,
         "status": account.status,
-        "must_change_password": account.must_change_password,
+        "must_change_password": account.auth_state.must_change_password,
     }
 
 
@@ -205,7 +205,7 @@ async def change_password(
         new_sid = await create_session(
             account_id=account.id,
             username=account.username,
-            security_version=account.security_version,
+            security_version=account.auth_state.security_version,
             source_ip=source_ip,
         )
         _set_session_cookie(response, new_sid)

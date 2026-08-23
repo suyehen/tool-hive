@@ -11,7 +11,7 @@ from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 class PasswordHistory(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """密码历史记录（用于禁止重复使用最近 N 次密码）。"""
 
-    __tablename__ = "password_history"
+    __tablename__ = "management_account_password_history"
 
     account_id: Mapped[str] = mapped_column(
         String(32),

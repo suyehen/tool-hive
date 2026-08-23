@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Form, Input, Button, Card, message, Typography } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
@@ -13,6 +13,16 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 
 const { Title } = Typography;
+
+// 登录相关输入不允许出现中文/全角字符（含中文标点），避免误输入
+const CJK_INPUT_REGEX = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF\u3000-\u303F]/;
+const stripCJKChars = (value: string) => value.replace(new RegExp(CJK_INPUT_REGEX.source, 'g'), '');
+const blockCJKInput = (event: FormEvent<HTMLInputElement>) => {
+  const data = (event.nativeEvent as InputEvent).data;
+  if (data && CJK_INPUT_REGEX.test(data)) {
+    event.preventDefault();
+  }
+};
 
 export default function LoginPage() {
   const [form] = Form.useForm();
@@ -96,15 +106,45 @@ export default function LoginPage() {
           账号登录
         </Title>
         <Form form={form} onFinish={handleSubmit} layout="vertical">
-          <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
+          <Form.Item
+            name="username"
+            rules={[{ required: true, message: '请输入用户名' }]}
+            normalize={(value) => stripCJKChars(value ?? '')}
+          >
+            <Input
+              prefix={<UserOutlined />}
+              placeholder="用户名"
+              size="large"
+              autoComplete="username"
+              onBeforeInput={blockCJKInput}
+            />
           </Form.Item>
-          <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
+          <Form.Item
+            name="password"
+            rules={[{ required: true, message: '请输入密码' }]}
+            normalize={(value) => stripCJKChars(value ?? '')}
+          >
+            <Input.Password
+              prefix={<LockOutlined />}
+              placeholder="密码"
+              size="large"
+              autoComplete="current-password"
+              onBeforeInput={blockCJKInput}
+            />
           </Form.Item>
-          <Form.Item name="captchaCode" rules={[{ required: true, message: '请输入验证码' }]}>
+          <Form.Item
+            name="captchaCode"
+            rules={[{ required: true, message: '请输入验证码' }]}
+            normalize={(value) => stripCJKChars(value ?? '')}
+          >
             <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-              <Input placeholder="验证码" size="large" maxLength={8} />
+              <Input
+                placeholder="验证码"
+                size="large"
+                maxLength={8}
+                autoComplete="off"
+                onBeforeInput={blockCJKInput}
+              />
               {captcha && (
                 <img
                   src={captcha.image}

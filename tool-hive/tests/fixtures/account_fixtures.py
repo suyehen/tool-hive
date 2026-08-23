@@ -4,31 +4,49 @@ from __future__ import annotations
 
 import pytest
 
+from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.management_account import ManagementAccount
+
+
+def _build_account(
+    account_id: str,
+    username: str,
+    status: str,
+    *,
+    external_user_id: str | None = None,
+    must_change_password: bool = False,
+) -> ManagementAccount:
+    """构造账号及其 1:1 认证状态（未持久化）。"""
+    account = ManagementAccount(
+        id=account_id,
+        username=username,
+        external_user_id=external_user_id,
+        status=status,
+    )
+    account.auth_state = ManagementAccountAuthState(
+        account_id=account_id,
+        password_hash="$argon2id$...",
+        login_failures=0,
+        locked_until=None,
+        must_change_password=must_change_password,
+        temp_password_expires_at=None,
+        security_version=0,
+    )
+    return account
 
 
 @pytest.fixture
 def sample_account() -> ManagementAccount:
     """返回一个构建好的 ManagementAccount 实例（未持久化）。"""
-    return ManagementAccount(
-        id="abc123def456",
-        username="test_admin",
-        password_hash="$argon2id$...",
+    return _build_account(
+        "abc123def456",
+        "test_admin",
+        "enabled",
         external_user_id="EMP001",
-        status="enabled",
-        login_failures=0,
-        must_change_password=False,
     )
 
 
 @pytest.fixture
 def disabled_account() -> ManagementAccount:
     """返回一个禁用状态的账号。"""
-    return ManagementAccount(
-        id="disabled001",
-        username="disabled_user",
-        password_hash="$argon2id$...",
-        status="disabled",
-        login_failures=0,
-        must_change_password=False,
-    )
+    return _build_account("disabled001", "disabled_user", "disabled")

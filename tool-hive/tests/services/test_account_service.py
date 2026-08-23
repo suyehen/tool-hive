@@ -9,6 +9,7 @@ import pytest
 from toolhive.config import AdminSecuritySettings
 from toolhive.core.enums import AccountStatus
 from toolhive.core.exceptions import ValidationError
+from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.account_service import AccountService
@@ -27,12 +28,15 @@ def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
     account = MagicMock()
     account.id = "acc-1"
     account.status = status
+    account.auth_state = MagicMock()
+    account.auth_state.login_failures = 0
+    account.auth_state.locked_until = None
+    account.auth_state.security_version = 0
     return account
 
 
 def _offboarded_account() -> MagicMock:
     account = _account(status=AccountStatus.OFFBOARDED)
-    account.security_version = 0
     account.row_version = 0
     return account
 
@@ -52,6 +56,99 @@ async def test_init_super_admin_creates_account_and_links_role():
     assert account.create_time is not None
     added = [call.args[0] for call in db.add.call_args_list]
     assert any(isinstance(item, AccountRole) for item in added)
+    # 初始化同时创建 1:1 认证状态行，初始密码不需要强制修改
+    auth_rows = [
+        item for item in added if isinstance(item, ManagementAccountAuthState)
+    ]
+    assert len(auth_rows) == 1
+    assert auth_rows[0].must_change_password is False
+
+
+async def test_create_account_creates_auth_state_row():
+    """创建账号时同步创建 1:1 认证状态行（临时密码强制修改并设置过期时间）。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    set_audit_actor("acc-9", "operator")
+
+    account, _ = await svc.create_account("alice")
+
+    added = [call.args[0] for call in db.add.call_args_list]
+    auth_rows = [
+        item for item in added if isinstance(item, ManagementAccountAuthState)
+    ]
+    assert len(auth_rows) == 1
+    assert auth_rows[0].account_id == account.id
+    assert auth_rows[0].must_change_password is True
+    assert auth_rows[0].temp_password_expires_at is not None
+
+
+async def test_record_login_failure_updates_auth_state_only():
+    """登录失败只更新认证状态行，不触碰账号主记录。"""
+    fresh = MagicMock()
+    fresh.status = AccountStatus.ENABLED
+    fresh.auth_state = MagicMock()
+    fresh.auth_state.login_failures = 0
+    fresh.auth_state.locked_until = None
+
+    new_db = AsyncMock()
+    new_db.__aenter__ = AsyncMock(return_value=new_db)
+    new_db.__aexit__ = AsyncMock(return_value=False)
+    new_db.get = AsyncMock(return_value=fresh)
+    new_db.commit = AsyncMock()
+
+    svc = AccountService(AsyncMock(), AdminSecuritySettings())
+
+    with patch(
+        "toolhive.infrastructure.transactions.async_session_factory",
+        MagicMock(return_value=new_db),
+    ):
+        await svc.record_login_failure(_account())
+
+    assert fresh.auth_state.login_failures == 1
+    assert fresh.status == AccountStatus.ENABLED
+    assert fresh.auth_state.locked_until is None
+    new_db.commit.assert_awaited_once()
+
+
+async def test_record_login_failure_locks_at_threshold():
+    """失败次数达到阈值时锁定账号并设置锁定到期时间。"""
+    settings = AdminSecuritySettings()
+    fresh = MagicMock()
+    fresh.status = AccountStatus.ENABLED
+    fresh.auth_state = MagicMock()
+    fresh.auth_state.login_failures = settings.login_max_failures - 1
+    fresh.auth_state.locked_until = None
+
+    new_db = AsyncMock()
+    new_db.__aenter__ = AsyncMock(return_value=new_db)
+    new_db.__aexit__ = AsyncMock(return_value=False)
+    new_db.get = AsyncMock(return_value=fresh)
+    new_db.commit = AsyncMock()
+
+    svc = AccountService(AsyncMock(), AdminSecuritySettings())
+
+    with patch(
+        "toolhive.infrastructure.transactions.async_session_factory",
+        MagicMock(return_value=new_db),
+    ):
+        await svc.record_login_failure(_account())
+
+    assert fresh.auth_state.login_failures == settings.login_max_failures
+    assert fresh.status == AccountStatus.LOCKED
+    assert fresh.auth_state.locked_until is not None
+
+
+def test_account_domain_tablenames_share_prefix():
+    """账号域所有表统一使用 management_account_* 前缀。"""
+    from toolhive.models.management_account import ManagementAccount
+    from toolhive.models.password_history import PasswordHistory
+
+    assert ManagementAccount.__tablename__ == "management_account"
+    assert ManagementAccountAuthState.__tablename__ == "management_account_auth_state"
+    assert AccountRole.__tablename__ == "management_account_role"
+    assert PasswordHistory.__tablename__ == "management_account_password_history"
 
 
 async def test_create_account_sets_audit_fields():
@@ -74,7 +171,6 @@ async def test_offboard_sets_offboarded_status():
     db.add = MagicMock()
     svc = AccountService(db, AdminSecuritySettings())
     account = _account()
-    account.security_version = 0
     account.row_version = 0
     with (
         patch("toolhive.services.account_service.revoke_all_sessions", AsyncMock()) as revoke,

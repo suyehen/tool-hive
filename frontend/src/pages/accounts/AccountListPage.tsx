@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Popconfirm, Tooltip,
+  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
+import type { MenuProps } from 'antd';
 import {
   listAccounts, createAccount, updateAccountStatus, resetPassword, forceLogout,
   offboardAccount,
@@ -103,8 +104,8 @@ export default function AccountListPage() {
   };
 
   const columns: ColumnsType<AccountItem> = [
-    { title: '用户名', dataIndex: 'username', key: 'username' },
     { title: '工号', dataIndex: 'external_user_id', key: 'external_user_id', render: (v) => v || '-' },
+    { title: '用户名', dataIndex: 'username', key: 'username' },
     {
       title: '状态', dataIndex: 'status', key: 'status',
       render: (s) => <Tag color={statusColor[s] || 'default'}>{statusLabel[s] || s}</Tag>,
@@ -115,42 +116,70 @@ export default function AccountListPage() {
       render: (v) => v ? <Tag color="orange">需修改</Tag> : <Tag color="green">正常</Tag>,
     },
     {
-      title: '操作', key: 'actions', width: 300,
-      render: (_, record) => (
-        <Space size="small" wrap>
-          {hasOperation('admin_account:manage') && record.status === 'disabled' && (
-            <Popconfirm title="确认启用？" onConfirm={() => handleAction(record.id, 'enable')}>
-              <Button size="small">启用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('admin_account:manage') && record.status === 'enabled' && (
-            <Popconfirm title="确认禁用？" onConfirm={() => handleAction(record.id, 'disable')}>
-              <Button size="small" danger>禁用</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('admin_account:manage') && record.status === 'locked' && (
-            <Popconfirm title="确认解锁？" onConfirm={() => handleAction(record.id, 'unlock')}>
-              <Button size="small">解锁</Button>
-            </Popconfirm>
-          )}
-          {hasOperation('admin_account:manage') && record.status !== 'offboarded' && (
-            <>
-              <Popconfirm title="确认重置密码？" onConfirm={() => handleResetPassword(record.id)}>
-                <Button size="small">重置密码</Button>
-              </Popconfirm>
-              <Popconfirm title="确认强制下线？" onConfirm={() => handleForceLogout(record.id)}>
-                <Button size="small">强制下线</Button>
-              </Popconfirm>
-              <Popconfirm
-                title="确认执行离职处理？将账号标记为已离职并撤销全部会话"
-                onConfirm={() => handleOffboard(record.id)}
-              >
-                <Button size="small" danger>离职</Button>
-              </Popconfirm>
-            </>
-          )}
-        </Space>
-      ),
+      title: '操作', key: 'actions', width: 80,
+      render: (_, record) => {
+        if (!hasOperation('admin_account:manage')) return null;
+
+        const confirmAction = (title: string, content: string, onOk: () => void) => {
+          Modal.confirm({ title, content, onOk });
+        };
+
+        const items: MenuProps['items'] = [];
+        if (record.status === 'disabled') {
+          items.push({
+            key: 'enable',
+            label: '启用',
+            onClick: () => confirmAction('启用账号', `确认启用 ${record.username}？`, () => handleAction(record.id, 'enable')),
+          });
+        }
+        if (record.status === 'enabled') {
+          items.push({
+            key: 'disable',
+            label: '禁用',
+            danger: true,
+            onClick: () => confirmAction('禁用账号', `确认禁用 ${record.username}？`, () => handleAction(record.id, 'disable')),
+          });
+        }
+        if (record.status === 'locked') {
+          items.push({
+            key: 'unlock',
+            label: '解锁',
+            onClick: () => confirmAction('解锁账号', `确认解锁 ${record.username}？`, () => handleAction(record.id, 'unlock')),
+          });
+        }
+        if (record.status !== 'offboarded') {
+          if (items.length > 0) {
+            items.push({ type: 'divider' });
+          }
+          items.push({
+            key: 'reset-password',
+            label: '重置密码',
+            onClick: () => confirmAction('重置密码', `确认重置 ${record.username} 的密码？`, () => handleResetPassword(record.id)),
+          });
+          items.push({
+            key: 'force-logout',
+            label: '强制下线',
+            onClick: () => confirmAction('强制下线', `确认将 ${record.username} 强制下线？`, () => handleForceLogout(record.id)),
+          });
+          items.push({
+            key: 'offboard',
+            label: '离职',
+            danger: true,
+            onClick: () => confirmAction(
+              '离职处理',
+              `确认对 ${record.username} 执行离职处理？账号将标记为已离职并撤销全部会话。`,
+              () => handleOffboard(record.id),
+            ),
+          });
+        }
+
+        if (items.length === 0) return null;
+        return (
+          <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+            <Button type="text" size="small" icon={<EllipsisOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 

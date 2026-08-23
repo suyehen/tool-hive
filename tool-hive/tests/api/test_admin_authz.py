@@ -15,6 +15,8 @@ from toolhive.core.operation_codes import OperationCode
 def _make_account(account_id: str = "acc-1") -> MagicMock:
     account = MagicMock()
     account.id = account_id
+    account.auth_state = MagicMock()
+    account.auth_state.security_version = "0"
     return account
 
 
@@ -85,7 +87,7 @@ async def test_get_current_user_rejects_security_version_mismatch():
     request.state.session.security_version = "0"
 
     account = _make_account()
-    account.security_version = "1"
+    account.auth_state.security_version = "1"
 
     with patch("toolhive.services.account_service.AccountService") as acct_cls:
         acct_svc = acct_cls.return_value
@@ -107,7 +109,6 @@ async def test_get_current_user_rejects_locked_account():
     request.state.session.security_version = "0"
 
     account = _make_account()
-    account.security_version = "0"
     account.status = AccountStatus.LOCKED
     account.is_active.return_value = False
 
@@ -131,7 +132,6 @@ async def test_get_current_user_rejects_disabled_account():
     request.state.session.security_version = "0"
 
     account = _make_account()
-    account.security_version = "0"
     account.status = AccountStatus.DISABLED
     account.is_active.return_value = False
 
@@ -156,9 +156,8 @@ async def test_get_current_user_blocks_non_auth_when_must_change_password():
     request.state.session.security_version = "0"
 
     account = _make_account()
-    account.security_version = "0"
     account.is_active.return_value = True
-    account.must_change_password = True
+    account.auth_state.must_change_password = True
 
     with patch("toolhive.services.account_service.AccountService") as acct_cls:
         acct_svc = acct_cls.return_value
@@ -181,9 +180,8 @@ async def test_get_current_user_allows_auth_when_must_change_password():
     request.state.session.security_version = "0"
 
     account = _make_account()
-    account.security_version = "0"
     account.is_active.return_value = True
-    account.must_change_password = True
+    account.auth_state.must_change_password = True
 
     with patch("toolhive.services.account_service.AccountService") as acct_cls:
         acct_svc = acct_cls.return_value

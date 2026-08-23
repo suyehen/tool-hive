@@ -71,9 +71,10 @@ async def test_login_rejects_expired_temp_password() -> None:
     account.status = AccountStatus.ENABLED
     account.is_active.return_value = True
     account.is_locked.return_value = False
-    account.must_change_password = True
+    account.auth_state = MagicMock()
+    account.auth_state.must_change_password = True
     from datetime import UTC, datetime, timedelta
-    account.temp_password_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    account.auth_state.temp_password_expires_at = datetime.now(UTC) - timedelta(minutes=1)
 
     db = AsyncMock()
     svc = AuthService(db, AdminSecuritySettings())
@@ -110,9 +111,10 @@ async def test_login_allows_unexpired_temp_password() -> None:
     account.status = AccountStatus.ENABLED
     account.is_active.return_value = True
     account.is_locked.return_value = False
-    account.must_change_password = True
-    account.temp_password_expires_at = datetime.now(UTC) + timedelta(hours=1)
-    account.security_version = 0
+    account.auth_state = MagicMock()
+    account.auth_state.must_change_password = True
+    account.auth_state.temp_password_expires_at = datetime.now(UTC) + timedelta(hours=1)
+    account.auth_state.security_version = 0
     account.id = "acc-1"
     account.username = "admin"
 

@@ -11,9 +11,9 @@ from toolhive.models.base import AuditMixin, Base, UUIDPrimaryKeyMixin
 class AccountRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
     """管理账号 ↔ 后台角色 关联。"""
 
-    __tablename__ = "account_role"
+    __tablename__ = "management_account_role"
     __table_args__ = (
-        UniqueConstraint("account_id", "role_id", name="uq_account_role"),
+        UniqueConstraint("account_id", "role_id", name="uq_management_account_role"),
     )
 
     account_id: Mapped[str] = mapped_column(

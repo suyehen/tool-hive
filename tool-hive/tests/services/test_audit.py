@@ -27,8 +27,9 @@ def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
     account.id = "acc-1"
     account.username = "admin"
     account.status = status
-    account.security_version = "0"
-    account.login_failures = 0
+    account.auth_state = MagicMock()
+    account.auth_state.security_version = 0
+    account.auth_state.login_failures = 0
     return account
 
 
@@ -282,7 +283,6 @@ async def test_caller_system_update_records_audit() -> None:
 async def test_offboard_account_records_offboarded_status() -> None:
     """离职审计摘要记录 offboarded 状态。"""
     account = _account()
-    account.security_version = 0
     db = AsyncMock()
     db.add = MagicMock()
     db.scalar = AsyncMock(return_value=account)

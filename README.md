@@ -58,6 +58,8 @@ toolhive/
 
 首次部署需先在服务器上用 PostgreSQL 超级用户创建应用用户和数据库（模板见 [sql/create_database.sql](./tool-hive/sql/create_database.sql)），再执行下面的建表步骤。执行顺序：先建库 → 再建表。
 
+一期开发中所有 DDL 改动（建表、改表、删表、改字段）一律直接修改 `sql/init.sql`，不保留历史迁移记录。
+
 ```bash
 cd tool-hive
 

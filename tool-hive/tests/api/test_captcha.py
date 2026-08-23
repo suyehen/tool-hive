@@ -169,10 +169,11 @@ def test_login_success_creates_session_directly() -> None:
     account = MagicMock()
     account.id = "acc-1"
     account.username = "admin"
-    account.security_version = "0"
     account.is_active.return_value = True
-    account.must_change_password = False
-    account.temp_password_expires_at = None
+    account.auth_state = MagicMock()
+    account.auth_state.security_version = "0"
+    account.auth_state.must_change_password = False
+    account.auth_state.temp_password_expires_at = None
 
     with (
         patch(

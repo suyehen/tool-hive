@@ -17,6 +17,7 @@ from toolhive.core.exceptions import (
     ValidationError,
 )
 from toolhive.infrastructure.transactions import transactional
+from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.services.audit_service import AuditService, get_current_operator_id
@@ -57,11 +58,22 @@ class AccountService:
             # CLI 初始化无登录操作人：create_by 留空，创建时间显式写入
             account = ManagementAccount(
                 username=username,
-                password_hash=hash_password(password),
-                must_change_password=False,
+                status=AccountStatus.ENABLED,
                 create_time=datetime.now(UTC),
             )
             self.db.add(account)
+            await self.db.flush()
+
+            # 同步创建 1:1 认证状态：初始密码不需要强制修改
+            self.db.add(ManagementAccountAuthState(
+                account_id=account.id,
+                password_hash=hash_password(password),
+                login_failures=0,
+                locked_until=None,
+                must_change_password=False,
+                temp_password_expires_at=None,
+                security_version=0,
+            ))
             await self.db.flush()
 
             # 确保内置超管角色存在，并建立账号 → 超管角色关联
@@ -130,15 +142,25 @@ class AccountService:
         # 创建账号：显式写入创建时间与当前操作人 ID
         account = ManagementAccount(
             username=username,
-            password_hash=hash_password(temp_pwd),
             external_user_id=external_user_id,
-            must_change_password=True,
-            temp_password_expires_at=datetime.now(UTC)
-            + timedelta(hours=self._admin_security.temp_password_expire_hours),
+            status=AccountStatus.ENABLED,
             create_time=datetime.now(UTC),
             create_by=get_current_operator_id(),
         )
         self.db.add(account)
+        await self.db.flush()
+
+        # 同步创建 1:1 认证状态：临时密码首次登录必须修改并设置过期时间
+        self.db.add(ManagementAccountAuthState(
+            account_id=account.id,
+            password_hash=hash_password(temp_pwd),
+            login_failures=0,
+            locked_until=None,
+            must_change_password=True,
+            temp_password_expires_at=datetime.now(UTC)
+            + timedelta(hours=self._admin_security.temp_password_expire_hours),
+            security_version=0,
+        ))
         await self.db.flush()
         AuditService(self.db).add_record(
             action="account.create",
@@ -183,7 +205,8 @@ class AccountService:
         self, account: ManagementAccount, old_password: str, new_password: str,
     ) -> None:
         """用户修改自己的密码。"""
-        is_valid, _ = verify_password(old_password, account.password_hash)
+        auth = self._require_auth_state(account)
+        is_valid, _ = verify_password(old_password, auth.password_hash)
         if not is_valid:
             raise AuthenticationError("当前密码不正确")
 
@@ -212,15 +235,16 @@ class AccountService:
         if violations:
             raise ValidationError("; ".join(violations))
 
-        account.password_hash = hash_password(temp_pwd)
-        account.must_change_password = True
-        account.temp_password_expires_at = datetime.now(UTC) + timedelta(
+        auth = self._require_auth_state(account)
+        auth.password_hash = hash_password(temp_pwd)
+        auth.must_change_password = True
+        auth.temp_password_expires_at = datetime.now(UTC) + timedelta(
             hours=self._admin_security.temp_password_expire_hours
         )
         # 重置密码：记录修改时间与当前操作人
         account.update_time = datetime.now(UTC)
         account.update_by = get_current_operator_id()
-        account.security_version += 1
+        auth.security_version += 1
         account.row_version += 1
 
         # 立即撤销该账号全部会话
@@ -242,9 +266,10 @@ class AccountService:
             raise ConflictError("账号已启用")
         if account.status == AccountStatus.OFFBOARDED:
             raise ValidationError("已离职账号不可启用")
+        auth = self._require_auth_state(account)
         account.status = AccountStatus.ENABLED
-        account.locked_until = None
-        account.login_failures = 0
+        auth.locked_until = None
+        auth.login_failures = 0
         # 启用账号：记录修改时间与当前操作人
         account.update_time = datetime.now(UTC)
         account.update_by = get_current_operator_id()
@@ -270,11 +295,12 @@ class AccountService:
             if account.status == AccountStatus.OFFBOARDED:
                 raise ValidationError("已离职账号不可禁用")
             await self._check_last_super_admin(account)
+            auth = self._require_auth_state(account)
             account.status = AccountStatus.DISABLED
             # 禁用账号：记录修改时间与执行操作人
             account.update_time = datetime.now(UTC)
             account.update_by = operator_id
-            account.security_version += 1
+            auth.security_version += 1
             account.row_version += 1
             await revoke_all_sessions(account.id)
             await self.db.flush()
@@ -299,9 +325,10 @@ class AccountService:
         """提前解锁账号。"""
         if account.status == AccountStatus.OFFBOARDED:
             raise ValidationError("已离职账号不可解锁")
+        auth = self._require_auth_state(account)
         account.status = AccountStatus.ENABLED
-        account.login_failures = 0
-        account.locked_until = None
+        auth.login_failures = 0
+        auth.locked_until = None
         # 提前解锁：记录修改时间与当前操作人
         account.update_time = datetime.now(UTC)
         account.update_by = get_current_operator_id()
@@ -323,11 +350,12 @@ class AccountService:
             if account.id == operator_id:
                 raise ValidationError("不能对自己执行离职处理")
             await self._check_last_super_admin(account)
+            auth = self._require_auth_state(account)
             account.status = AccountStatus.OFFBOARDED
             # 离职处理：记录修改时间与执行操作人
             account.update_time = datetime.now(UTC)
             account.update_by = operator_id
-            account.security_version += 1
+            auth.security_version += 1
             account.row_version += 1
             await revoke_all_sessions(account.id)
             await self.db.flush()
@@ -369,10 +397,13 @@ class AccountService:
         fresh = await self.db.get(ManagementAccount, account.id)
         if fresh is None:
             return
-        fresh.login_failures += 1
-        if fresh.login_failures >= self._admin_security.login_max_failures:
+        auth = fresh.auth_state
+        if auth is None:
+            return
+        auth.login_failures += 1
+        if auth.login_failures >= self._admin_security.login_max_failures:
             fresh.status = AccountStatus.LOCKED
-            fresh.locked_until = datetime.now(UTC) + timedelta(
+            auth.locked_until = datetime.now(UTC) + timedelta(
                 minutes=self._admin_security.login_lock_minutes,
             )
         await self.db.flush()
@@ -380,13 +411,20 @@ class AccountService:
     @transactional()
     async def record_login_success(self, account: ManagementAccount) -> None:
         """登录成功：清空失败计数，自动解除锁定状态。"""
-        account.login_failures = 0
+        auth = self._require_auth_state(account)
+        auth.login_failures = 0
         if account.status == AccountStatus.LOCKED:
             account.status = AccountStatus.ENABLED
-        account.locked_until = None
+        auth.locked_until = None
         await self.db.flush()
 
     # ── 内部方法 ──
+
+    def _require_auth_state(self, account: ManagementAccount) -> ManagementAccountAuthState:
+        """获取账号的认证状态记录；缺失时抛出业务异常。"""
+        if account.auth_state is None:
+            raise ValidationError("账号认证状态缺失，请联系管理员")
+        return account.auth_state
 
     async def _set_password(self, account: ManagementAccount, new_password: str) -> None:
         """内部：设置新密码并检查历史。"""
@@ -422,10 +460,11 @@ class AccountService:
         )
         self.db.add(history)
 
-        # 更新账号密码
-        account.password_hash = hash_password(new_password)
-        account.must_change_password = False
-        account.temp_password_expires_at = None
+        # 更新认证状态中的账号密码
+        auth = self._require_auth_state(account)
+        auth.password_hash = hash_password(new_password)
+        auth.must_change_password = False
+        auth.temp_password_expires_at = None
 
     async def _check_last_super_admin(self, account: ManagementAccount) -> None:
         """检查是否为最后一个启用状态的超管，防止系统失去管理入口。"""

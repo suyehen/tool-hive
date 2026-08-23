@@ -1,5 +1,6 @@
 """ORM 模型定义。"""
 
+from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.backend_role import BackendRole
 from toolhive.models.caller_ip_rule import CallerIPRule
@@ -16,6 +17,7 @@ from toolhive.models.password_history import PasswordHistory
 from toolhive.models.role_operation import RoleOperation
 
 __all__ = [
+    "ManagementAccountAuthState",
     "AccountRole",
     "BackendRole",
     "CallerIPRule",

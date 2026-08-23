@@ -9,6 +9,10 @@
 --   3. 时间统一使用 TIMESTAMPTZ。
 --   4. 本脚本及后续所有字段变更一律不使用外键（FOREIGN KEY），
 --      引用完整性由应用层保证。
+--   5. 一期开发中所有 DDL 改动一律直接修改本脚本，不保留历史迁移记录，
+--      不使用增量迁移机制。
+--   6. 相关业务功能的表名必须使用相同前缀；账号域统一使用
+--      management_account_* 前缀。
 -- ============================================================
 
 BEGIN;
@@ -19,14 +23,8 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS management_account (
     id                        VARCHAR(32) PRIMARY KEY,
     username                  VARCHAR(128) NOT NULL,
-    password_hash             VARCHAR(256) NOT NULL,
     external_user_id          VARCHAR(256),
     status                    VARCHAR(20) NOT NULL DEFAULT 'enabled',
-    login_failures            INTEGER NOT NULL DEFAULT 0,
-    locked_until              TIMESTAMPTZ,
-    must_change_password      BOOLEAN NOT NULL DEFAULT TRUE,
-    temp_password_expires_at  TIMESTAMPTZ,
-    security_version          INTEGER NOT NULL DEFAULT 0,
     row_version               INTEGER NOT NULL DEFAULT 0,
     create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time                TIMESTAMPTZ,
@@ -46,19 +44,43 @@ CREATE INDEX IF NOT EXISTS idx_management_account_status
 COMMENT ON TABLE management_account IS '管理账号';
 COMMENT ON COLUMN management_account.id IS '主键，应用层生成';
 COMMENT ON COLUMN management_account.username IS '登录用户名，全局唯一';
-COMMENT ON COLUMN management_account.password_hash IS '密码哈希';
 COMMENT ON COLUMN management_account.external_user_id IS '外部身份唯一标识，保存工号或外部系统唯一标识，用于 SSO 登录时匹配内部账号';
 COMMENT ON COLUMN management_account.status IS '账号状态';
-COMMENT ON COLUMN management_account.login_failures IS '连续登录失败次数';
-COMMENT ON COLUMN management_account.locked_until IS '锁定到期时间';
-COMMENT ON COLUMN management_account.must_change_password IS '是否必须修改密码';
-COMMENT ON COLUMN management_account.temp_password_expires_at IS '临时密码过期时间';
-COMMENT ON COLUMN management_account.security_version IS '安全事件版本，用于会话失效判定';
 COMMENT ON COLUMN management_account.row_version IS '乐观锁版本号，用于并发更新保护';
 COMMENT ON COLUMN management_account.create_time IS '创建时间';
 COMMENT ON COLUMN management_account.update_time IS '最后更新时间';
 COMMENT ON COLUMN management_account.create_by IS '创建人 ID';
 COMMENT ON COLUMN management_account.update_by IS '修改人 ID';
+
+-- ------------------------------------------------------------
+-- 管理账号认证状态（与 management_account 1:1）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS management_account_auth_state (
+    account_id                 VARCHAR(32) PRIMARY KEY,
+    password_hash              VARCHAR(256) NOT NULL,
+    login_failures             INTEGER NOT NULL DEFAULT 0,
+    locked_until               TIMESTAMPTZ,
+    must_change_password       BOOLEAN NOT NULL DEFAULT TRUE,
+    temp_password_expires_at   TIMESTAMPTZ,
+    security_version           INTEGER NOT NULL DEFAULT 0,
+    create_time                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time                TIMESTAMPTZ,
+    create_by                  VARCHAR(32),
+    update_by                  VARCHAR(32)
+);
+
+COMMENT ON TABLE management_account_auth_state IS '管理账号认证与登录安全状态（与 management_account 1:1）';
+COMMENT ON COLUMN management_account_auth_state.account_id IS '账号 ID（主键，与 management_account.id 一一对应）';
+COMMENT ON COLUMN management_account_auth_state.password_hash IS '密码哈希';
+COMMENT ON COLUMN management_account_auth_state.login_failures IS '连续登录失败次数';
+COMMENT ON COLUMN management_account_auth_state.locked_until IS '锁定到期时间';
+COMMENT ON COLUMN management_account_auth_state.must_change_password IS '是否必须修改密码';
+COMMENT ON COLUMN management_account_auth_state.temp_password_expires_at IS '临时密码过期时间';
+COMMENT ON COLUMN management_account_auth_state.security_version IS '安全事件版本，用于会话失效判定';
+COMMENT ON COLUMN management_account_auth_state.create_time IS '创建时间';
+COMMENT ON COLUMN management_account_auth_state.update_time IS '最后更新时间';
+COMMENT ON COLUMN management_account_auth_state.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_account_auth_state.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 后台角色
@@ -97,7 +119,7 @@ COMMENT ON COLUMN backend_role.update_by IS '修改人 ID';
 -- ------------------------------------------------------------
 -- 管理账号 ↔ 后台角色 关联
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS account_role (
+CREATE TABLE IF NOT EXISTS management_account_role (
     id          VARCHAR(32) PRIMARY KEY,
     account_id  VARCHAR(32) NOT NULL,
     role_id     VARCHAR(32) NOT NULL,
@@ -105,22 +127,22 @@ CREATE TABLE IF NOT EXISTS account_role (
     update_time  TIMESTAMPTZ,
     create_by  VARCHAR(32),
     update_by  VARCHAR(32),
-    CONSTRAINT uq_account_role UNIQUE (account_id, role_id)
+    CONSTRAINT uq_management_account_role UNIQUE (account_id, role_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_account_role_account_id
-    ON account_role (account_id);
-CREATE INDEX IF NOT EXISTS idx_account_role_role_id
-    ON account_role (role_id);
+CREATE INDEX IF NOT EXISTS idx_management_account_role_account_id
+    ON management_account_role (account_id);
+CREATE INDEX IF NOT EXISTS idx_management_account_role_role_id
+    ON management_account_role (role_id);
 
-COMMENT ON TABLE account_role IS '管理账号与后台角色关联';
-COMMENT ON COLUMN account_role.id IS '主键，应用层生成';
-COMMENT ON COLUMN account_role.account_id IS '管理账号 ID';
-COMMENT ON COLUMN account_role.role_id IS '后台角色 ID';
-COMMENT ON COLUMN account_role.create_time IS '创建时间';
-COMMENT ON COLUMN account_role.update_time IS '最后更新时间';
-COMMENT ON COLUMN account_role.create_by IS '创建人 ID';
-COMMENT ON COLUMN account_role.update_by IS '修改人 ID';
+COMMENT ON TABLE management_account_role IS '管理账号与后台角色关联';
+COMMENT ON COLUMN management_account_role.id IS '主键，应用层生成';
+COMMENT ON COLUMN management_account_role.account_id IS '管理账号 ID';
+COMMENT ON COLUMN management_account_role.role_id IS '后台角色 ID';
+COMMENT ON COLUMN management_account_role.create_time IS '创建时间';
+COMMENT ON COLUMN management_account_role.update_time IS '最后更新时间';
+COMMENT ON COLUMN management_account_role.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_account_role.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 管理操作项
@@ -221,7 +243,7 @@ COMMENT ON COLUMN role_operation.update_by IS '修改人 ID';
 -- ------------------------------------------------------------
 -- 密码历史
 -- ------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS password_history (
+CREATE TABLE IF NOT EXISTS management_account_password_history (
     id              VARCHAR(32) PRIMARY KEY,
     account_id      VARCHAR(32) NOT NULL,
     password_hash   VARCHAR(256) NOT NULL,
@@ -231,17 +253,17 @@ CREATE TABLE IF NOT EXISTS password_history (
     update_by      VARCHAR(32)
 );
 
-CREATE INDEX IF NOT EXISTS idx_password_history_account_id
-    ON password_history (account_id);
+CREATE INDEX IF NOT EXISTS idx_management_account_password_history_account_id
+    ON management_account_password_history (account_id);
 
-COMMENT ON TABLE password_history IS '密码历史';
-COMMENT ON COLUMN password_history.id IS '主键，应用层生成';
-COMMENT ON COLUMN password_history.account_id IS '管理账号 ID';
-COMMENT ON COLUMN password_history.password_hash IS '历史密码哈希';
-COMMENT ON COLUMN password_history.create_time IS '创建时间';
-COMMENT ON COLUMN password_history.update_time IS '最后更新时间';
-COMMENT ON COLUMN password_history.create_by IS '创建人 ID';
-COMMENT ON COLUMN password_history.update_by IS '修改人 ID';
+COMMENT ON TABLE management_account_password_history IS '密码历史';
+COMMENT ON COLUMN management_account_password_history.id IS '主键，应用层生成';
+COMMENT ON COLUMN management_account_password_history.account_id IS '管理账号 ID';
+COMMENT ON COLUMN management_account_password_history.password_hash IS '历史密码哈希';
+COMMENT ON COLUMN management_account_password_history.create_time IS '创建时间';
+COMMENT ON COLUMN management_account_password_history.update_time IS '最后更新时间';
+COMMENT ON COLUMN management_account_password_history.create_by IS '创建人 ID';
+COMMENT ON COLUMN management_account_password_history.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
 -- 调用系统
