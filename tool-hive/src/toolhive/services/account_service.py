@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.config import AdminSecuritySettings
@@ -31,6 +31,31 @@ from toolhive.services.security.password import (
 from toolhive.services.security.session import revoke_all_sessions
 
 logger = logging.getLogger(__name__)
+
+
+def build_account_filters(
+    keyword: str | None = None,
+    status: str | None = None,
+    department: str | None = None,
+) -> list:
+    """构造账号列表过滤条件：关键词命中账号/姓名/工号，状态精确，部门模糊。"""
+    conditions: list = []
+    kw = keyword.strip() if keyword else ""
+    if kw:
+        pattern = f"%{kw}%"
+        conditions.append(
+            or_(
+                ManagementAccount.account.ilike(pattern),
+                ManagementAccount.real_name.ilike(pattern),
+                ManagementAccount.external_user_id.ilike(pattern),
+            )
+        )
+    if status:
+        conditions.append(ManagementAccount.status == status)
+    dept = department.strip() if department else ""
+    if dept:
+        conditions.append(ManagementAccount.department.ilike(f"%{dept}%"))
+    return conditions
 
 
 class AccountService:
@@ -259,14 +284,23 @@ class AccountService:
         )
 
     async def list_accounts(
-        self, offset: int = 0, limit: int = 50,
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        keyword: str | None = None,
+        status: str | None = None,
+        department: str | None = None,
     ) -> tuple[list[ManagementAccount], int]:
-        """分页列出账号。返回 (列表, 总数)。"""
+        """分页列出账号，支持关键词/状态/部门过滤。返回 (列表, 总数)。"""
+        conditions = build_account_filters(keyword, status, department)
         total = await self.db.scalar(
-            select(func.count()).select_from(ManagementAccount)
+            select(func.count())
+            .select_from(ManagementAccount)
+            .where(*conditions)
         )
         result = await self.db.execute(
             select(ManagementAccount)
+            .where(*conditions)
             .order_by(ManagementAccount.create_time.desc())
             .offset(offset)
             .limit(limit)

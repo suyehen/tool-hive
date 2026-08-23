@@ -1,4 +1,5 @@
 import client from './client';
+import type { RoleItem } from './roles';
 
 export interface AccountItem {
   id: string;
@@ -23,6 +24,12 @@ export interface AccountListResponse {
   total: number;
 }
 
+export interface AccountListQuery {
+  keyword?: string;
+  status?: string;
+  department?: string;
+}
+
 export interface CreateAccountResponse {
   id: string;
   account: string;
@@ -31,8 +38,20 @@ export interface CreateAccountResponse {
   temp_password: string;
 }
 
-export async function listAccounts(offset = 0, limit = 50): Promise<AccountListResponse> {
-  const { data } = await client.get('/accounts', { params: { offset, limit } });
+export async function listAccounts(
+  offset = 0,
+  limit = 50,
+  query?: AccountListQuery,
+): Promise<AccountListResponse> {
+  const { data } = await client.get('/accounts', {
+    params: {
+      offset,
+      limit,
+      keyword: query?.keyword || undefined,
+      status: query?.status || undefined,
+      department: query?.department || undefined,
+    },
+  });
   return data;
 }
 
@@ -79,6 +98,19 @@ export async function updateAccountStatus(
   action: 'enable' | 'disable' | 'unlock',
 ): Promise<void> {
   await client.patch(`/accounts/${id}/status`, { action });
+}
+
+export async function listAccountRoles(accountId: string): Promise<RoleItem[]> {
+  const { data } = await client.get(`/accounts/${accountId}/roles`);
+  return data;
+}
+
+export async function assignRoleToAccount(accountId: string, roleId: string): Promise<void> {
+  await client.post(`/accounts/${accountId}/roles`, { role_id: roleId });
+}
+
+export async function removeRoleFromAccount(accountId: string, roleId: string): Promise<void> {
+  await client.delete(`/accounts/${accountId}/roles/${roleId}`);
 }
 
 export async function resetPassword(id: string): Promise<{ temp_password: string }> {

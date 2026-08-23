@@ -10,6 +10,7 @@ from toolhive.api.admin.roles.schemas import (
     AssignOperationsRequest,
     CreateRoleRequest,
     OperationResponse,
+    RoleAccountResponse,
     RoleListResponse,
     RoleResponse,
     RoleStatusRequest,
@@ -167,6 +168,29 @@ async def get_role_operations(
             status=o.status,
         )
         for o in ops
+    ]
+
+
+@router.get("/{role_id}/accounts", response_model=list[RoleAccountResponse])
+async def get_role_accounts(
+    role_id: str,
+    db: AsyncSession = Depends(get_db),
+    _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
+):
+    """查询分配了该角色的账号列表（需 role:view）。"""
+    svc = RoleService(db)
+    try:
+        accounts = await svc.get_role_accounts(role_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return [
+        RoleAccountResponse(
+            id=a.id,
+            account=a.account,
+            real_name=a.real_name,
+            status=a.status,
+        )
+        for a in accounts
     ]
 
 

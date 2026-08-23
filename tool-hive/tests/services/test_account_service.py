@@ -13,7 +13,7 @@ from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
 from toolhive.models.management_audit_log import ManagementAuditLog
-from toolhive.services.account_service import AccountService
+from toolhive.services.account_service import AccountService, build_account_filters
 from toolhive.services.audit_service import set_audit_actor
 
 
@@ -40,6 +40,53 @@ def _offboarded_account() -> MagicMock:
     account = _account(status=AccountStatus.OFFBOARDED)
     account.row_version = 0
     return account
+
+
+def test_build_account_filters_keyword_matches_identity_fields():
+    """关键词过滤同时命中账号/姓名/工号三个字段。"""
+    conditions = build_account_filters(keyword="alice")
+    assert len(conditions) == 1
+    text = str(conditions[0]).lower()
+    assert "account" in text
+    assert "real_name" in text
+    assert "external_user_id" in text
+    assert "like" in text
+
+
+def test_build_account_filters_status_and_department():
+    """状态精确过滤 + 部门模糊过滤。"""
+    conditions = build_account_filters(status="enabled", department="研发")
+    assert len(conditions) == 2
+    text = str(conditions[1]).lower()
+    assert "department" in text
+    assert "like" in text
+
+
+def test_build_account_filters_empty_inputs_return_no_conditions():
+    """空条件（含纯空白）不产生过滤条件。"""
+    assert build_account_filters() == []
+    assert build_account_filters(keyword="   ") == []
+    assert build_account_filters(department="  ") == []
+
+
+async def test_list_accounts_applies_filters_to_query():
+    """列表查询把过滤条件带到 count 与列表语句。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=1)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [MagicMock()]
+    db.execute = AsyncMock(return_value=result)
+    svc = AccountService(db, AdminSecuritySettings())
+
+    items, total = await svc.list_accounts(
+        keyword="alice", status="enabled", department="研发",
+    )
+
+    assert total == 1
+    assert len(items) == 1
+    # 列表查询携带了 where 过滤条件
+    select_stmt = db.execute.call_args.args[0]
+    assert select_stmt.whereclause is not None
 
 
 async def test_init_super_admin_creates_account_and_links_role():

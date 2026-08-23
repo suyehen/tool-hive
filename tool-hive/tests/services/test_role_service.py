@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from toolhive.core.exceptions import ValidationError
+from toolhive.core.exceptions import NotFoundError, ValidationError
 from toolhive.core.operation_codes import SUPER_ADMIN_ROLE_NAME
 from toolhive.models.management_role import ManagementRole
 from toolhive.models.management_role_operation import ManagementRoleOperation
@@ -17,6 +17,32 @@ def test_role_domain_tablenames_share_prefix() -> None:
     """角色域表名与类名统一 management_role 前缀。"""
     assert ManagementRole.__tablename__ == "management_role"
     assert ManagementRoleOperation.__tablename__ == "management_role_operation"
+
+
+async def test_get_role_accounts_returns_assigned_accounts() -> None:
+    """查询角色下的账号列表（先校验角色存在）。"""
+    account = MagicMock()
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=ManagementRole(name="ops"))
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [account]
+    db.execute = AsyncMock(return_value=result)
+    svc = RoleService(db)
+
+    accounts = await svc.get_role_accounts("role-1")
+
+    assert accounts == [account]
+    db.get.assert_awaited_once_with(ManagementRole, "role-1")
+
+
+async def test_get_role_accounts_raises_not_found() -> None:
+    """角色不存在时抛出 NotFoundError。"""
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=None)
+    svc = RoleService(db)
+
+    with pytest.raises(NotFoundError):
+        await svc.get_role_accounts("missing")
 
 
 async def test_create_role_rejects_reserved_super_admin_name() -> None:

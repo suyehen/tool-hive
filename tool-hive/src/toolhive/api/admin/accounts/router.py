@@ -36,13 +36,22 @@ router = APIRouter(prefix="/accounts", tags=["管理账号"])
 async def list_accounts(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    keyword: str | None = Query(default=None, max_length=128),
+    status: str | None = Query(default=None),
+    department: str | None = Query(default=None, max_length=256),
     db: AsyncSession = Depends(get_db),
     admin_security: AdminSecuritySettings = Depends(get_admin_security),
     _account=Depends(require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)),
 ):
     """账号列表（需 admin_account:view）。"""
     svc = AccountService(db, admin_security)
-    items, total = await svc.list_accounts(offset=offset, limit=limit)
+    items, total = await svc.list_accounts(
+        offset=offset,
+        limit=limit,
+        keyword=keyword,
+        status=status,
+        department=department,
+    )
     return AccountListResponse(
         items=[
             AccountResponse(

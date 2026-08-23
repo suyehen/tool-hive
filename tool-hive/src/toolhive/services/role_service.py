@@ -252,6 +252,17 @@ class RoleService:
         )
         return list(result.scalars().all())
 
+    async def get_role_accounts(self, role_id: str) -> list[ManagementAccount]:
+        """查询分配了指定角色的账号列表（先确认角色存在）。"""
+        await self.get_role(role_id)
+        result = await self.db.execute(
+            select(ManagementAccount)
+            .join(AccountRole, AccountRole.account_id == ManagementAccount.id)
+            .where(AccountRole.role_id == role_id)
+            .order_by(ManagementAccount.create_time.desc())
+        )
+        return list(result.scalars().all())
+
     @transactional()
     async def assign_role_to_account(
         self, account_id: str, role_id: str, operator_id: str,

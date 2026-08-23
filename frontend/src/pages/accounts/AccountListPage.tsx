@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown,
+  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown, Select,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import {
   listAccounts, createAccount, updateAccountStatus, resetPassword, forceLogout,
-  offboardAccount, updateAccountProfile,
+  offboardAccount, updateAccountProfile, listAccountRoles, assignRoleToAccount,
+  removeRoleFromAccount,
   type AccountItem,
 } from '../../api/accounts';
+import { listRoles, type RoleItem } from '../../api/roles';
 import { useAuth } from '../../contexts/AuthContext';
 
 const { Title } = Typography;
@@ -33,11 +35,27 @@ export default function AccountListPage() {
   const [editRowVersion, setEditRowVersion] = useState<number | null>(null);
   const [editForm] = Form.useForm();
   const [resetResult, setResetResult] = useState<string | null>(null);
+  const [rolesOpen, setRolesOpen] = useState(false);
+  const [rolesAccountId, setRolesAccountId] = useState<string | null>(null);
+  const [accountRoles, setAccountRoles] = useState<RoleItem[]>([]);
+  const [allRoles, setAllRoles] = useState<RoleItem[]>([]);
+  const [rolesVersion, setRolesVersion] = useState(0);
+  const [keyword, setKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [department, setDepartment] = useState('');
 
-  const fetchAccounts = async () => {
+  const fetchAccounts = async (override?: {
+    keyword?: string;
+    status?: string;
+    department?: string;
+  }) => {
     setLoading(true);
     try {
-      const { items, total: t } = await listAccounts();
+      const { items, total: t } = await listAccounts(0, 50, {
+        keyword: (override?.keyword ?? keyword).trim() || undefined,
+        status: override?.status ?? statusFilter,
+        department: (override?.department ?? department).trim() || undefined,
+      });
       setAccounts(items);
       setTotal(t);
     } catch {
@@ -117,6 +135,48 @@ export default function AccountListPage() {
     }
   };
 
+  const openRolesModal = async (accountId: string) => {
+    setRolesAccountId(accountId);
+    try {
+      setAccountRoles(await listAccountRoles(accountId));
+      const { items } = await listRoles();
+      setAllRoles(items);
+    } catch {
+      setAccountRoles([]);
+      setAllRoles([]);
+    }
+    setRolesOpen(true);
+  };
+
+  const handleAssignRole = async (roleId: string) => {
+    if (!rolesAccountId) return;
+    try {
+      await assignRoleToAccount(rolesAccountId, roleId);
+      message.success('角色已分配');
+      setAccountRoles(await listAccountRoles(rolesAccountId));
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '分配失败';
+      message.error(msg);
+    }
+  };
+
+  const handleRemoveRole = async (roleId: string) => {
+    if (!rolesAccountId) return;
+    try {
+      await removeRoleFromAccount(rolesAccountId, roleId);
+      message.success('已移除');
+      setAccountRoles(await listAccountRoles(rolesAccountId));
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '移除失败';
+      message.error(msg);
+      // 后端拒绝时恢复真实状态：重取角色列表并强制重挂载 Tag
+      try {
+        setAccountRoles(await listAccountRoles(rolesAccountId));
+        setRolesVersion((v) => v + 1);
+      } catch { /* 忽略恢复失败 */ }
+    }
+  };
+
   const handleAction = async (id: string, action: 'enable' | 'disable' | 'unlock') => {
     try {
       await updateAccountStatus(id, action);
@@ -162,9 +222,12 @@ export default function AccountListPage() {
   };
 
   const columns: ColumnsType<AccountItem> = [
-    { title: '工号', dataIndex: 'external_user_id', key: 'external_user_id', render: (v) => v || '-' },
     { title: '账号', dataIndex: 'account', key: 'account' },
+    { title: '工号', dataIndex: 'external_user_id', key: 'external_user_id', render: (v) => v || '-' },
     { title: '姓名', dataIndex: 'real_name', key: 'real_name' },
+    { title: '邮箱', dataIndex: 'email', key: 'email', render: (v) => v || '-' },
+    { title: '手机号', dataIndex: 'mobile', key: 'mobile', render: (v) => v || '-' },
+    { title: '部门', dataIndex: 'department', key: 'department', render: (v) => v || '-' },
     {
       title: '状态', dataIndex: 'status', key: 'status',
       render: (s) => <Tag color={statusColor[s] || 'default'}>{statusLabel[s] || s}</Tag>,
@@ -190,6 +253,13 @@ export default function AccountListPage() {
             label: '编辑',
             onClick: () => openEdit(record),
           });
+          if (hasOperation('role:view')) {
+            items.push({
+              key: 'roles',
+              label: '分配角色',
+              onClick: () => openRolesModal(record.id),
+            });
+          }
         }
         if (record.status === 'disabled') {
           items.push({
@@ -254,7 +324,7 @@ export default function AccountListPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>管理账号 ({total})</Title>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchAccounts}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => fetchAccounts()}>刷新</Button>
           {hasOperation('admin_account:create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               创建账号
@@ -262,6 +332,37 @@ export default function AccountListPage() {
           )}
         </Space>
       </div>
+
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input
+          placeholder="账号/姓名/工号"
+          style={{ width: 220 }}
+          allowClear
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          onPressEnter={() => fetchAccounts()}
+        />
+        <Select
+          placeholder="状态"
+          style={{ width: 140 }}
+          allowClear
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={Object.keys(statusLabel).map((s) => ({ label: statusLabel[s], value: s }))}
+        />
+        <Input
+          placeholder="部门"
+          style={{ width: 180 }}
+          allowClear
+          value={department}
+          onChange={(e) => setDepartment(e.target.value)}
+          onPressEnter={() => fetchAccounts()}
+        />
+        <Button type="primary" onClick={() => fetchAccounts()}>查询</Button>
+        <Button onClick={() => fetchAccounts({ keyword: '', status: undefined, department: '' })}>
+          重置
+        </Button>
+      </Space>
 
       {resetResult && (
         <div style={{ marginBottom: 16, padding: 12, background: '#fff7e6', borderRadius: 8, wordBreak: 'break-all' }}>
@@ -326,6 +427,47 @@ export default function AccountListPage() {
             <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="角色分配"
+        open={rolesOpen}
+        onCancel={() => setRolesOpen(false)}
+        footer={null}
+        width={520}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <Typography.Text strong>已分配的角色：</Typography.Text>
+          {accountRoles.length === 0 && <div style={{ color: '#999', marginTop: 8 }}>暂无</div>}
+          <div style={{ marginTop: 8 }}>
+            {accountRoles.map((role) => (
+              <Tag
+                key={`${role.id}-${rolesVersion}`}
+                color={role.is_super_admin ? 'red' : undefined}
+                closable={hasOperation('role:assign')}
+                onClose={() => handleRemoveRole(role.id)}
+                style={{ marginBottom: 8 }}
+              >
+                {role.name}
+              </Tag>
+            ))}
+          </div>
+        </div>
+        {hasOperation('role:assign') && (
+          <div>
+            <Typography.Text strong>添加角色：</Typography.Text>
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              placeholder="选择要分配的角色"
+              options={allRoles
+                .filter((role) => role.status === 'active'
+                  && !accountRoles.some((assigned) => assigned.id === role.id))
+                .map((role) => ({ label: role.name, value: role.id }))}
+              onChange={handleAssignRole}
+              value={null}
+            />
+          </div>
+        )}
       </Modal>
     </>
   );

@@ -22,6 +22,13 @@ export interface OperationItem {
   status: string;
 }
 
+export interface RoleAccountItem {
+  id: string;
+  account: string;
+  real_name: string;
+  status: string;
+}
+
 export async function listRoles(offset = 0, limit = 50): Promise<RoleListResponse> {
   const { data } = await client.get('/roles', { params: { offset, limit } });
   return data;
@@ -56,5 +63,10 @@ export async function removeOperations(roleId: string, operationCodes: string[])
 
 export async function listAllOperations(): Promise<OperationItem[]> {
   const { data } = await client.get('/operations');
+  return data;
+}
+
+export async function listRoleAccounts(roleId: string): Promise<RoleAccountItem[]> {
+  const { data } = await client.get(`/roles/${roleId}/accounts`);
   return data;
 }

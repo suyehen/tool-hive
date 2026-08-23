@@ -49,6 +49,13 @@ class OperationResponse(BaseModel):
     status: str
 
 
+class RoleAccountResponse(BaseModel):
+    id: str
+    account: str
+    real_name: str
+    status: str
+
+
 class AccountRoleRequest(BaseModel):
     account_id: str
     role_id: str
