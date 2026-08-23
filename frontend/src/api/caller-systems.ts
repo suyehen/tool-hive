@@ -17,6 +17,9 @@ export interface CallerSystemItem {
   effective_from: string | null;
   effective_to: string | null;
   deactivated_reason: string | null;
+  emergency_disabled: boolean;
+  emergency_disabled_reason: string | null;
+  emergency_disabled_at: string | null;
   row_version: number;
   created_at: string;
   updated_at: string | null;
@@ -67,6 +70,16 @@ export interface RuntimePolicy {
   row_version: number;
   created_at: string;
   updated_at: string | null;
+}
+
+export interface ToolScopeItem {
+  id: string;
+  system_id: string;
+  scope_type: string;
+  scope_code: string;
+  status: string;
+  row_version: number;
+  created_at: string;
 }
 
 export async function listCallerSystems(
@@ -190,4 +203,25 @@ export async function saveRuntimePolicy(
 ): Promise<RuntimePolicy> {
   const { data } = await client.put(`/caller-systems/${systemId}/runtime-policy`, params);
   return data;
+}
+
+export async function listToolScopes(systemId: string): Promise<ToolScopeItem[]> {
+  const { data } = await client.get(`/caller-systems/${systemId}/tool-scopes`);
+  return data;
+}
+
+export async function replaceToolScopes(
+  systemId: string,
+  items: Array<{ scope_type: string; scope_code: string; status: string }>,
+): Promise<ToolScopeItem[]> {
+  const { data } = await client.put(`/caller-systems/${systemId}/tool-scopes`, { items });
+  return data;
+}
+
+export async function emergencyDisable(systemId: string, reason: string): Promise<void> {
+  await client.post(`/caller-systems/${systemId}/emergency-disable`, { reason });
+}
+
+export async function emergencyEnable(systemId: string): Promise<void> {
+  await client.post(`/caller-systems/${systemId}/emergency-enable`);
 }

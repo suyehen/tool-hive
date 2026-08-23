@@ -59,6 +59,9 @@ class CallerSystemResponse(BaseModel):
     effective_from: UTCDateTime | None
     effective_to: UTCDateTime | None
     deactivated_reason: str | None
+    emergency_disabled: bool
+    emergency_disabled_reason: str | None
+    emergency_disabled_at: UTCDateTime | None
     row_version: int
     created_at: UTCDateTime
     updated_at: UTCDateTime | None

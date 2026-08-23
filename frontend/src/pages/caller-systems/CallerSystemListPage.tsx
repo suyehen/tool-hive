@@ -12,7 +12,8 @@ import {
   listPublicKeys, addPublicKey, enablePublicKey, disablePublicKey, revokePublicKey,
   listIPRules, addIPRule, updateIPRuleStatus,
   getRuntimePolicy, saveRuntimePolicy,
-  type CallerSystemItem, type PublicKeyItem, type IPRuleItem, type RuntimePolicy,
+  listToolScopes, replaceToolScopes, emergencyDisable, emergencyEnable,
+  type CallerSystemItem, type PublicKeyItem, type IPRuleItem, type RuntimePolicy, type ToolScopeItem,
 } from '../../api/caller-systems';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -75,6 +76,8 @@ export default function CallerSystemListPage() {
   const [ruleForm] = Form.useForm();
   const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy | null>(null);
   const [policyForm] = Form.useForm();
+  const [toolScopes, setToolScopes] = useState<ToolScopeItem[]>([]);
+  const [scopeForm] = Form.useForm();
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [envFilter, setEnvFilter] = useState<string | undefined>(undefined);
@@ -133,6 +136,11 @@ export default function CallerSystemListPage() {
         setRuntimePolicy(null);
         policyForm.resetFields();
       }
+      try {
+        setToolScopes(await listToolScopes(systemId));
+      } catch {
+        setToolScopes([]);
+      }
     }
     setDetailOpen(true);
   };
@@ -159,6 +167,74 @@ export default function CallerSystemListPage() {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败';
       message.error(msg);
     }
+  };
+
+  const handleAddScope = async () => {
+    const values = await scopeForm.validateFields();
+    const tempId = `new-${Date.now()}`;
+    setToolScopes((prev) => [
+      ...prev,
+      {
+        id: tempId,
+        system_id: detailId ?? '',
+        scope_type: values.scope_type,
+        scope_code: values.scope_code,
+        status: values.status,
+        row_version: 0,
+        created_at: '',
+      },
+    ]);
+    scopeForm.resetFields();
+  };
+
+  const handleRemoveScope = (id: string) => {
+    setToolScopes((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleSaveScopes = async () => {
+    if (!detailId) return;
+    try {
+      const items = toolScopes.map((item) => ({
+        scope_type: item.scope_type,
+        scope_code: item.scope_code,
+        status: item.status,
+      }));
+      const saved = await replaceToolScopes(detailId, items);
+      setToolScopes(saved);
+      message.success('工具范围已保存');
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败';
+      message.error(msg);
+    }
+  };
+
+  const handleEmergencyDisable = (systemId: string) => {
+    Modal.confirm({
+      title: '确认紧急禁用？',
+      content: '紧急禁用将立即影响运行侧校验，需填写原因。',
+      onOk: () => {
+        const reason = prompt('紧急禁用原因（必填）：') || '';
+        if (!reason) {
+          message.warning('紧急禁用原因必填');
+          return;
+        }
+        return emergencyDisable(systemId, reason).then(() => {
+          message.success('已紧急禁用');
+          fetchSystems();
+        });
+      },
+    });
+  };
+
+  const handleEmergencyEnable = (systemId: string) => {
+    Modal.confirm({
+      title: '解除紧急禁用？',
+      content: '确认解除该系统的紧急禁用？',
+      onOk: () => emergencyEnable(systemId).then(() => {
+        message.success('已解除紧急禁用');
+        fetchSystems();
+      }),
+    });
   };
 
   const openEdit = (record: CallerSystemItem) => {
@@ -305,7 +381,18 @@ export default function CallerSystemListPage() {
           : <Tag>开发</Tag> },
     { title: '负责人', dataIndex: 'owner', key: 'owner', render: (v) => v || '-' },
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
-      render: (s) => <Tag color={statusColor[s]}>{statusLabel[s] || s}</Tag> },
+      render: (s, record) => (
+        <Space size={4}>
+          {record.emergency_disabled ? (
+            <>
+              <Tag color="red" style={{ textDecoration: 'line-through' }}>已启用</Tag>
+              <Tag color="red">紧急禁用</Tag>
+            </>
+          ) : (
+            <Tag color={statusColor[s]}>{statusLabel[s] || s}</Tag>
+          )}
+        </Space>
+      ) },
     { title: '有效期', dataIndex: 'effective_state', key: 'effective_state', width: 90,
       render: (s) => renderEffectiveState(s) },
     {
@@ -329,6 +416,22 @@ export default function CallerSystemListPage() {
               danger: true,
               onClick: () => confirmLifecycleWithReason(record.system_id, 'disable'),
             });
+            if (hasOperation('caller_system:policy')) {
+              items.push(
+                record.emergency_disabled
+                  ? {
+                      key: 'emergency-enable',
+                      label: '解除紧急禁用',
+                      onClick: () => handleEmergencyEnable(record.system_id),
+                    }
+                  : {
+                      key: 'emergency-disable',
+                      label: '紧急禁用',
+                      danger: true,
+                      onClick: () => handleEmergencyDisable(record.system_id),
+                    },
+              );
+            }
           }
           if (record.status === 'disabled') {
             items.push({ key: 'revive', label: '恢复', onClick: () => confirmLifecycle(record.system_id, 'revive') });
@@ -678,6 +781,64 @@ export default function CallerSystemListPage() {
                     <Button type="primary" onClick={handleSavePolicy}>
                       {runtimePolicy === null ? '保存策略' : '更新策略'}
                     </Button>
+                  </Form>
+                </>
+              ),
+            }] : []),
+            ...(hasOperation('caller_system:policy') ? [{
+              key: 'tool-scopes',
+              label: `工具范围 (${toolScopes.length})`,
+              children: (
+                <>
+                  <Table
+                    columns={[
+                      {
+                        title: '类型', dataIndex: 'scope_type', key: 'scope_type', width: 100,
+                        render: (v) => (v === 'capability' ? <Tag>能力包</Tag> : <Tag color="blue">工具</Tag>),
+                      },
+                      { title: '编码', dataIndex: 'scope_code', key: 'scope_code' },
+                      {
+                        title: '状态', dataIndex: 'status', key: 'status', width: 100,
+                        render: (s) => <Tag>{ruleStatusLabel[s] || s}</Tag>,
+                      },
+                      {
+                        title: '操作', key: 'actions', width: 80,
+                        render: (_, record) => (
+                          <Button size="small" danger onClick={() => handleRemoveScope(record.id)}>
+                            删除
+                          </Button>
+                        ),
+                      },
+                    ]}
+                    dataSource={toolScopes}
+                    rowKey="id"
+                    size="small"
+                    pagination={{ pageSize: 10 }}
+                  />
+                  <Form form={scopeForm} layout="inline" style={{ marginTop: 16 }}>
+                    <Form.Item name="scope_type" label="类型" rules={[{ required: true }]} initialValue="tool">
+                      <Select
+                        style={{ width: 110 }}
+                        options={[
+                          { label: '工具', value: 'tool' },
+                          { label: '能力包', value: 'capability' },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item name="scope_code" rules={[{ required: true }]}>
+                      <Input placeholder="工具/能力包编码" style={{ width: 220 }} />
+                    </Form.Item>
+                    <Form.Item name="status" label="状态" rules={[{ required: true }]} initialValue="active">
+                      <Select
+                        style={{ width: 110 }}
+                        options={[
+                          { label: '已启用', value: 'active' },
+                          { label: '已停用', value: 'disabled' },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Button type="primary" onClick={handleAddScope}>添加</Button>
+                    <Button onClick={handleSaveScopes}>保存范围</Button>
                   </Form>
                 </>
               ),
