@@ -8,7 +8,10 @@ import pytest
 
 from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.caller_system import CallerSystem
-from toolhive.services.caller_system_service import CallerSystemService
+from toolhive.services.caller_system_service import (
+    CallerSystemService,
+    build_caller_system_filters,
+)
 
 
 def test_tags_roundtrip() -> None:
@@ -19,6 +22,46 @@ def test_tags_roundtrip() -> None:
     assert system.get_tags() == ["erp", "订单"]
     system.set_tags([])
     assert system.get_tags() == []
+
+
+def test_build_caller_system_filters_keyword_matches_identity_fields() -> None:
+    """关键词过滤同时命中编码/名称/system_id。"""
+    conditions = build_caller_system_filters(keyword="erp")
+    assert len(conditions) == 1
+    text = str(conditions[0]).lower()
+    assert "code" in text
+    assert "name" in text
+    assert "system_id" in text
+    assert "like" in text
+
+
+def test_build_caller_system_filters_status_environment_and_empty() -> None:
+    """状态/环境精确过滤；空条件（含纯空白）不产生过滤条件。"""
+    conditions = build_caller_system_filters(
+        status="enabled", environment="production",
+    )
+    assert len(conditions) == 2
+    assert build_caller_system_filters() == []
+    assert build_caller_system_filters(keyword="   ") == []
+
+
+async def test_list_systems_applies_filters() -> None:
+    """调用系统列表查询把过滤条件带到 count 与列表语句。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=1)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [MagicMock()]
+    db.execute = AsyncMock(return_value=result)
+    svc = CallerSystemService(db)
+
+    items, total = await svc.list_systems(
+        keyword="erp", status="enabled", environment="production",
+    )
+
+    assert total == 1
+    assert len(items) == 1
+    select_stmt = db.execute.call_args.args[0]
+    assert select_stmt.whereclause is not None
 
 
 async def test_create_draft_accepts_new_fields() -> None:

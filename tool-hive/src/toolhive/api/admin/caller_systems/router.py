@@ -62,11 +62,20 @@ def _to_response(cs) -> CallerSystemResponse:
 async def list_caller_systems(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    keyword: str | None = Query(default=None, max_length=128),
+    status: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _account=Depends(require_operation(OperationCode.CALLER_SYSTEM_VIEW)),
 ):
     svc = CallerSystemService(db)
-    items, total = await svc.list_systems(offset=offset, limit=limit)
+    items, total = await svc.list_systems(
+        offset=offset,
+        limit=limit,
+        keyword=keyword,
+        status=status,
+        environment=environment,
+    )
     return CallerSystemListResponse(
         items=[_to_response(cs) for cs in items], total=total,
     )

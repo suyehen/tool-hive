@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.constants import CALLER_SYSTEM_ID_PREFIX
@@ -30,6 +30,30 @@ from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.services.audit_service import AuditService, get_current_operator_id
 
 logger = logging.getLogger(__name__)
+
+
+def build_caller_system_filters(
+    keyword: str | None = None,
+    status: str | None = None,
+    environment: str | None = None,
+) -> list:
+    """构造调用系统列表过滤条件：关键词命中编码/名称/system_id，状态与环境精确匹配。"""
+    conditions: list = []
+    kw = keyword.strip() if keyword else ""
+    if kw:
+        pattern = f"%{kw}%"
+        conditions.append(
+            or_(
+                CallerSystem.code.ilike(pattern),
+                CallerSystem.name.ilike(pattern),
+                CallerSystem.system_id.ilike(pattern),
+            )
+        )
+    if status:
+        conditions.append(CallerSystem.status == status)
+    if environment:
+        conditions.append(CallerSystem.environment == environment)
+    return conditions
 
 
 class CallerSystemService:
@@ -516,17 +540,26 @@ class CallerSystemService:
         return system
 
     async def list_systems(
-        self, offset: int = 0, limit: int = 50,
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        keyword: str | None = None,
+        status: str | None = None,
+        environment: str | None = None,
     ) -> tuple[list[CallerSystem], int]:
+        conditions = build_caller_system_filters(keyword, status, environment)
         result = await self.db.execute(
             select(CallerSystem)
+            .where(*conditions)
             .order_by(CallerSystem.create_time.desc())
             .offset(offset)
             .limit(limit)
         )
         items = list(result.scalars().all())
         total = await self.db.scalar(
-            select(func.count()).select_from(CallerSystem)
+            select(func.count())
+            .select_from(CallerSystem)
+            .where(*conditions)
         )
         return items, total or 0
 

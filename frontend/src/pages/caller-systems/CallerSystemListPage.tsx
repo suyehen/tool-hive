@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Table, Button, Modal, Form, Input, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions, DatePicker, Dropdown,
+  Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Tag, Typography, Tabs, Popconfirm, Descriptions, DatePicker, Dropdown, Switch,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -11,7 +11,8 @@ import {
   reviveCallerSystem, revokeCallerSystem,
   listPublicKeys, addPublicKey, enablePublicKey, disablePublicKey, revokePublicKey,
   listIPRules, addIPRule, updateIPRuleStatus,
-  type CallerSystemItem, type PublicKeyItem, type IPRuleItem,
+  getRuntimePolicy, saveRuntimePolicy,
+  type CallerSystemItem, type PublicKeyItem, type IPRuleItem, type RuntimePolicy,
 } from '../../api/caller-systems';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -19,6 +20,15 @@ const { Title, Paragraph } = Typography;
 
 const statusColor: Record<string, string> = {
   draft: 'default', enabled: 'green', disabled: 'orange', revoked: 'red',
+};
+const statusLabel: Record<string, string> = {
+  draft: '草稿', enabled: '已启用', disabled: '已停用', revoked: '已注销',
+};
+const keyStatusLabel: Record<string, string> = {
+  pending: '待启用', active: '已启用', disabled: '已停用', expired: '已过期', revoked: '已撤销',
+};
+const ruleStatusLabel: Record<string, string> = {
+  active: '已启用', disabled: '已停用',
 };
 
 const effectiveStateTag: Record<string, { text: string; color: string }> = {
@@ -63,11 +73,28 @@ export default function CallerSystemListPage() {
   const [rules, setRules] = useState<IPRuleItem[]>([]);
   const [keyForm] = Form.useForm();
   const [ruleForm] = Form.useForm();
+  const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicy | null>(null);
+  const [policyForm] = Form.useForm();
+  const [keyword, setKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const [envFilter, setEnvFilter] = useState<string | undefined>(undefined);
 
-  const fetchSystems = async () => {
+  const fetchSystems = async (override?: {
+    keyword?: string;
+    status?: string;
+    environment?: string;
+  }) => {
+    // 未传 override 时使用当前筛选状态；传了则完全以 override 为准（重置场景）
+    const kw = override === undefined ? keyword : (override.keyword ?? '');
+    const st = override === undefined ? statusFilter : override.status;
+    const env = override === undefined ? envFilter : override.environment;
     setLoading(true);
     try {
-      const { items, total: t } = await listCallerSystems();
+      const { items, total: t } = await listCallerSystems(0, 50, {
+        keyword: kw.trim() || undefined,
+        status: st,
+        environment: env,
+      });
       setSystems(items);
       setTotal(t);
     } catch {
@@ -88,7 +115,50 @@ export default function CallerSystemListPage() {
       setKeys([]);
       setRules([]);
     }
+    if (hasOperation('caller_system:policy')) {
+      try {
+        const policy = await getRuntimePolicy(systemId);
+        setRuntimePolicy(policy);
+        policyForm.setFieldsValue({
+          allowed_api_patterns: policy.allowed_api_patterns,
+          qps_limit: policy.qps_limit,
+          concurrency_limit: policy.concurrency_limit,
+          quota_per_day: policy.quota_per_day,
+          request_timeout_seconds: policy.request_timeout_seconds,
+          circuit_breaker_enabled: policy.circuit_breaker_enabled,
+          effectiveFrom: policy.effective_from ? dayjs(policy.effective_from) : null,
+          effectiveTo: policy.effective_to ? dayjs(policy.effective_to) : null,
+        });
+      } catch {
+        setRuntimePolicy(null);
+        policyForm.resetFields();
+      }
+    }
     setDetailOpen(true);
+  };
+
+  const handleSavePolicy = async () => {
+    if (!detailId) return;
+    const values = await policyForm.validateFields();
+    try {
+      await saveRuntimePolicy(detailId, {
+        allowed_api_patterns: values.allowed_api_patterns || [],
+        qps_limit: values.qps_limit,
+        concurrency_limit: values.concurrency_limit,
+        quota_per_day: values.quota_per_day,
+        request_timeout_seconds: values.request_timeout_seconds,
+        circuit_breaker_enabled: values.circuit_breaker_enabled,
+        effective_from: values.effectiveFrom ? values.effectiveFrom.toISOString() : null,
+        effective_to: values.effectiveTo ? values.effectiveTo.toISOString() : null,
+        row_version: runtimePolicy?.row_version,
+      });
+      message.success('运行策略已保存');
+      const policy = await getRuntimePolicy(detailId);
+      setRuntimePolicy(policy);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '保存失败';
+      message.error(msg);
+    }
   };
 
   const openEdit = (record: CallerSystemItem) => {
@@ -235,7 +305,7 @@ export default function CallerSystemListPage() {
           : <Tag>开发</Tag> },
     { title: '负责人', dataIndex: 'owner', key: 'owner', render: (v) => v || '-' },
     { title: '状态', dataIndex: 'status', key: 'status', width: 80,
-      render: (s) => <Tag color={statusColor[s]}>{s}</Tag> },
+      render: (s) => <Tag color={statusColor[s]}>{statusLabel[s] || s}</Tag> },
     { title: '有效期', dataIndex: 'effective_state', key: 'effective_state', width: 90,
       render: (s) => renderEffectiveState(s) },
     {
@@ -284,7 +354,7 @@ export default function CallerSystemListPage() {
   const keyColumns: ColumnsType<PublicKeyItem> = [
     { title: 'key_id', dataIndex: 'key_id', key: 'key_id', render: (v) => <Tag>{v}</Tag> },
     { title: '指纹', dataIndex: 'fingerprint', key: 'fingerprint', render: (v) => v?.slice(0, 16) + '...' },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (s) => <Tag>{s}</Tag> },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (s) => <Tag>{keyStatusLabel[s] || s}</Tag> },
     {
       title: '操作', key: 'actions', width: 200,
       render: (_, record) => (
@@ -315,7 +385,10 @@ export default function CallerSystemListPage() {
   const ruleColumns: ColumnsType<IPRuleItem> = [
     { title: 'IP/CIDR', dataIndex: 'ip_cidr', key: 'ip_cidr', render: (v) => <Tag color="purple">{v}</Tag> },
     { title: '描述', dataIndex: 'description', key: 'description', render: (v) => v || '-' },
-    { title: '状态', dataIndex: 'status', key: 'status' },
+    {
+      title: '状态', dataIndex: 'status', key: 'status',
+      render: (s) => <Tag>{ruleStatusLabel[s] || s}</Tag>,
+    },
     {
       title: '操作', key: 'actions', width: 100,
       render: (_, record) => (
@@ -333,7 +406,7 @@ export default function CallerSystemListPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>调用系统 ({total})</Title>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchSystems}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => fetchSystems()}>刷新</Button>
           {hasOperation('caller_system:create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               登记调用系统
@@ -341,6 +414,46 @@ export default function CallerSystemListPage() {
           )}
         </Space>
       </div>
+
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input
+          placeholder="编码/名称/system_id"
+          style={{ width: 240 }}
+          allowClear
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          onPressEnter={() => fetchSystems()}
+        />
+        <Select
+          placeholder="状态"
+          style={{ width: 130 }}
+          allowClear
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={Object.keys(statusLabel).map((s) => ({ label: statusLabel[s], value: s }))}
+        />
+        <Select
+          placeholder="环境"
+          style={{ width: 110 }}
+          allowClear
+          value={envFilter}
+          onChange={setEnvFilter}
+          options={[
+            { label: '开发', value: 'development' },
+            { label: '测试', value: 'staging' },
+            { label: '生产', value: 'production' },
+          ]}
+        />
+        <Button type="primary" onClick={() => fetchSystems()}>查询</Button>
+        <Button onClick={() => {
+          setKeyword('');
+          setStatusFilter(undefined);
+          setEnvFilter(undefined);
+          fetchSystems({ keyword: '', status: undefined, environment: undefined });
+        }}>
+          重置
+        </Button>
+      </Space>
 
       <Table columns={columns} dataSource={systems} rowKey="id" loading={loading} />
 
@@ -445,7 +558,7 @@ export default function CallerSystemListPage() {
                 {detailSystem.tags?.length ? detailSystem.tags.join('、') : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="生命周期状态">
-                <Tag color={statusColor[detailSystem.status]}>{detailSystem.status}</Tag>
+                <Tag color={statusColor[detailSystem.status]}>{statusLabel[detailSystem.status] || detailSystem.status}</Tag>
               </Descriptions.Item>
               <Descriptions.Item label="有效期状态">
                 {renderEffectiveState(detailSystem.effective_state)}
@@ -506,6 +619,69 @@ export default function CallerSystemListPage() {
                 </>
               ),
             },
+            ...(hasOperation('caller_system:policy') ? [{
+              key: 'policy',
+              label: '运行策略',
+              children: (
+                <>
+                  {runtimePolicy === null && (
+                    <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                      尚未配置运行策略，启用前必须配置运行 API 范围。
+                    </Typography.Text>
+                  )}
+                  <Form
+                    form={policyForm}
+                    layout="vertical"
+                    style={{ maxWidth: 520 }}
+                    initialValues={{
+                      allowed_api_patterns: [],
+                      qps_limit: 10,
+                      concurrency_limit: 5,
+                      quota_per_day: 1000,
+                      request_timeout_seconds: 30,
+                      circuit_breaker_enabled: true,
+                    }}
+                  >
+                    <Form.Item
+                      name="allowed_api_patterns"
+                      label="运行 API 范围"
+                      rules={[{ required: true, message: '至少配置一个运行 API 范围' }]}
+                    >
+                      <Select
+                        mode="tags"
+                        placeholder="如 /api/runtime/v1/tools/execute，输入后回车添加"
+                      />
+                    </Form.Item>
+                    <Space size="large" wrap>
+                      <Form.Item name="qps_limit" label="QPS 上限" rules={[{ required: true }]}>
+                        <InputNumber min={1} style={{ width: 140 }} />
+                      </Form.Item>
+                      <Form.Item name="concurrency_limit" label="并发上限" rules={[{ required: true }]}>
+                        <InputNumber min={1} style={{ width: 140 }} />
+                      </Form.Item>
+                      <Form.Item name="quota_per_day" label="每日配额" rules={[{ required: true }]}>
+                        <InputNumber min={1} style={{ width: 140 }} />
+                      </Form.Item>
+                      <Form.Item name="request_timeout_seconds" label="请求超时（秒）" rules={[{ required: true }]}>
+                        <InputNumber min={1} max={300} style={{ width: 140 }} />
+                      </Form.Item>
+                    </Space>
+                    <Form.Item name="circuit_breaker_enabled" label="启用熔断" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item name="effectiveFrom" label="策略生效时间（可选）">
+                      <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Form.Item name="effectiveTo" label="策略失效时间（可选）">
+                      <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+                    </Form.Item>
+                    <Button type="primary" onClick={handleSavePolicy}>
+                      {runtimePolicy === null ? '保存策略' : '更新策略'}
+                    </Button>
+                  </Form>
+                </>
+              ),
+            }] : []),
           ]}
         />
       </Modal>
