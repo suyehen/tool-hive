@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Key } from 'react';
 import {
-  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Select, Dropdown,
+  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown, Transfer, Select,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
@@ -18,6 +18,15 @@ import { useAuth } from '../../contexts/AuthContext';
 const { Title } = Typography;
 
 const statusColor: Record<string, string> = { active: 'green', disabled: 'orange', archived: 'red' };
+const categoryLabels: Record<string, string> = {
+  account: '管理账号',
+  role: '后台角色',
+  caller_system: '调用系统',
+  tool: '工具',
+  provider: 'Provider',
+  system_task: '系统任务',
+};
+const categoryOrder = ['account', 'role', 'caller_system', 'tool', 'provider', 'system_task'];
 
 export default function RoleListPage() {
   const { hasOperation } = useAuth();
@@ -30,12 +39,11 @@ export default function RoleListPage() {
   const [opsRoleId, setOpsRoleId] = useState<string | null>(null);
   const [allOps, setAllOps] = useState<OperationItem[]>([]);
   const [roleOps, setRoleOps] = useState<OperationItem[]>([]);
-  const [opsVersion, setOpsVersion] = useState(0);
+  const [opsCategory, setOpsCategory] = useState<string | undefined>(undefined);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [accountsRoleId, setAccountsRoleId] = useState<string | null>(null);
   const [roleAccounts, setRoleAccounts] = useState<RoleAccountItem[]>([]);
   const [allAccounts, setAllAccounts] = useState<AccountItem[]>([]);
-  const [accountsVersion, setAccountsVersion] = useState(0);
 
   const fetchRoles = async () => {
     setLoading(true);
@@ -85,13 +93,16 @@ export default function RoleListPage() {
   const confirmStatus = (record: RoleItem, status: string, action: string) => {
     Modal.confirm({
       title: `确认${action}？`,
-      content: `确认${action}角色「${record.name}」？`,
+      content: status === 'archived'
+        ? `确认归档角色「${record.name}」？该操作无法撤销，归档后角色将永久停用、不可恢复。`
+        : `确认${action}角色「${record.name}」？`,
       onOk: () => handleStatus(record.id, status),
     });
   };
 
   const openOpsModal = async (roleId: string) => {
     setOpsRoleId(roleId);
+    setOpsCategory(undefined);
     try {
       setRoleOps(await getRoleOperations(roleId));
     } catch {
@@ -100,32 +111,33 @@ export default function RoleListPage() {
     setOpsModalOpen(true);
   };
 
-  const handleAssignOps = async (codes: string[]) => {
-    if (!opsRoleId) return;
-    try {
-      await assignOperations(opsRoleId, codes);
-      message.success('操作项已分配');
-      setRoleOps(await getRoleOperations(opsRoleId));
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '分配失败';
-      message.error(msg);
+  const handleOpsTransfer = async (
+    _nextTargetKeys: Key[],
+    direction: 'left' | 'right',
+    moveKeys: Key[],
+  ) => {
+    if (!opsRoleId || moveKeys.length === 0) return;
+    const keys = moveKeys.map(String);
+    const previous = roleOps;
+    // 乐观更新：先移动穿梭框中的条目，接口失败再回滚
+    if (direction === 'right') {
+      const moved = allOps.filter((op) => keys.includes(op.operation_code));
+      setRoleOps([...roleOps, ...moved]);
+    } else {
+      setRoleOps(roleOps.filter((op) => !keys.includes(op.operation_code)));
     }
-  };
-
-  const handleRemoveOp = async (code: string) => {
-    if (!opsRoleId) return;
     try {
-      await removeOperations(opsRoleId, [code]);
-      message.success('已移除');
+      if (direction === 'right') {
+        await assignOperations(opsRoleId, keys);
+      } else {
+        await removeOperations(opsRoleId, keys);
+      }
+      message.success('操作权限已更新');
       setRoleOps(await getRoleOperations(opsRoleId));
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '移除失败';
+      setRoleOps(previous);
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '更新失败';
       message.error(msg);
-      // 后端拒绝时恢复真实状态：重取操作项并强制重挂载 Tag（antd Tag 关闭后会自行隐藏）
-      try {
-        setRoleOps(await getRoleOperations(opsRoleId));
-        setOpsVersion((v) => v + 1);
-      } catch { /* 忽略恢复失败 */ }
     }
   };
 
@@ -133,7 +145,7 @@ export default function RoleListPage() {
     setAccountsRoleId(roleId);
     try {
       setRoleAccounts(await listRoleAccounts(roleId));
-      const { items } = await listAccounts();
+      const { items } = await listAccounts(0, 200);
       setAllAccounts(items);
     } catch {
       setRoleAccounts([]);
@@ -142,32 +154,44 @@ export default function RoleListPage() {
     setAccountsOpen(true);
   };
 
-  const handleAssignAccount = async (accountId: string) => {
-    if (!accountsRoleId) return;
-    try {
-      await assignRoleToAccount(accountId, accountsRoleId);
-      message.success('已分配');
-      setRoleAccounts(await listRoleAccounts(accountsRoleId));
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '分配失败';
-      message.error(msg);
+  const handleAccountsTransfer = async (
+    _nextTargetKeys: Key[],
+    direction: 'left' | 'right',
+    moveKeys: Key[],
+  ) => {
+    if (!accountsRoleId || moveKeys.length === 0) return;
+    const keys = moveKeys.map(String);
+    const previous = roleAccounts;
+    // 乐观更新：先移动穿梭框中的条目，接口失败再回滚
+    if (direction === 'right') {
+      const moved = allAccounts
+        .filter((item) => keys.includes(item.id))
+        .map((item) => ({
+          id: item.id,
+          account: item.account,
+          real_name: item.real_name,
+          status: item.status,
+        }));
+      setRoleAccounts([...roleAccounts, ...moved]);
+    } else {
+      setRoleAccounts(roleAccounts.filter((item) => !moveKeys.includes(item.id)));
     }
-  };
-
-  const handleRemoveAccount = async (accountId: string) => {
-    if (!accountsRoleId) return;
     try {
-      await removeRoleFromAccount(accountId, accountsRoleId);
-      message.success('已移除');
+      if (direction === 'right') {
+        for (const accountId of keys) {
+          await assignRoleToAccount(accountId, accountsRoleId);
+        }
+      } else {
+        for (const accountId of keys) {
+          await removeRoleFromAccount(accountId, accountsRoleId);
+        }
+      }
+      message.success('账号已更新');
       setRoleAccounts(await listRoleAccounts(accountsRoleId));
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '移除失败';
+      setRoleAccounts(previous);
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '更新失败';
       message.error(msg);
-      // 后端拒绝时恢复真实状态：重取账号列表并强制重挂载 Tag
-      try {
-        setRoleAccounts(await listRoleAccounts(accountsRoleId));
-        setAccountsVersion((v) => v + 1);
-      } catch { /* 忽略恢复失败 */ }
     }
   };
 
@@ -233,8 +257,6 @@ export default function RoleListPage() {
     },
   ];
 
-  const assignedCodes = new Set(roleOps.map((o) => o.operation_code));
-  const availableOps = allOps.filter((o) => !assignedCodes.has(o.operation_code));
   const currentRole = roles.find((r) => r.id === opsRoleId);
   const isSuperAdminRole = currentRole?.is_super_admin ?? false;
 
@@ -275,40 +297,41 @@ export default function RoleListPage() {
         open={opsModalOpen}
         onCancel={() => setOpsModalOpen(false)}
         footer={null}
-        width={600}
+        width={760}
       >
-        <div style={{ marginBottom: 16 }}>
-          <Typography.Text strong>已分配的操作权限：</Typography.Text>
-          {roleOps.length === 0 && <div style={{ color: '#999', marginTop: 8 }}>暂无</div>}
-          <div style={{ marginTop: 8 }}>
-            {roleOps.map((op) => (
-              <Tag
-                key={`${op.operation_code}-${opsVersion}`}
-                closable={!isSuperAdminRole}
-                onClose={() => handleRemoveOp(op.operation_code)}
-                style={{ marginBottom: 8 }}
-              >
-                {op.display_name}
-              </Tag>
-            ))}
-          </div>
-        </div>
-        {!isSuperAdminRole && (
-          <div>
-            <Typography.Text strong>添加操作权限：</Typography.Text>
-            <Select
-              mode="multiple"
-              style={{ width: '100%', marginTop: 8 }}
-              placeholder="搜索并选择操作权限"
-              options={availableOps.map((op) => ({
-                label: `${op.display_name} (${op.operation_code})`,
-                value: op.operation_code,
-              }))}
-              onChange={handleAssignOps}
-              value={[]}
-            />
-          </div>
-        )}
+        <Select
+          allowClear
+          placeholder="按分类筛选"
+          style={{ width: 200, marginBottom: 12 }}
+          value={opsCategory}
+          onChange={setOpsCategory}
+          options={Array.from(new Set(allOps.map((op) => op.category)))
+            .map((c) => ({ label: categoryLabels[c] || c, value: c }))}
+        />
+        <Transfer
+          dataSource={allOps
+            .filter((op) => !opsCategory || op.category === opsCategory)
+            .sort((a, b) => (
+              a.category === b.category
+                ? a.sort_order - b.sort_order
+                : categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category)
+            ))
+            .map((op) => ({
+              key: op.operation_code,
+              title: op.display_name,
+              description: op.operation_code,
+            }))}
+          targetKeys={roleOps.map((op) => op.operation_code)}
+          onChange={handleOpsTransfer}
+          disabled={isSuperAdminRole || !hasOperation('role:edit')}
+          titles={['未分配', '已分配']}
+          render={(item) => item.title}
+          showSearch
+          filterOption={(input, item) =>
+            `${item.title} ${item.description}`.toLowerCase().includes(input.toLowerCase())}
+          pagination={{ pageSize: 10 }}
+          listStyle={{ width: 330, height: 360 }}
+        />
       </Modal>
 
       <Modal
@@ -316,42 +339,25 @@ export default function RoleListPage() {
         open={accountsOpen}
         onCancel={() => setAccountsOpen(false)}
         footer={null}
-        width={520}
+        width={760}
       >
-        <div style={{ marginBottom: 16 }}>
-          <Typography.Text strong>已分配的账号：</Typography.Text>
-          {roleAccounts.length === 0 && <div style={{ color: '#999', marginTop: 8 }}>暂无</div>}
-          <div style={{ marginTop: 8 }}>
-            {roleAccounts.map((item) => (
-              <Tag
-                key={`${item.id}-${accountsVersion}`}
-                closable={hasOperation('role:assign')}
-                onClose={() => handleRemoveAccount(item.id)}
-                style={{ marginBottom: 8 }}
-              >
-                {item.account}（{item.real_name}）
-              </Tag>
-            ))}
-          </div>
-        </div>
-        {hasOperation('role:assign') && (
-          <div>
-            <Typography.Text strong>添加账号：</Typography.Text>
-            <Select
-              style={{ width: '100%', marginTop: 8 }}
-              placeholder="选择要分配的角色所属账号"
-              options={allAccounts
-                .filter((item) => item.status !== 'offboarded'
-                  && !roleAccounts.some((assigned) => assigned.id === item.id))
-                .map((item) => ({
-                  label: `${item.account}（${item.real_name}）`,
-                  value: item.id,
-                }))}
-              onChange={handleAssignAccount}
-              value={null}
-            />
-          </div>
-        )}
+        <Transfer
+          dataSource={allAccounts
+            .filter((item) => item.status !== 'offboarded')
+            .map((item) => ({
+              key: item.id,
+              title: `${item.account}（${item.real_name}）`,
+            }))}
+          targetKeys={roleAccounts.map((item) => item.id)}
+          onChange={handleAccountsTransfer}
+          disabled={!hasOperation('role:assign')}
+          titles={['未分配', '已分配']}
+          render={(item) => item.title}
+          showSearch
+          filterOption={(input, item) => item.title.toLowerCase().includes(input.toLowerCase())}
+          pagination={{ pageSize: 10 }}
+          listStyle={{ width: 330, height: 360 }}
+        />
       </Modal>
     </>
   );

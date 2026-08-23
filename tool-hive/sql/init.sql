@@ -161,8 +161,10 @@ COMMENT ON COLUMN management_account_role.update_by IS '修改人 ID';
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS management_operation (
     operation_code  VARCHAR(128) PRIMARY KEY,
+    category        VARCHAR(64) NOT NULL DEFAULT 'other',
     display_name    VARCHAR(256) NOT NULL,
     description     TEXT,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     status          VARCHAR(20) NOT NULL DEFAULT 'active',
     create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
     update_time      TIMESTAMPTZ,
@@ -170,10 +172,15 @@ CREATE TABLE IF NOT EXISTS management_operation (
     update_by      VARCHAR(32)
 );
 
+CREATE INDEX IF NOT EXISTS idx_management_operation_category
+    ON management_operation (category);
+
 COMMENT ON TABLE management_operation IS '管理操作项';
 COMMENT ON COLUMN management_operation.operation_code IS '操作码（主键），唯一';
+COMMENT ON COLUMN management_operation.category IS '操作权限分类（account/role/caller_system/tool/provider/system_task）';
 COMMENT ON COLUMN management_operation.display_name IS '显示名称';
 COMMENT ON COLUMN management_operation.description IS '操作项说明';
+COMMENT ON COLUMN management_operation.sort_order IS '分类内排序值，越小越靠前';
 COMMENT ON COLUMN management_operation.status IS '状态';
 COMMENT ON COLUMN management_operation.create_time IS '创建时间';
 COMMENT ON COLUMN management_operation.update_time IS '最后更新时间';

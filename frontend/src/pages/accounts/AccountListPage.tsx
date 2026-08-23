@@ -303,7 +303,7 @@ export default function AccountListPage() {
             danger: true,
             onClick: () => confirmAction(
               '离职处理',
-              `确认对 ${record.account} 执行离职处理？账号将标记为已离职并撤销全部会话。`,
+              `确认对 ${record.account} 执行离职处理？该操作无法撤销，确认后账号将永久标记为已离职，不可再登录、不可恢复。`,
               () => handleOffboard(record.id),
             ),
           });

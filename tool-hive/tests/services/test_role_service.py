@@ -6,8 +6,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from toolhive.core.enums import OperationStatus
 from toolhive.core.exceptions import NotFoundError, ValidationError
 from toolhive.core.operation_codes import SUPER_ADMIN_ROLE_NAME
+from toolhive.models.management_operation import ManagementOperation
 from toolhive.models.management_role import ManagementRole
 from toolhive.models.management_role_operation import ManagementRoleOperation
 from toolhive.services.role_service import RoleService
@@ -43,6 +45,77 @@ async def test_get_role_accounts_raises_not_found() -> None:
 
     with pytest.raises(NotFoundError):
         await svc.get_role_accounts("missing")
+
+
+async def test_sync_operation_codes_inserts_meta_fields() -> None:
+    """启动同步：新增操作码写入代码映射的中文名/分类/排序/说明。"""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result)
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = RoleService(db)
+    svc._get_super_admin_role_ids = AsyncMock(return_value=[])
+
+    await svc.sync_operation_codes()
+
+    added_ops = [
+        call.args[0] for call in db.add.call_args_list
+        if isinstance(call.args[0], ManagementOperation)
+    ]
+    assert added_ops
+    admin_view = next(
+        op for op in added_ops if op.operation_code == "admin_account:view"
+    )
+    assert admin_view.display_name == "查看管理账号"
+    assert admin_view.category == "account"
+    assert admin_view.sort_order == 10
+    assert admin_view.description is not None
+
+
+async def test_sync_operation_codes_overwrites_meta_fields() -> None:
+    """启动同步：已有操作码的显示名/分类/排序/说明强制刷新为代码映射。"""
+    op = ManagementOperation(
+        operation_code="role:view",
+        display_name="role:view",
+        category="old",
+        sort_order=0,
+        description=None,
+        status=OperationStatus.ACTIVE,
+    )
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [op]
+    db.execute = AsyncMock(return_value=result)
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = RoleService(db)
+    svc._get_super_admin_role_ids = AsyncMock(return_value=[])
+
+    await svc.sync_operation_codes()
+
+    assert op.display_name == "查看后台角色"
+    assert op.category == "role"
+    assert op.sort_order == 10
+    assert op.description is not None
+
+
+async def test_sync_operation_codes_queries_super_admin_roles_once() -> None:
+    """回归：超管角色 ID 只查询一次（不在枚举循环内重复查询）。"""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    db.execute = AsyncMock(return_value=result)
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = RoleService(db)
+    get_ids = AsyncMock(return_value=[])
+    svc._get_super_admin_role_ids = get_ids
+
+    await svc.sync_operation_codes()
+
+    get_ids.assert_awaited_once()
 
 
 async def test_create_role_rejects_reserved_super_admin_name() -> None:

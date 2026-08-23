@@ -173,7 +173,9 @@ export default function CallerSystemListPage() {
   ) => {
     Modal.confirm({
       title: action === 'disable' ? '确认停用？' : '确认注销？',
-      content: action === 'disable' ? '确认停用该系统？' : '确认注销该系统？注销后 system_id 不可复用！',
+      content: action === 'disable'
+        ? '确认停用该系统？'
+        : '确认注销该系统？该操作无法撤销，注销后 system_id 永久失效且不可复用！',
       onOk: () => {
         const reason = prompt(action === 'revoke' ? '注销原因（必填）：' : '停用原因（可选）：') || '';
         if (action === 'revoke' && !reason) {
@@ -283,7 +285,10 @@ export default function CallerSystemListPage() {
             </Popconfirm>
           )}
           {hasOperation('caller_system:manage') && record.status !== 'revoked' && (
-            <Popconfirm title="确认撤销？不可恢复！" onConfirm={() => revokePublicKey(record.key_id).then(() => openDetail(detailId!))}>
+            <Popconfirm
+              title="确认撤销？该操作无法撤销，撤销后公钥将永久失效、不可恢复！"
+              onConfirm={() => revokePublicKey(record.key_id).then(() => openDetail(detailId!))}
+            >
               <Button size="small" danger>撤销</Button>
             </Popconfirm>
           )}

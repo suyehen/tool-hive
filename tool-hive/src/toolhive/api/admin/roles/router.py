@@ -164,6 +164,8 @@ async def get_role_operations(
         OperationResponse(
             operation_code=o.operation_code,
             display_name=o.display_name,
+            category=o.category,
+            sort_order=o.sort_order,
             description=o.description,
             status=o.status,
         )
@@ -251,6 +253,8 @@ async def list_operations(
         OperationResponse(
             operation_code=o.operation_code,
             display_name=o.display_name,
+            category=o.category,
+            sort_order=o.sort_order,
             description=o.description,
             status=o.status,
         )

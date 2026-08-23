@@ -18,6 +18,8 @@ export interface RoleListResponse {
 export interface OperationItem {
   operation_code: string;
   display_name: string;
+  category: string;
+  sort_order: number;
   description: string | null;
   status: string;
 }

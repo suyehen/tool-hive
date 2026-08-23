@@ -45,6 +45,8 @@ class RoleListResponse(BaseModel):
 class OperationResponse(BaseModel):
     operation_code: str
     display_name: str
+    category: str
+    sort_order: int
     description: str | None
     status: str
 

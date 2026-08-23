@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from toolhive.core.enums import AccountStatus, OperationStatus, RoleStatus
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.core.operation_codes import (
+    OPERATION_META,
     SUPER_ADMIN_ROLE_NAME,
     OperationCode,
 )
@@ -420,20 +421,27 @@ class RoleService:
             r.operation_code: r for r in result.scalars().all()
         }
 
+        # 超管角色 ID 只需查询一次（避免在枚举循环内重复查询）
+        super_admin_role_ids = await self._get_super_admin_role_ids()
+
         # 新增操作码 → 插入
         for code in all_codes:
-            if code not in db_codes:
+            code_str = str(code)
+            meta = OPERATION_META.get(code_str, {})
+            if code_str not in db_codes:
                 op = ManagementOperation(
-                    operation_code=str(code),
-                    display_name=str(code),  # 默认用 operation_code 作显示名
+                    operation_code=code_str,
+                    category=str(meta.get("category", "other")),
+                    display_name=str(meta.get("display_name", code_str)),
+                    description=meta.get("description"),
+                    sort_order=int(meta.get("sort_order", 0)),
                     status=OperationStatus.ACTIVE,
                 )
                 self.db.add(op)
                 logger.info("新增操作码: %s", code)
 
             # 授予超管
-            super_admin_roles = await self._get_super_admin_role_ids()
-            for sa_role_id in super_admin_roles:
+            for sa_role_id in super_admin_role_ids:
                 existing = await self.db.scalar(
                     select(ManagementRoleOperation).where(
                         ManagementRoleOperation.role_id == sa_role_id,
@@ -445,6 +453,23 @@ class RoleService:
                         role_id=sa_role_id,
                         operation_code=code,
                     ))
+
+        # 已有操作码 → 强制刷新为代码映射的元数据（映射为唯一权威）
+        for code_str, op in db_codes.items():
+            meta = OPERATION_META.get(code_str)
+            if meta is None:
+                continue
+            if (
+                op.display_name != meta["display_name"]
+                or op.category != meta["category"]
+                or op.sort_order != meta["sort_order"]
+                or op.description != meta.get("description")
+            ):
+                op.display_name = str(meta["display_name"])
+                op.category = str(meta["category"])
+                op.sort_order = int(meta["sort_order"])
+                op.description = meta.get("description")
+                self.db.add(op)
 
         # 废弃的操作码 → 标记（不删除）
         db_code_set = set(db_codes.keys())
