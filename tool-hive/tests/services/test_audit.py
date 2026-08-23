@@ -190,7 +190,7 @@ async def test_role_create_records_audit() -> None:
     svc = RoleService(db)
     set_audit_actor("acc-9", "operator")
 
-    role = await svc.create_role("ops")
+    role = await svc.create_role("ops", "ops")
 
     records = _audit_records(db)
     assert len(records) == 1

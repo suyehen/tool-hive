@@ -5,6 +5,7 @@ export interface AccountItem {
   id: string;
   account: string;
   real_name: string;
+  is_super_admin: boolean;
   email: string | null;
   mobile: string | null;
   department: string | null;

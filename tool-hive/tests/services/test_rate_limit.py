@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -64,3 +64,52 @@ async def test_check_captcha_challenge_limit_sets_expire_on_first() -> None:
     with patch("toolhive.services.security.rate_limit.get_redis", return_value=redis):
         assert await rate_limit.check_captcha_challenge_limit("1.2.3.4") is True
     redis.expire.assert_awaited_once_with("captcha_challenge:1.2.3.4", 60)
+
+
+async def test_record_login_failure_tracks_account_ips() -> None:
+    """登录失败时记录账号关联的失败来源 IP。"""
+    redis = AsyncMock()
+    pipe = MagicMock()
+    pipe.__aenter__ = AsyncMock(return_value=pipe)
+    pipe.__aexit__ = AsyncMock(return_value=False)
+    pipe.execute = AsyncMock()
+    redis.pipeline = MagicMock(return_value=pipe)
+
+    with patch("toolhive.services.security.rate_limit.get_redis", return_value=redis):
+        await rate_limit.record_login_failure("acc-1", "1.2.3.4")
+
+    sadd_calls = [c.args for c in pipe.sadd.call_args_list]
+    assert ("login_fail:account_ips:acc-1", "1.2.3.4") in sadd_calls
+    expire_keys = [c.args[0] for c in pipe.expire.call_args_list]
+    assert "login_fail:account_ips:acc-1" in expire_keys
+
+
+async def test_clear_account_failure_ips_deletes_ip_counters() -> None:
+    """解锁时清除账号关联失败 IP 的限流计数与集合。"""
+    redis = AsyncMock()
+    redis.smembers = AsyncMock(return_value={"1.2.3.4", "5.6.7.8"})
+    pipe = MagicMock()
+    pipe.__aenter__ = AsyncMock(return_value=pipe)
+    pipe.__aexit__ = AsyncMock(return_value=False)
+    pipe.execute = AsyncMock()
+    redis.pipeline = MagicMock(return_value=pipe)
+
+    with patch("toolhive.services.security.rate_limit.get_redis", return_value=redis):
+        await rate_limit.clear_account_failure_ips("acc-1")
+
+    delete_keys = [c.args[0] for c in pipe.delete.call_args_list]
+    assert "login_fail:ip:1.2.3.4" in delete_keys
+    assert "login_fail:ip:5.6.7.8" in delete_keys
+    assert "login_fail:account_ips:acc-1" in delete_keys
+
+
+async def test_clear_login_failures_removes_account_ips() -> None:
+    """登录成功时一并清除账号失败 IP 集合。"""
+    redis = AsyncMock()
+    redis.delete = AsyncMock()
+
+    with patch("toolhive.services.security.rate_limit.get_redis", return_value=redis):
+        await rate_limit.clear_login_failures("acc-1", "1.2.3.4")
+
+    keys = redis.delete.call_args.args
+    assert "login_fail:account_ips:acc-1" in keys

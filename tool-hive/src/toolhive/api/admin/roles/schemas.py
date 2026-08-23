@@ -8,11 +8,14 @@ from toolhive.core.time_utils import UTCDateTime
 
 
 class CreateRoleRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
+    sort_order: int | None = Field(None, ge=0, description="排序值，越小越靠前")
     description: str | None = Field(None, max_length=512)
 
 
 class UpdateRoleRequest(BaseModel):
+    sort_order: int | None = Field(None, ge=0, description="排序值，越小越靠前")
     name: str | None = Field(None, min_length=1, max_length=128)
     description: str | None = Field(None, max_length=512)
     row_version: int | None = Field(None, ge=0, description="乐观锁版本号，可选")
@@ -28,7 +31,10 @@ class AssignOperationsRequest(BaseModel):
 
 class RoleResponse(BaseModel):
     id: str
+    code: str
     name: str
+    sort_order: int
+    is_builtin: bool
     description: str | None
     is_super_admin: bool
     status: str

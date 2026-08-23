@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.enums import AccountStatus, OperationStatus, RoleStatus
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.core.operation_codes import (
     OPERATION_META,
+    SUPER_ADMIN_ROLE_CODE,
     SUPER_ADMIN_ROLE_NAME,
     OperationCode,
 )
@@ -26,6 +27,26 @@ from toolhive.services.audit_service import AuditService, get_current_operator_i
 logger = logging.getLogger(__name__)
 
 
+def build_role_filters(
+    keyword: str | None = None,
+    status: str | None = None,
+) -> list:
+    """构造角色列表过滤条件：关键词命中编码/角色名，状态精确匹配。"""
+    conditions: list = []
+    kw = keyword.strip() if keyword else ""
+    if kw:
+        pattern = f"%{kw}%"
+        conditions.append(
+            or_(
+                ManagementRole.code.ilike(pattern),
+                ManagementRole.name.ilike(pattern),
+            )
+        )
+    if status:
+        conditions.append(ManagementRole.status == status)
+    return conditions
+
+
 class RoleService:
     """后台角色与权限判定。"""
 
@@ -37,17 +58,28 @@ class RoleService:
     # ═════════════════════════════════════════════════════════════
 
     async def list_roles(
-        self, offset: int = 0, limit: int = 50,
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        keyword: str | None = None,
+        status: str | None = None,
     ) -> tuple[list[ManagementRole], int]:
+        conditions = build_role_filters(keyword, status)
         result = await self.db.execute(
             select(ManagementRole)
-            .order_by(ManagementRole.create_time.desc())
+            .where(*conditions)
+            .order_by(
+                ManagementRole.sort_order.asc(),
+                ManagementRole.create_time.desc(),
+            )
             .offset(offset)
             .limit(limit)
         )
         items = list(result.scalars().all())
         total = await self.db.scalar(
-            select(func.count()).select_from(ManagementRole)
+            select(func.count())
+            .select_from(ManagementRole)
+            .where(*conditions)
         )
         return items, total or 0
 
@@ -64,10 +96,21 @@ class RoleService:
 
     @transactional()
     async def create_role(
-        self, name: str, description: str | None = None,
+        self,
+        code: str,
+        name: str,
+        sort_order: int | None = None,
+        description: str | None = None,
     ) -> ManagementRole:
+        if code == SUPER_ADMIN_ROLE_CODE:
+            raise ValidationError("内置超级管理员角色编码不可使用")
         if name == SUPER_ADMIN_ROLE_NAME:
             raise ValidationError("内置超级管理员角色不可创建")
+        existing_code = await self.db.scalar(
+            select(ManagementRole).where(ManagementRole.code == code)
+        )
+        if existing_code:
+            raise ConflictError(f"角色编码 '{code}' 已被使用")
         existing = await self.db.scalar(
             select(ManagementRole).where(ManagementRole.name == name)
         )
@@ -76,8 +119,11 @@ class RoleService:
 
         # 创建角色：显式写入创建时间与当前操作人 ID
         role = ManagementRole(
+            code=code,
             name=name,
             description=description,
+            sort_order=sort_order if sort_order is not None else 0,
+            is_builtin=False,
             is_super_admin=False,
             create_time=datetime.now(UTC),
             create_by=get_current_operator_id(),
@@ -88,7 +134,11 @@ class RoleService:
             action="role.create",
             object_type="role",
             object_id=role.id,
-            after_summary={"name": name, "is_super_admin": role.is_super_admin},
+            after_summary={
+                "code": code,
+                "name": name,
+                "is_super_admin": role.is_super_admin,
+            },
         )
         return role
 
@@ -96,6 +146,7 @@ class RoleService:
     async def update_role(
         self,
         role_id: str,
+        sort_order: int | None = None,
         name: str | None = None,
         description: str | None = None,
         expected_row_version: int | None = None,
@@ -112,7 +163,13 @@ class RoleService:
         if name and name == SUPER_ADMIN_ROLE_NAME:
             raise ValidationError("内置超级管理员角色名不可使用")
 
-        before = {"name": role.name, "description": role.description}
+        before = {
+            "name": role.name,
+            "description": role.description,
+            "sort_order": role.sort_order,
+        }
+        if sort_order is not None:
+            role.sort_order = sort_order
         if name and name != role.name:
             existing = await self.db.scalar(
                 select(ManagementRole).where(ManagementRole.name == name)
@@ -134,7 +191,11 @@ class RoleService:
             object_type="role",
             object_id=role.id,
             before_summary=before,
-            after_summary={"name": role.name, "description": role.description},
+            after_summary={
+                "name": role.name,
+                "description": role.description,
+                "sort_order": role.sort_order,
+            },
         )
         return role
 
@@ -490,11 +551,20 @@ class RoleService:
         )
         if role is None:
             role = ManagementRole(
+                code=SUPER_ADMIN_ROLE_CODE,
                 name=SUPER_ADMIN_ROLE_NAME,
                 description="内置超级管理员角色，不可删除、不可修改",
+                sort_order=0,
+                is_builtin=True,
                 is_super_admin=True,
                 status=RoleStatus.ACTIVE,
             )
+            self.db.add(role)
+            await self.db.flush()
+        elif role.code != SUPER_ADMIN_ROLE_CODE or not role.is_builtin:
+            # 存量库回填：内置超管角色补齐编码与内置标志
+            role.code = SUPER_ADMIN_ROLE_CODE
+            role.is_builtin = True
             self.db.add(role)
             await self.db.flush()
         return role

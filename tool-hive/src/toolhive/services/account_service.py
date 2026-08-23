@@ -9,7 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.config import AdminSecuritySettings
-from toolhive.core.enums import AccountStatus
+from toolhive.core.enums import AccountStatus, RoleStatus
 from toolhive.core.exceptions import (
     AuthenticationError,
     ConflictError,
@@ -20,6 +20,7 @@ from toolhive.infrastructure.transactions import transactional
 from toolhive.models.account_auth_state import ManagementAccountAuthState
 from toolhive.models.account_role import AccountRole
 from toolhive.models.management_account import ManagementAccount
+from toolhive.models.management_role import ManagementRole
 from toolhive.services.audit_service import AuditService, get_current_operator_id
 from toolhive.services.role_service import RoleService
 from toolhive.services.security.password import (
@@ -28,6 +29,7 @@ from toolhive.services.security.password import (
     validate_password_strength,
     verify_password,
 )
+from toolhive.services.security.rate_limit import clear_account_failure_ips
 from toolhive.services.security.session import revoke_all_sessions
 
 logger = logging.getLogger(__name__)
@@ -307,6 +309,16 @@ class AccountService:
         )
         return list(result.scalars().all()), total or 0
 
+    async def get_super_admin_account_ids(self) -> set[str]:
+        """查询所有持有启用态超管角色的账号 ID（供列表/详情标记超管身份）。"""
+        result = await self.db.execute(
+            select(AccountRole.account_id)
+            .join(ManagementRole, ManagementRole.id == AccountRole.role_id)
+            .where(ManagementRole.is_super_admin.is_(True))
+            .where(ManagementRole.status == RoleStatus.ACTIVE)
+        )
+        return set(result.scalars().all())
+
     # ── 密码 ──
 
     @transactional()
@@ -403,6 +415,8 @@ class AccountService:
                 raise ConflictError("账号已禁用")
             if account.status == AccountStatus.OFFBOARDED:
                 raise ValidationError("已离职账号不可禁用")
+            # 超管账号保护：禁用需先移除超管角色
+            await self._ensure_not_super_admin(account)
             await self._check_last_super_admin(account)
             auth = self._require_auth_state(account)
             account.status = AccountStatus.DISABLED
@@ -434,6 +448,8 @@ class AccountService:
         """提前解锁账号。"""
         if account.status == AccountStatus.OFFBOARDED:
             raise ValidationError("已离职账号不可解锁")
+        # 超管账号保护：解锁需先移除超管角色
+        await self._ensure_not_super_admin(account)
         auth = self._require_auth_state(account)
         account.status = AccountStatus.ENABLED
         auth.login_failures = 0
@@ -443,6 +459,8 @@ class AccountService:
         account.update_by = get_current_operator_id()
         account.row_version += 1
         await self.db.flush()
+        # 同步清除该账号关联失败来源 IP 的 Redis 限流计数，避免解锁后仍被 IP 层拦截
+        await clear_account_failure_ips(account.id)
         AuditService(self.db).add_record(
             action="account.unlock",
             object_type="account",
@@ -458,6 +476,8 @@ class AccountService:
         try:
             if account.id == operator_id:
                 raise ValidationError("不能对自己执行离职处理")
+            # 超管账号保护：离职需先移除超管角色
+            await self._ensure_not_super_admin(account)
             await self._check_last_super_admin(account)
             auth = self._require_auth_state(account)
             account.status = AccountStatus.OFFBOARDED
@@ -487,6 +507,8 @@ class AccountService:
     @transactional()
     async def force_logout(self, account: ManagementAccount) -> None:
         """强制下线：撤销全部会话。"""
+        # 超管账号保护：强制下线需先移除超管角色
+        await self._ensure_not_super_admin(account)
         await revoke_all_sessions(account.id)
         AuditService(self.db).add_record(
             action="account.force_logout",
@@ -574,6 +596,14 @@ class AccountService:
         auth.password_hash = hash_password(new_password)
         auth.must_change_password = False
         auth.temp_password_expires_at = None
+
+    async def _ensure_not_super_admin(self, account: ManagementAccount) -> None:
+        """超管账号保护：除角色分配/移除外，禁止其他管理操作（需先降权）。"""
+        role_svc = RoleService(self.db)
+        if await role_svc.is_super_admin_account(account.id):
+            raise ValidationError(
+                "超管账号不可执行此操作，请先移除其超管角色后再操作"
+            )
 
     async def _check_last_super_admin(self, account: ManagementAccount) -> None:
         """检查是否为最后一个启用状态的超管，防止系统失去管理入口。"""

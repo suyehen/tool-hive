@@ -156,15 +156,19 @@ async def get_session_info(
 
 @router.get("/me")
 async def get_me(
+    db: AsyncSession = Depends(get_db),
     account=Depends(_get_current_user),
 ):
     """获取当前账号信息（权限实时生效，前端据此刷新展示）。"""
+    from toolhive.services.role_service import RoleService
+    role_svc = RoleService(db)
     return {
         "account_id": account.id,
         "account": account.account,
         "external_user_id": account.external_user_id,
         "status": account.status,
         "must_change_password": account.auth_state.must_change_password,
+        "is_super_admin": await role_svc.is_super_admin_account(account.id),
     }
 
 

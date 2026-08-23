@@ -52,12 +52,14 @@ async def list_accounts(
         status=status,
         department=department,
     )
+    super_admin_ids = await svc.get_super_admin_account_ids()
     return AccountListResponse(
         items=[
             AccountResponse(
                 id=a.id,
                 account=a.account,
                 real_name=a.real_name,
+                is_super_admin=a.id in super_admin_ids,
                 email=a.email,
                 mobile=a.mobile,
                 department=a.department,
@@ -121,10 +123,12 @@ async def get_account(
         a = await svc.get_by_id(account_id)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    super_admin_ids = await svc.get_super_admin_account_ids()
     return AccountResponse(
         id=a.id,
         account=a.account,
         real_name=a.real_name,
+        is_super_admin=a.id in super_admin_ids,
         email=a.email,
         mobile=a.mobile,
         department=a.department,
@@ -170,10 +174,12 @@ async def update_account_profile(
         )
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    super_admin_ids = await svc.get_super_admin_account_ids()
     return AccountResponse(
         id=updated.id,
         account=updated.account,
         real_name=updated.real_name,
+        is_super_admin=updated.id in super_admin_ids,
         email=updated.email,
         mobile=updated.mobile,
         department=updated.department,
@@ -294,7 +300,10 @@ async def get_account_roles(
     return [
         RoleResponse(
             id=r.id,
+            code=r.code,
             name=r.name,
+            sort_order=r.sort_order,
+            is_builtin=r.is_builtin,
             description=r.description,
             is_super_admin=r.is_super_admin,
             status=r.status,

@@ -8,6 +8,7 @@ from toolhive.infrastructure.redis import get_redis
 # ── Redis key 前缀 ──
 _ACCOUNT_FAIL_PREFIX: str = "login_fail:account:"
 _IP_FAIL_PREFIX: str = "login_fail:ip:"
+_ACCOUNT_IP_PREFIX: str = "login_fail:account_ips:"
 _CAPTCHA_CHALLENGE_PREFIX: str = "captcha_challenge:"
 
 _admin_security = AdminSecuritySettings()
@@ -28,6 +29,9 @@ async def record_login_failure(account_id: str | None, source_ip: str) -> None:
         if account_id:
             pipe.incr(f"{_ACCOUNT_FAIL_PREFIX}{account_id}")
             pipe.expire(f"{_ACCOUNT_FAIL_PREFIX}{account_id}", window_sec)
+            # 记录该账号失败来源 IP，供管理员解锁时一并清除 IP 限流
+            pipe.sadd(f"{_ACCOUNT_IP_PREFIX}{account_id}", source_ip)
+            pipe.expire(f"{_ACCOUNT_IP_PREFIX}{account_id}", window_sec)
         pipe.incr(f"{_IP_FAIL_PREFIX}{source_ip}")
         pipe.expire(f"{_IP_FAIL_PREFIX}{source_ip}", window_sec)
         await pipe.execute()
@@ -39,7 +43,20 @@ async def clear_login_failures(account_id: str, source_ip: str) -> None:
     await redis.delete(
         f"{_ACCOUNT_FAIL_PREFIX}{account_id}",
         f"{_IP_FAIL_PREFIX}{source_ip}",
+        f"{_ACCOUNT_IP_PREFIX}{account_id}",
     )
+
+
+async def clear_account_failure_ips(account_id: str) -> None:
+    """清除某账号关联的失败来源 IP 限流计数（管理员解锁时调用）。"""
+    redis = await get_redis()
+    key = f"{_ACCOUNT_IP_PREFIX}{account_id}"
+    ips = await redis.smembers(key)
+    async with redis.pipeline(transaction=True) as pipe:
+        for ip in ips:
+            pipe.delete(f"{_IP_FAIL_PREFIX}{ip}")
+        pipe.delete(key)
+        await pipe.execute()
 
 
 async def is_ip_blocked(source_ip: str) -> bool:

@@ -2,10 +2,14 @@ import client from './client';
 
 export interface RoleItem {
   id: string;
+  code: string;
   name: string;
+  sort_order: number;
+  is_builtin: boolean;
   description: string | null;
   is_super_admin: boolean;
   status: string;
+  row_version: number;
   created_at: string;
   updated_at: string | null;
 }
@@ -13,6 +17,11 @@ export interface RoleItem {
 export interface RoleListResponse {
   items: RoleItem[];
   total: number;
+}
+
+export interface RoleListQuery {
+  keyword?: string;
+  status?: string;
 }
 
 export interface OperationItem {
@@ -31,18 +40,46 @@ export interface RoleAccountItem {
   status: string;
 }
 
-export async function listRoles(offset = 0, limit = 50): Promise<RoleListResponse> {
-  const { data } = await client.get('/roles', { params: { offset, limit } });
+export async function listRoles(
+  offset = 0,
+  limit = 50,
+  query?: RoleListQuery,
+): Promise<RoleListResponse> {
+  const { data } = await client.get('/roles', {
+    params: {
+      offset,
+      limit,
+      keyword: query?.keyword || undefined,
+      status: query?.status || undefined,
+    },
+  });
   return data;
 }
 
-export async function createRole(name: string, description?: string): Promise<RoleItem> {
-  const { data } = await client.post('/roles', { name, description });
+export async function createRole(
+  code: string,
+  name: string,
+  params?: { sort_order?: number; description?: string },
+): Promise<RoleItem> {
+  const { data } = await client.post('/roles', {
+    code,
+    name,
+    sort_order: params?.sort_order,
+    description: params?.description,
+  });
   return data;
 }
 
-export async function updateRole(id: string, name?: string, description?: string): Promise<RoleItem> {
-  const { data } = await client.patch(`/roles/${id}`, { name, description });
+export async function updateRole(
+  id: string,
+  params: {
+    name?: string;
+    description?: string;
+    sort_order?: number;
+    row_version?: number;
+  },
+): Promise<RoleItem> {
+  const { data } = await client.patch(`/roles/${id}`, params);
   return data;
 }
 

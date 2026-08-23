@@ -57,6 +57,9 @@ class OperationCode(StrEnum):
 # 超管角色名（内置，不可删除/改名）
 SUPER_ADMIN_ROLE_NAME = "super_admin"
 
+# 超管角色编码（内置，不可使用）
+SUPER_ADMIN_ROLE_CODE = "super_admin"
+
 
 # 操作码元数据（唯一权威，启动同步时强制刷新 management_operation 的对应字段）
 # 每个操作码包含：category（分类）、display_name（中文名）、description（说明）、

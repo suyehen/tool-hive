@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type Key } from 'react';
 import {
-  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown, Select,
+  Table, Button, Modal, Form, Input, message, Space, Tag, Typography, Dropdown, Select, Transfer,
+  Tooltip,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, EllipsisOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EllipsisOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { MenuProps } from 'antd';
 import {
@@ -24,7 +25,7 @@ const statusLabel: Record<string, string> = {
 };
 
 export default function AccountListPage() {
-  const { hasOperation } = useAuth();
+  const { hasOperation, me } = useAuth();
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -39,7 +40,7 @@ export default function AccountListPage() {
   const [rolesAccountId, setRolesAccountId] = useState<string | null>(null);
   const [accountRoles, setAccountRoles] = useState<RoleItem[]>([]);
   const [allRoles, setAllRoles] = useState<RoleItem[]>([]);
-  const [rolesVersion, setRolesVersion] = useState(0);
+  const [rolesSelected, setRolesSelected] = useState<string[]>([]);
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [department, setDepartment] = useState('');
@@ -49,12 +50,16 @@ export default function AccountListPage() {
     status?: string;
     department?: string;
   }) => {
+    // 未传 override 时使用当前筛选状态；传了则完全以 override 为准（重置场景）
+    const kw = override === undefined ? keyword : (override.keyword ?? '');
+    const st = override === undefined ? statusFilter : override.status;
+    const dept = override === undefined ? department : (override.department ?? '');
     setLoading(true);
     try {
       const { items, total: t } = await listAccounts(0, 50, {
-        keyword: (override?.keyword ?? keyword).trim() || undefined,
-        status: override?.status ?? statusFilter,
-        department: (override?.department ?? department).trim() || undefined,
+        keyword: kw.trim() || undefined,
+        status: st,
+        department: dept.trim() || undefined,
       });
       setAccounts(items);
       setTotal(t);
@@ -137,6 +142,7 @@ export default function AccountListPage() {
 
   const openRolesModal = async (accountId: string) => {
     setRolesAccountId(accountId);
+    setRolesSelected([]);
     try {
       setAccountRoles(await listAccountRoles(accountId));
       const { items } = await listRoles();
@@ -148,33 +154,39 @@ export default function AccountListPage() {
     setRolesOpen(true);
   };
 
-  const handleAssignRole = async (roleId: string) => {
-    if (!rolesAccountId) return;
+  const handleRolesTransfer = async (
+    _nextTargetKeys: Key[],
+    direction: 'left' | 'right',
+    moveKeys: Key[],
+  ) => {
+    if (!rolesAccountId || moveKeys.length === 0) return;
+    const keys = moveKeys.map(String);
+    const previous = accountRoles;
+    // 乐观更新：先移动穿梭框中的条目，接口失败再回滚
+    if (direction === 'right') {
+      const moved = allRoles.filter((role) => keys.includes(role.id));
+      setAccountRoles([...accountRoles, ...moved]);
+    } else {
+      setAccountRoles(accountRoles.filter((role) => !keys.includes(role.id)));
+    }
     try {
-      await assignRoleToAccount(rolesAccountId, roleId);
-      message.success('角色已分配');
+      if (direction === 'right') {
+        for (const roleId of keys) {
+          await assignRoleToAccount(rolesAccountId, roleId);
+        }
+      } else {
+        for (const roleId of keys) {
+          await removeRoleFromAccount(rolesAccountId, roleId);
+        }
+      }
+      message.success('角色已更新');
       setAccountRoles(await listAccountRoles(rolesAccountId));
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '分配失败';
+      setAccountRoles(previous);
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '更新失败';
       message.error(msg);
     }
-  };
-
-  const handleRemoveRole = async (roleId: string) => {
-    if (!rolesAccountId) return;
-    try {
-      await removeRoleFromAccount(rolesAccountId, roleId);
-      message.success('已移除');
-      setAccountRoles(await listAccountRoles(rolesAccountId));
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || '移除失败';
-      message.error(msg);
-      // 后端拒绝时恢复真实状态：重取角色列表并强制重挂载 Tag
-      try {
-        setAccountRoles(await listAccountRoles(rolesAccountId));
-        setRolesVersion((v) => v + 1);
-      } catch { /* 忽略恢复失败 */ }
-    }
+    setRolesSelected([]);
   };
 
   const handleAction = async (id: string, action: 'enable' | 'disable' | 'unlock') => {
@@ -230,7 +242,16 @@ export default function AccountListPage() {
     { title: '部门', dataIndex: 'department', key: 'department', render: (v) => v || '-' },
     {
       title: '状态', dataIndex: 'status', key: 'status',
-      render: (s) => <Tag color={statusColor[s] || 'default'}>{statusLabel[s] || s}</Tag>,
+      render: (s) => (
+        <Space size={4}>
+          <Tag color={statusColor[s] || 'default'}>{statusLabel[s] || s}</Tag>
+          {s === 'locked' && (
+            <Tooltip title="连续登录失败达到阈值（默认 5 次）后自动锁定，到期后可尝试登录；登录成功或管理员解锁后恢复。">
+              <ExclamationCircleOutlined style={{ color: '#faad14' }} />
+            </Tooltip>
+          )}
+        </Space>
+      ),
     },
     { title: '登录失败次数', dataIndex: 'login_failures', key: 'login_failures', width: 120 },
     {
@@ -247,6 +268,36 @@ export default function AccountListPage() {
         };
 
         const items: MenuProps['items'] = [];
+        if (record.is_super_admin) {
+          // 超管账号保护：仅保留编辑/重置密码/分配角色，其余操作需先降权
+          items.push({
+            key: 'edit',
+            label: '编辑',
+            onClick: () => openEdit(record),
+          });
+          items.push({
+            key: 'reset-password',
+            label: '重置密码',
+            onClick: () => confirmAction(
+              '重置密码',
+              `确认重置 ${record.account} 的密码？`,
+              () => handleResetPassword(record.id),
+            ),
+          });
+          if (hasOperation('role:view')) {
+            items.push({
+              key: 'roles',
+              label: '分配角色',
+              onClick: () => openRolesModal(record.id),
+            });
+          }
+          if (items.length === 0) return null;
+          return (
+            <Dropdown menu={{ items }} trigger={['click']} placement="bottomRight">
+              <Button type="text" size="small" icon={<EllipsisOutlined />} />
+            </Dropdown>
+          );
+        }
         if (record.status !== 'offboarded') {
           items.push({
             key: 'edit',
@@ -319,6 +370,39 @@ export default function AccountListPage() {
     },
   ];
 
+  // 可分配的角色（仅启用状态），已分配集合与穿梭框数据
+  const assignableRoles = allRoles.filter(
+    (role) => role.status === 'active'
+      && (me?.is_super_admin || !role.is_super_admin),
+  );
+  const assignedRoleIds = new Set(accountRoles.map((role) => role.id));
+  const rolesTransferData = assignableRoles.map((role) => ({
+    key: role.id,
+    title: `${role.name}${role.is_super_admin ? '（超管）' : ''}`,
+  }));
+
+  // 面板级选择工具：select=全选、deselect=清空、invert=反选（只作用于传入的 paneKeys）
+  const applySelection = (
+    setter: (updater: (prev: string[]) => string[]) => void,
+    paneKeys: string[],
+    mode: 'select' | 'deselect' | 'invert',
+  ) => {
+    const paneSet = new Set(paneKeys);
+    setter((prev) => {
+      if (mode === 'deselect') {
+        return prev.filter((key) => !paneSet.has(key));
+      }
+      if (mode === 'select') {
+        return [...prev.filter((key) => !paneSet.has(key)), ...paneKeys];
+      }
+      const prevSet = new Set(prev);
+      return [
+        ...prev.filter((key) => paneSet.has(key)),
+        ...paneKeys.filter((key) => !prevSet.has(key)),
+      ];
+    });
+  };
+
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -359,7 +443,12 @@ export default function AccountListPage() {
           onPressEnter={() => fetchAccounts()}
         />
         <Button type="primary" onClick={() => fetchAccounts()}>查询</Button>
-        <Button onClick={() => fetchAccounts({ keyword: '', status: undefined, department: '' })}>
+        <Button onClick={() => {
+          setKeyword('');
+          setStatusFilter(undefined);
+          setDepartment('');
+          fetchAccounts({ keyword: '', status: undefined, department: '' });
+        }}>
           重置
         </Button>
       </Space>
@@ -434,40 +523,44 @@ export default function AccountListPage() {
         open={rolesOpen}
         onCancel={() => setRolesOpen(false)}
         footer={null}
-        width={520}
+        width={760}
       >
-        <div style={{ marginBottom: 16 }}>
-          <Typography.Text strong>已分配的角色：</Typography.Text>
-          {accountRoles.length === 0 && <div style={{ color: '#999', marginTop: 8 }}>暂无</div>}
-          <div style={{ marginTop: 8 }}>
-            {accountRoles.map((role) => (
-              <Tag
-                key={`${role.id}-${rolesVersion}`}
-                color={role.is_super_admin ? 'red' : undefined}
-                closable={hasOperation('role:assign')}
-                onClose={() => handleRemoveRole(role.id)}
-                style={{ marginBottom: 8 }}
-              >
-                {role.name}
-              </Tag>
-            ))}
-          </div>
-        </div>
-        {hasOperation('role:assign') && (
-          <div>
-            <Typography.Text strong>添加角色：</Typography.Text>
-            <Select
-              style={{ width: '100%', marginTop: 8 }}
-              placeholder="选择要分配的角色"
-              options={allRoles
-                .filter((role) => role.status === 'active'
-                  && !accountRoles.some((assigned) => assigned.id === role.id))
-                .map((role) => ({ label: role.name, value: role.id }))}
-              onChange={handleAssignRole}
-              value={null}
-            />
-          </div>
-        )}
+        <Transfer
+          dataSource={rolesTransferData}
+          targetKeys={accountRoles.map((role) => role.id)}
+          onChange={handleRolesTransfer}
+          selectedKeys={rolesSelected}
+          onSelectChange={(source, target) =>
+            setRolesSelected([...source, ...target].map(String))}
+          disabled={!hasOperation('role:assign')}
+          titles={['未分配', '已分配']}
+          render={(item) => item.title}
+          showSearch
+          filterOption={(input, item) => item.title.toLowerCase().includes(input.toLowerCase())}
+          pagination={{ pageSize: 10 }}
+          listStyle={{ width: 330, height: 360 }}
+          footer={(_, info) => {
+            const isLeft = (info?.direction ?? 'left') === 'left';
+            const paneKeys = (isLeft
+              ? assignableRoles.filter((role) => !assignedRoleIds.has(role.id))
+              : accountRoles
+            ).map((role) => role.id);
+            if (!hasOperation('role:assign')) return null;
+            return (
+              <Space size="small">
+                <Button size="small" type="link" onClick={() => applySelection(setRolesSelected, paneKeys, 'select')}>
+                  全选
+                </Button>
+                <Button size="small" type="link" onClick={() => applySelection(setRolesSelected, paneKeys, 'invert')}>
+                  反选
+                </Button>
+                <Button size="small" type="link" onClick={() => applySelection(setRolesSelected, paneKeys, 'deselect')}>
+                  清空
+                </Button>
+              </Space>
+            );
+          }}
+        />
       </Modal>
     </>
   );

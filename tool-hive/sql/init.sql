@@ -99,7 +99,10 @@ COMMENT ON COLUMN management_account_auth_state.update_by IS '修改人 ID';
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS management_role (
     id              VARCHAR(32) PRIMARY KEY,
+    code            VARCHAR(64) NOT NULL,
     name            VARCHAR(128) NOT NULL,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    is_builtin      BOOLEAN NOT NULL DEFAULT FALSE,
     description     VARCHAR(512),
     is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
     status          VARCHAR(20) NOT NULL DEFAULT 'active',
@@ -108,9 +111,12 @@ CREATE TABLE IF NOT EXISTS management_role (
     update_time      TIMESTAMPTZ,
     create_by      VARCHAR(32),
     update_by      VARCHAR(32),
-    CONSTRAINT uq_management_role_name UNIQUE (name)
+    CONSTRAINT uq_management_role_name UNIQUE (name),
+    CONSTRAINT uq_management_role_code UNIQUE (code)
 );
 
+CREATE INDEX IF NOT EXISTS idx_management_role_code
+    ON management_role (code);
 CREATE INDEX IF NOT EXISTS idx_management_role_name
     ON management_role (name);
 CREATE INDEX IF NOT EXISTS idx_management_role_status
@@ -118,7 +124,10 @@ CREATE INDEX IF NOT EXISTS idx_management_role_status
 
 COMMENT ON TABLE management_role IS '后台角色';
 COMMENT ON COLUMN management_role.id IS '主键，应用层生成';
+COMMENT ON COLUMN management_role.code IS '角色编码，唯一，创建后不可修改';
 COMMENT ON COLUMN management_role.name IS '角色名称，唯一';
+COMMENT ON COLUMN management_role.sort_order IS '排序值，越小越靠前';
+COMMENT ON COLUMN management_role.is_builtin IS '是否内置角色（系统创建，不可删除）';
 COMMENT ON COLUMN management_role.description IS '角色说明';
 COMMENT ON COLUMN management_role.is_super_admin IS '是否为超级管理员角色';
 COMMENT ON COLUMN management_role.status IS '角色状态';

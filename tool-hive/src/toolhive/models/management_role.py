@@ -14,8 +14,17 @@ class ManagementRole(Base, UUIDPrimaryKeyMixin, AuditMixin):
 
     __tablename__ = "management_role"
 
+    code: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True,
+    )
     name: Mapped[str] = mapped_column(
         String(128), unique=True, nullable=False, index=True,
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+    )
+    is_builtin: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
     )
     description: Mapped[str | None] = mapped_column(
         String(512), nullable=True,

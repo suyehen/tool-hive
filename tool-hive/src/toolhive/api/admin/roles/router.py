@@ -33,16 +33,25 @@ _ops_router = APIRouter(prefix="/operations", tags=["管理操作项"])
 async def list_roles(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    keyword: str | None = Query(default=None, max_length=128),
+    status: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     _account=Depends(require_operation(OperationCode.ROLE_VIEW)),
 ):
     """角色列表（需 role:view）。"""
     svc = RoleService(db)
-    items, total = await svc.list_roles(offset=offset, limit=limit)
+    items, total = await svc.list_roles(
+        offset=offset,
+        limit=limit,
+        keyword=keyword,
+        status=status,
+    )
     return RoleListResponse(
         items=[
             RoleResponse(
-                id=r.id, name=r.name, description=r.description,
+                id=r.id, code=r.code, name=r.name,
+                sort_order=r.sort_order, is_builtin=r.is_builtin,
+                description=r.description,
                 is_super_admin=r.is_super_admin, status=r.status,
                 row_version=r.row_version,
                 created_at=r.create_time,
@@ -63,11 +72,18 @@ async def create_role(
     """创建角色（需 role:create）。"""
     svc = RoleService(db)
     try:
-        role = await svc.create_role(name=body.name, description=body.description)
+        role = await svc.create_role(
+            code=body.code,
+            name=body.name,
+            sort_order=body.sort_order,
+            description=body.description,
+        )
     except ConflictError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RoleResponse(
-        id=role.id, name=role.name, description=role.description,
+        id=role.id, code=role.code, name=role.name,
+        sort_order=role.sort_order, is_builtin=role.is_builtin,
+        description=role.description,
         is_super_admin=role.is_super_admin, status=role.status,
         row_version=role.row_version,
         created_at=role.create_time,
@@ -88,7 +104,9 @@ async def get_role(
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return RoleResponse(
-        id=r.id, name=r.name, description=r.description,
+        id=r.id, code=r.code, name=r.name,
+        sort_order=r.sort_order, is_builtin=r.is_builtin,
+        description=r.description,
                 is_super_admin=r.is_super_admin, status=r.status,
                 row_version=r.row_version,
                 created_at=r.create_time,
@@ -108,6 +126,7 @@ async def update_role(
     try:
         r = await svc.update_role(
             role_id,
+            sort_order=body.sort_order,
             name=body.name,
             description=body.description,
             expected_row_version=body.row_version,
@@ -119,7 +138,9 @@ async def update_role(
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return RoleResponse(
-        id=r.id, name=r.name, description=r.description,
+        id=r.id, code=r.code, name=r.name,
+        sort_order=r.sort_order, is_builtin=r.is_builtin,
+        description=r.description,
         is_super_admin=r.is_super_admin, status=r.status,
         row_version=r.row_version,
         created_at=r.create_time,

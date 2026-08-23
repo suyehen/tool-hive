@@ -29,6 +29,7 @@ class AccountResponse(BaseModel):
     id: str
     account: str
     real_name: str
+    is_super_admin: bool
     email: str | None
     mobile: str | None
     department: str | None

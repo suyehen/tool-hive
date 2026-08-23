@@ -50,6 +50,7 @@ export interface MeInfo {
   external_user_id: string | null;
   status: string;
   must_change_password: boolean;
+  is_super_admin: boolean;
 }
 
 export interface OperationItemsResponse {

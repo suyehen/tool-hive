@@ -89,6 +89,99 @@ async def test_list_accounts_applies_filters_to_query():
     assert select_stmt.whereclause is not None
 
 
+async def test_get_super_admin_account_ids():
+    """批量查询持有启用态超管角色的账号 ID。"""
+    db = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = ["acc-1", "acc-2"]
+    db.execute = AsyncMock(return_value=result)
+    svc = AccountService(db, AdminSecuritySettings())
+
+    ids = await svc.get_super_admin_account_ids()
+
+    assert ids == {"acc-1", "acc-2"}
+
+
+async def test_super_admin_account_operations_rejected():
+    """超管账号除编辑/重置密码/角色分配/移除外，禁止解锁与强制下线。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    account = _account()
+
+    with patch("toolhive.services.account_service.RoleService") as role_cls:
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=True)
+
+        with pytest.raises(ValidationError) as exc_info:
+            await svc.unlock_account(account)
+        assert "超管账号" in str(exc_info.value)
+
+        with pytest.raises(ValidationError) as exc_info:
+            await svc.force_logout(account)
+        assert "超管账号" in str(exc_info.value)
+
+
+async def test_super_admin_can_edit_profile_and_reset_password():
+    """超管账号仍允许编辑资料与重置密码。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    account = _account()
+    account.account = "admin"
+    account.real_name = "Admin"
+    account.external_user_id = None
+    account.email = None
+    account.mobile = None
+    account.department = None
+    account.remark = None
+    account.row_version = 1
+    account.auth_state.password_hash = "old-hash"
+    account.auth_state.must_change_password = True
+    account.auth_state.temp_password_expires_at = None
+    account.auth_state.security_version = 0
+
+    with (
+        patch("toolhive.services.account_service.RoleService") as role_cls,
+        patch("toolhive.services.account_service.revoke_all_sessions", AsyncMock()),
+    ):
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=True)
+        updated = await svc.update_profile(account, real_name="Admin2", expected_row_version=1)
+        temp_pwd = await svc.reset_password(account)
+
+    assert updated.real_name == "Admin2"
+    assert temp_pwd
+
+
+async def test_disable_offboard_rejected_for_super_admin():
+    """超管账号禁止禁用/离职，并记录失败审计。"""
+    db = AsyncMock()
+    audit_db = AsyncMock()
+    audit_db.__aenter__ = AsyncMock(return_value=audit_db)
+    audit_db.__aexit__ = AsyncMock(return_value=False)
+    audit_db.add = MagicMock()
+    audit_db.commit = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    account = _account()
+
+    with patch(
+        "toolhive.infrastructure.database.async_session_factory",
+        MagicMock(return_value=audit_db),
+    ):
+        with patch("toolhive.services.account_service.RoleService") as role_cls:
+            role_svc = role_cls.return_value
+            role_svc.is_super_admin_account = AsyncMock(return_value=True)
+
+            with pytest.raises(ValidationError) as exc_info:
+                await svc.disable_account(account, operator_id="acc-2")
+            assert "超管账号" in str(exc_info.value)
+
+            with pytest.raises(ValidationError) as exc_info:
+                await svc.offboard_account(account, operator_id="acc-2")
+            assert "超管账号" in str(exc_info.value)
+
+
 async def test_init_super_admin_creates_account_and_links_role():
     """初始化成功：创建账号并建立超管角色关联。"""
     db = AsyncMock()
@@ -187,12 +280,15 @@ async def test_update_profile_updates_fields_with_audit():
     svc = AccountService(db, AdminSecuritySettings())
     set_audit_actor("acc-9", "operator")
 
-    updated = await svc.update_profile(
-        account,
-        real_name="Alice2",
-        email="a@b.com",
-        expected_row_version=3,
-    )
+    with patch("toolhive.services.account_service.RoleService") as role_cls:
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=False)
+        updated = await svc.update_profile(
+            account,
+            real_name="Alice2",
+            email="a@b.com",
+            expected_row_version=3,
+        )
 
     assert updated.real_name == "Alice2"
     assert updated.email == "a@b.com"
@@ -214,8 +310,11 @@ async def test_update_profile_row_version_conflict():
     db = AsyncMock()
     svc = AccountService(db, AdminSecuritySettings())
 
-    with pytest.raises(ConflictError):
-        await svc.update_profile(account, real_name="X", expected_row_version=0)
+    with patch("toolhive.services.account_service.RoleService") as role_cls:
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=False)
+        with pytest.raises(ConflictError):
+            await svc.update_profile(account, real_name="X", expected_row_version=0)
 
 
 async def test_record_login_failure_updates_auth_state_only():
@@ -363,6 +462,27 @@ async def test_unlock_rejects_offboarded():
     with pytest.raises(ValidationError) as exc_info:
         await svc.unlock_account(_offboarded_account())
     assert "已离职" in str(exc_info.value)
+
+
+async def test_unlock_clears_account_failure_ips():
+    """解锁时同步清除该账号关联失败 IP 的 Redis 限流计数。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = AccountService(db, AdminSecuritySettings())
+    account = _account()
+
+    with (
+        patch("toolhive.services.account_service.RoleService") as role_cls,
+        patch(
+            "toolhive.services.account_service.clear_account_failure_ips",
+            AsyncMock(),
+        ) as clear,
+    ):
+        role_svc = role_cls.return_value
+        role_svc.is_super_admin_account = AsyncMock(return_value=False)
+        await svc.unlock_account(account)
+
+    clear.assert_awaited_once_with("acc-1")
 
 
 async def test_disable_rejects_offboarded():
