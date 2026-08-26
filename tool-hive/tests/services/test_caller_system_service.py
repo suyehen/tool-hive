@@ -5,13 +5,25 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from toolhive.config import RuntimeSecuritySettings
+from toolhive.core.enums import PublicKeyStatus
 from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.caller_system import CallerSystem
 from toolhive.services.caller_system_service import (
     CallerSystemService,
     build_caller_system_filters,
 )
+
+
+def _generate_rsa_public_key_pem(key_size: int = 2048) -> str:
+    """生成 RSA 公钥 PEM（测试辅助）。"""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+    return key.public_key().public_bytes(
+        Encoding.PEM, PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
 
 
 def test_tags_roundtrip() -> None:
@@ -144,3 +156,76 @@ async def test_update_system_updates_new_fields() -> None:
     assert updated.belonging_party == "xx 事业部"
     assert updated.owner_email == "a@b.com"
     assert updated.get_tags() == ["x"]
+
+
+async def test_add_public_key_rejects_unknown_algorithm() -> None:
+    """未注册的签名算法在入库前被拒绝。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=MagicMock())
+    svc = CallerSystemService(db)
+
+    with pytest.raises(ValidationError, match="不支持的签名算法"):
+        await svc.add_public_key(
+            "sys_1", public_key="not-a-pem", algorithm="SM2-SM3",
+        )
+
+
+async def test_add_public_key_rejects_malformed_public_key() -> None:
+    """畸形公钥在入库前被拒绝。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=MagicMock())
+    svc = CallerSystemService(db)
+
+    with pytest.raises(ValidationError, match="公钥格式无效"):
+        await svc.add_public_key(
+            "sys_1", public_key="not-a-pem", algorithm="RSA-PSS-SHA256",
+        )
+
+
+async def test_add_public_key_rejects_weak_rsa_key() -> None:
+    """低于默认阈值的 RSA 公钥被拒绝。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=MagicMock())
+    svc = CallerSystemService(db)
+
+    with pytest.raises(ValidationError, match="位长不足"):
+        await svc.add_public_key(
+            "sys_1",
+            public_key=_generate_rsa_public_key_pem(key_size=1024),
+            algorithm="RSA-PSS-SHA256",
+        )
+
+
+async def test_add_public_key_honors_configured_min_bits() -> None:
+    """运行侧配置的 RSA 最小位长实时生效。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=MagicMock())
+    svc = CallerSystemService(
+        db, runtime_security=RuntimeSecuritySettings(signing_key_min_bits=3072),
+    )
+
+    with pytest.raises(ValidationError, match="位长不足"):
+        await svc.add_public_key(
+            "sys_1",
+            public_key=_generate_rsa_public_key_pem(key_size=2048),
+            algorithm="RSA-PSS-SHA256",
+        )
+
+
+async def test_add_public_key_accepts_valid_rsa_key() -> None:
+    """合法 RSA 公钥成功登记为待启用状态。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[MagicMock(), None])
+    db.add = MagicMock()
+    svc = CallerSystemService(db)
+
+    with patch.object(svc, "generate_key_id", return_value="key_test"):
+        key = await svc.add_public_key(
+            "sys_1",
+            public_key=_generate_rsa_public_key_pem(),
+            algorithm="RSA-PSS-SHA256",
+        )
+
+    assert key.algorithm == "RSA-PSS-SHA256"
+    assert key.status == PublicKeyStatus.PENDING
+    assert key.fingerprint

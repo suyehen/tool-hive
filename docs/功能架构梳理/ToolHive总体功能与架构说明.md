@@ -261,3 +261,13 @@ Nginx 必须清除调用方提交的 `Forwarded`、`X-Forwarded-For`、`X-Real-I
 
 - 一期管理登录已改为“账号 + 密码 + 图形验证码”，正文中“账号 / MFA / 会话”“本地登录、TOTP MFA”“管理员登录并完成 MFA”“管理身份……MFA 配置”等表述不再适用：TOTP MFA、恢复码登录、MFA 绑定接口与 MFA 设置页面已删除，`mfa_config` 数据模型及 `totp_encryption_key` 配置已清理。
 - 管理侧登录链路现状为：图形验证码校验 → 账号状态与登录失败限制 → 密码校验 → 创建管理会话与 CSRF Token。
+
+## 9. 补充记录（H10：签名算法多算法与验签器工厂）
+
+> 本节仅追加补充记录，不修改上文内容。
+
+### 2026-08-26
+
+- 4.3「工具应用模块」中“公钥签名”补充：认证协议固定为 `TOOLHIVE-SIGN-V1`，一期、二期不引入其他认证协议；签名算法注册表一期为 `RSA-PSS-SHA256`（必选）+ `Ed25519`，SM2-SM3 不纳入一期。
+- 验签器工厂已提前落地（`runtime/authentication/verifiers/`）：统一接口 + 注册表，按公钥记录 `algorithm` 分发，未知算法默认拒绝；每把公钥绑定单一算法，算法选择以 `key_id` 查到的公钥记录为准。
+- RSA-PSS 参数冻结：PSS + MGF1(SHA256)，salt length 固定 32；RSA 公钥位长下限取 `RuntimeSecuritySettings.signing_key_min_bits`（默认 2048）。

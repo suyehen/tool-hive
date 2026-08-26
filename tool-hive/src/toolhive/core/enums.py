@@ -52,6 +52,13 @@ class PublicKeyStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class SigningAlgorithm(StrEnum):
+    """调用系统请求签名算法（与验签器注册表一一对应）。"""
+
+    RSA_PSS_SHA256 = "RSA-PSS-SHA256"
+    ED25519 = "Ed25519"
+
+
 class IPRuleStatus(StrEnum):
     """调用系统来源 IP 规则状态。"""
 

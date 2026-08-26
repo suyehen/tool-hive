@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from toolhive.config import RuntimeSecuritySettings
 from toolhive.core.constants import CALLER_SYSTEM_ID_PREFIX
 from toolhive.core.enums import (
     CallerSystemStatus,
@@ -27,6 +28,7 @@ from toolhive.models.caller_public_key import CallerPublicKey
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
 from toolhive.models.caller_tool_scope import CallerToolScope
+from toolhive.runtime.authentication.verifiers import get_verifier
 from toolhive.services.audit_service import AuditService, get_current_operator_id
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,13 @@ def build_caller_system_filters(
 class CallerSystemService:
     """调用系统生命周期管理。"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(
+        self,
+        db: AsyncSession,
+        runtime_security: RuntimeSecuritySettings | None = None,
+    ):
         self.db = db
+        self.runtime_security = runtime_security
 
     # ═════════════════════════════════════════════════════════════
     # 生命周期
@@ -584,6 +591,17 @@ class CallerSystemService:
         effective_to: datetime | None = None,
     ) -> CallerPublicKey:
         await self.get_by_system_id(system_id)  # 确保调用系统存在
+
+        # 按算法注册表获取验签器：未知算法默认拒绝
+        verifier = get_verifier(algorithm)
+        # 使用运行侧配置的 RSA 最小位长（未注入时使用验签器默认值）
+        min_bits = (
+            self.runtime_security.signing_key_min_bits
+            if self.runtime_security is not None
+            else None
+        )
+        # 校验公钥格式与强度，防止无效或弱公钥入库
+        verifier.validate_public_key(public_key, min_bits=min_bits)
 
         fingerprint = self.compute_fingerprint(public_key_pem=public_key)
         # 检查不重复

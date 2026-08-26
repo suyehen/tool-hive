@@ -22,6 +22,8 @@ from toolhive.api.admin.caller_systems.schemas import (
     UpdateCallerSystemRequest,
 )
 from toolhive.api.admin.deps import require_operation
+from toolhive.api.deps import get_runtime_security
+from toolhive.config import RuntimeSecuritySettings
 from toolhive.core.enums import IPRuleStatus
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.core.operation_codes import OperationCode
@@ -257,9 +259,10 @@ async def add_public_key(
     system_id: str,
     body: AddPublicKeyRequest,
     db: AsyncSession = Depends(get_db),
+    runtime_security: RuntimeSecuritySettings = Depends(get_runtime_security),
     _account=Depends(require_operation(OperationCode.CALLER_SYSTEM_MANAGE)),
 ):
-    svc = CallerSystemService(db)
+    svc = CallerSystemService(db, runtime_security=runtime_security)
     try:
         key = await svc.add_public_key(
             system_id=system_id,
@@ -270,6 +273,8 @@ async def add_public_key(
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ConflictError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return PublicKeyResponse(
         id=key.id, key_id=key.key_id, system_id=key.system_id,
