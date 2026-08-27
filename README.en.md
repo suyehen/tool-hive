@@ -132,3 +132,8 @@ In production the backend listens on loopback only and must be fronted by Nginx.
 ## License
 
 Apache License 2.0
+
+## Phase 1 scope note (2026-08-27)
+
+- Credential references are a Phase 2 capability: Phase 1 does not hold target-system credentials and does not introduce `credential_ref` or a Secret Store.
+- The first batch of Phase 1 tools are built-in math placeholder tools (`builtin` Provider) used to validate the end-to-end chain; real external HTTP tools follow the same approved fixed-mapping contract later (see docs/功能架构梳理/一期下半设计冻结.md).

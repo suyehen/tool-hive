@@ -271,3 +271,8 @@ Nginx 必须清除调用方提交的 `Forwarded`、`X-Forwarded-For`、`X-Real-I
 - 4.3「工具应用模块」中“公钥签名”补充：认证协议固定为 `TOOLHIVE-SIGN-V1`，一期、二期不引入其他认证协议；签名算法注册表一期为 `RSA-PSS-SHA256`（必选）+ `Ed25519`，SM2-SM3 不纳入一期。
 - 验签器工厂已提前落地（`runtime/authentication/verifiers/`）：统一接口 + 注册表，按公钥记录 `algorithm` 分发，未知算法默认拒绝；每把公钥绑定单一算法，算法选择以 `key_id` 查到的公钥记录为准。
 - RSA-PSS 参数冻结：PSS + MGF1(SHA256)，salt length 固定 32；RSA 公钥位长下限取 `RuntimeSecuritySettings.signing_key_min_bits`（默认 2048）。
+
+### 2026-08-27
+
+- 阶段 0 设计冻结后，Provider 类型一期含 `builtin`（平台内置实现）与 `http`（外部 HTTP 目标）两种；正文 3.2 中"将已审核工具定义转换为对外部 HTTP、MCP、gRPC 或其他协议的受控调用"里的 MCP / gRPC 仍属二期，`builtin` 为一期新增类型。
+- 一期首批工具为数学计算类占位工具（如 `math.basic.calculator`，`builtin` Provider），仅用于打通端到端链路；正文"无外部凭据的轻量纯函数工具可由调用方本地执行、无需登记 Catalog"的通用原则继续适用，本次首批占位工具作为阶段 0 确认的例外登记进 Catalog，后续真实外部 HTTP 工具按原原则接入（详见《一期下半设计冻结》第 7 节）。

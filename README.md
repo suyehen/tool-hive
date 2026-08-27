@@ -134,3 +134,8 @@ npm run build
 ## License
 
 Apache License 2.0
+
+## 一期范围补充说明（2026-08-27）
+
+- “凭据引用”属二期能力：一期不代持目标系统凭据、不引入 `credential_ref` 与 Secret Store。
+- 一期首批工具为内置数学计算占位工具（`builtin` Provider），用于打通端到端链路；后续真实外部 HTTP 工具按已审核固定映射接入（详见 docs/功能架构梳理/一期下半设计冻结.md）。
