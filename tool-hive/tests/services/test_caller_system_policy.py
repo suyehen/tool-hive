@@ -11,6 +11,8 @@ from toolhive.core.enums import CallerSystemStatus
 from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_tool_scope import CallerToolScope
+from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
+from toolhive.models.catalog_tool import CatalogTool
 from toolhive.models.management_audit_log import ManagementAuditLog
 from toolhive.services.audit_service import set_audit_actor
 from toolhive.services.caller_system_service import CallerSystemService
@@ -144,11 +146,23 @@ async def test_get_runtime_policy_missing_returns_none() -> None:
 
 
 async def test_replace_tool_scopes() -> None:
-    """全量替换工具范围：删除旧记录、写入新集合。"""
+    """全量替换工具范围：引用校验通过后删除旧记录、写入新集合。"""
     old_scope = MagicMock()
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[_system(), _system()])
-    db.execute = AsyncMock(return_value=_execute_result([old_scope]))
+    tool = CatalogTool(
+        namespace="tool", tool_code="a", name="工具A", status="enabled",
+    )
+    pack = CatalogCapabilityPack(
+        pack_code="cap.x", name="能力包X", status="enabled",
+    )
+    db.execute = AsyncMock(
+        side_effect=[
+            _execute_result([tool]),
+            _execute_result([pack]),
+            _execute_result([old_scope]),
+        ]
+    )
     db.delete = AsyncMock()
     db.add = MagicMock()
     svc = CallerSystemService(db)
@@ -169,6 +183,41 @@ async def test_replace_tool_scopes() -> None:
     assert all(s.create_by == "acc-9" for s in scopes)
     db.delete.assert_called_once_with(old_scope)
     assert db.add.call_count == 3  # 2 条范围 + 1 条审计
+
+
+async def test_replace_tool_scopes_rejects_missing_reference() -> None:
+    """引用校验回补：工具编码不存在时拒绝且不删除旧记录。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[_system(), _system()])
+    db.execute = AsyncMock(return_value=_execute_result([]))
+    svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
+
+    with pytest.raises(ValidationError):
+        await svc.replace_tool_scopes(
+            "sys_1",
+            [{"scope_type": "tool", "scope_code": "tool.a", "status": "active"}],
+        )
+    db.delete.assert_not_called()
+
+
+async def test_replace_tool_scopes_rejects_archived_reference() -> None:
+    """引用校验回补：已归档工具不能被范围引用。"""
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[_system(), _system()])
+    tool = CatalogTool(
+        namespace="tool", tool_code="a", name="工具A", status="archived",
+    )
+    db.execute = AsyncMock(return_value=_execute_result([tool]))
+    svc = CallerSystemService(db)
+    set_audit_actor("acc-9", "operator")
+
+    with pytest.raises(ValidationError):
+        await svc.replace_tool_scopes(
+            "sys_1",
+            [{"scope_type": "tool", "scope_code": "tool.a", "status": "active"}],
+        )
+    db.delete.assert_not_called()
 
 
 async def test_replace_tool_scopes_rejects_invalid_type_before_delete() -> None:

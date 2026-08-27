@@ -171,6 +171,8 @@ class ToolScopeResponse(BaseModel):
     status: str
     row_version: int
     created_at: UTCDateTime
+    reference_exists: bool = True
+    reference_archived: bool = False
 
 
 # ── 紧急禁用 ──

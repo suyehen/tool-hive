@@ -503,18 +503,20 @@ async def list_tool_scopes(
     """查询调用系统的工具/能力包范围。"""
     svc = CallerSystemService(db)
     try:
-        scopes = await svc.list_tool_scopes(system_id)
+        scopes = await svc.list_tool_scopes_with_reference(system_id)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return [
         ToolScopeResponse(
-            id=s.id,
-            system_id=s.system_id,
-            scope_type=s.scope_type,
-            scope_code=s.scope_code,
-            status=s.status,
-            row_version=s.row_version,
-            created_at=s.create_time,
+            id=s["id"],
+            system_id=s["system_id"],
+            scope_type=s["scope_type"],
+            scope_code=s["scope_code"],
+            status=s["status"],
+            row_version=s["row_version"],
+            created_at=s["created_at"],
+            reference_exists=s["reference_exists"],
+            reference_archived=s["reference_archived"],
         )
         for s in scopes
     ]

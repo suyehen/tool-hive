@@ -80,6 +80,8 @@ export interface ToolScopeItem {
   status: string;
   row_version: number;
   created_at: string;
+  reference_exists?: boolean;
+  reference_archived?: boolean;
 }
 
 export async function listCallerSystems(

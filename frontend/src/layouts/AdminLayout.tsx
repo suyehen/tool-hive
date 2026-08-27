@@ -8,6 +8,10 @@ import {
   ApiOutlined,
   LogoutOutlined,
   KeyOutlined,
+  AppstoreOutlined,
+  ToolOutlined,
+  AuditOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -21,16 +25,53 @@ export default function AdminLayout() {
   const { token } = theme.useToken();
 
   // 菜单 → 后端操作码（前端仅控制展示，后端仍独立校验）
-  const menuPermission: Array<{ key: string; icon: ReactNode; label: string; operation?: string }> = [
+  const menuPermission: Array<{
+    key: string;
+    icon: ReactNode;
+    label: string;
+    operation?: string;
+    children?: Array<{ key: string; icon: ReactNode; label: string; operation?: string }>;
+  }> = [
     { key: '/', icon: <DashboardOutlined />, label: '首页' },
     { key: '/accounts', icon: <UserOutlined />, label: '管理账号', operation: 'admin_account:view' },
     { key: '/roles', icon: <SafetyOutlined />, label: '后台角色', operation: 'role:view' },
     { key: '/caller-systems', icon: <ApiOutlined />, label: '调用系统', operation: 'caller_system:view' },
+    {
+      key: '/catalog',
+      icon: <AppstoreOutlined />,
+      label: '工具目录',
+      operation: 'tool:view',
+      children: [
+        { key: '/catalog/tools', icon: <ToolOutlined />, label: '工具', operation: 'tool:view' },
+        { key: '/catalog/providers', icon: <ApiOutlined />, label: 'Provider', operation: 'provider:view' },
+        { key: '/catalog/capability-packs', icon: <DatabaseOutlined />, label: '能力包', operation: 'capability:view' },
+        { key: '/catalog/reviews', icon: <AuditOutlined />, label: '审核', operation: 'tool:review' },
+        { key: '/catalog/index-tasks', icon: <DatabaseOutlined />, label: '索引任务', operation: 'system_task:view' },
+      ],
+    },
   ];
 
   const menuItems: MenuProps['items'] = menuPermission
     .filter((item) => !item.operation || operationItems.includes(item.operation))
-    .map(({ key, icon, label }) => ({ key, icon, label }));
+    .map(({ key, icon, label, children }) => {
+      const visibleChildren = children
+        ? children.filter((child) => !child.operation || operationItems.includes(child.operation))
+        : undefined;
+      if (children && (!visibleChildren || visibleChildren.length === 0)) {
+        return null;
+      }
+      return {
+        key,
+        icon,
+        label,
+        children: visibleChildren?.map(({ key: childKey, icon: childIcon, label: childLabel }) => ({
+          key: childKey,
+          icon: childIcon,
+          label: childLabel,
+        })),
+      };
+    })
+    .filter(Boolean);
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     navigate(key);

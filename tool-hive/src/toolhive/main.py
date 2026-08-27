@@ -87,6 +87,11 @@ from toolhive.api.admin.router import admin_app  # noqa: E402
 
 app.mount("/api/admin", admin_app)
 
+# 挂载运行侧子应用：/api/runtime/**
+from toolhive.api.runtime.router import runtime_app  # noqa: E402
+
+app.mount("/api/runtime", runtime_app)
+
 
 @app.get("/health")
 async def health():

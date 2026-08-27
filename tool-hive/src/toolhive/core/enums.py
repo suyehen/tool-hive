@@ -95,3 +95,68 @@ class OutboxStatus(StrEnum):
     RETRY = "RETRY"
     SUCCEEDED = "SUCCEEDED"
     DEAD = "DEAD"
+
+
+class CatalogObjectStatus(StrEnum):
+    """Catalog 配置对象状态（工具 / Provider / 能力包通用）。"""
+
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    ARCHIVED = "archived"
+
+
+class ProviderType(StrEnum):
+    """Provider 执行通道类型。"""
+
+    BUILTIN = "builtin"
+    HTTP = "http"
+
+
+class ToolVersionStatus(StrEnum):
+    """工具版本状态（唯一走完整审核发布流程的对象）。"""
+
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    PUBLISHED = "published"
+    DISABLED = "disabled"
+    WITHDRAWN = "withdrawn"
+    ARCHIVED = "archived"
+
+
+class RiskLevel(StrEnum):
+    """工具风险等级。"""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ReviewDecision(StrEnum):
+    """审核结论。"""
+
+    APPROVE = "approve"
+    REJECT = "reject"
+
+
+class CatalogHistoryAction(StrEnum):
+    """Catalog 发布历史动作。"""
+
+    SUBMIT_REVIEW = "submit_review"
+    APPROVE = "approve"
+    REJECT = "reject"
+    PUBLISH = "publish"
+    ENABLE = "enable"
+    DISABLE = "disable"
+    WITHDRAW = "withdraw"
+    ARCHIVE = "archive"
+    SET_DEFAULT = "set_default"
+
+
+class ConfirmationStatus(StrEnum):
+    """高风险执行确认状态。"""
+
+    PENDING = "pending"
+    CONSUMED = "consumed"
+    EXPIRED = "expired"

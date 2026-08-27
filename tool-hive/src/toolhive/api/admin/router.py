@@ -8,6 +8,7 @@ from toolhive.api.admin.accounts.router import router as accounts_router
 from toolhive.api.admin.auth.router import router as auth_router
 from toolhive.api.admin.bootstrap import router as bootstrap_router
 from toolhive.api.admin.caller_systems.router import router as caller_systems_router
+from toolhive.api.admin.catalog.router import router as catalog_router
 from toolhive.api.admin.middleware import CSRFMiddleware, SessionMiddleware
 from toolhive.api.admin.roles.router import (
     _ops_router as operations_router,
@@ -33,4 +34,5 @@ admin_app.include_router(accounts_router)
 admin_app.include_router(roles_router)
 admin_app.include_router(operations_router)
 admin_app.include_router(caller_systems_router)
+admin_app.include_router(catalog_router)
 admin_app.include_router(system_tasks_router)

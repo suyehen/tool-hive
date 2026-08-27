@@ -796,7 +796,20 @@ export default function CallerSystemListPage() {
                         title: '类型', dataIndex: 'scope_type', key: 'scope_type', width: 100,
                         render: (v) => (v === 'capability' ? <Tag>能力包</Tag> : <Tag color="blue">工具</Tag>),
                       },
-                      { title: '编码', dataIndex: 'scope_code', key: 'scope_code' },
+                      {
+                        title: '编码', dataIndex: 'scope_code', key: 'scope_code',
+                        render: (v, record: ToolScopeItem) => (
+                          <Space>
+                            <span>{v}</span>
+                            {record.reference_exists === false && (
+                              <Tag color="red">引用不存在</Tag>
+                            )}
+                            {record.reference_archived && (
+                              <Tag color="red">已归档</Tag>
+                            )}
+                          </Space>
+                        ),
+                      },
                       {
                         title: '状态', dataIndex: 'status', key: 'status', width: 100,
                         render: (s) => <Tag>{ruleStatusLabel[s] || s}</Tag>,

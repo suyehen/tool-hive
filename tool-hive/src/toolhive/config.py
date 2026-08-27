@@ -53,6 +53,9 @@ class RuntimeSecuritySettings(BaseModel):
     signing_key_min_bits: int = 2048
     signing_algorithm: str = "RSA-PSS-SHA256"
     signature_version: str = "TOOLHIVE-SIGN-V1"
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_window_seconds: int = 60
+    circuit_breaker_open_seconds: int = 30
 
 
 class RetrievalSettings(BaseModel):
@@ -233,6 +236,9 @@ class Settings(BaseSettings):
     signing_key_min_bits: int = 2048
     signing_algorithm: str = "RSA-PSS-SHA256"
     signature_version: str = "TOOLHIVE-SIGN-V1"
+    circuit_breaker_failure_threshold: int = 5
+    circuit_breaker_window_seconds: int = 60
+    circuit_breaker_open_seconds: int = 30
 
     # ── 密钥（生产环境务必通过环境变量覆盖） ──
     csrf_secret: str = ""
@@ -290,6 +296,9 @@ class Settings(BaseSettings):
             signing_key_min_bits=self.signing_key_min_bits,
             signing_algorithm=self.signing_algorithm,
             signature_version=self.signature_version,
+            circuit_breaker_failure_threshold=self.circuit_breaker_failure_threshold,
+            circuit_breaker_window_seconds=self.circuit_breaker_window_seconds,
+            circuit_breaker_open_seconds=self.circuit_breaker_open_seconds,
         )
 
     @computed_field

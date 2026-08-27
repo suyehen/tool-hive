@@ -49,6 +49,12 @@ class OperationCode(StrEnum):
     PROVIDER_EDIT = "provider:edit"
     PROVIDER_MANAGE = "provider:manage"
 
+    # ── 能力包 ──
+    CAPABILITY_VIEW = "capability:view"
+    CAPABILITY_CREATE = "capability:create"
+    CAPABILITY_EDIT = "capability:edit"
+    CAPABILITY_MANAGE = "capability:manage"
+
     # ── 系统任务（Outbox） ──
     SYSTEM_TASK_VIEW = "system_task:view"
     SYSTEM_TASK_RETRY = "system_task:retry"
@@ -212,6 +218,31 @@ OPERATION_META: dict[str, dict[str, str | int | None]] = {
         "category": "provider",
         "display_name": "管理 Provider",
         "description": "启停/归档 Provider",
+        "sort_order": 40,
+    },
+    # ── 能力包 ──
+    "capability:view": {
+        "category": "capability",
+        "display_name": "查看能力包",
+        "description": "查看能力包列表与详情",
+        "sort_order": 10,
+    },
+    "capability:create": {
+        "category": "capability",
+        "display_name": "创建能力包",
+        "description": "创建能力包",
+        "sort_order": 20,
+    },
+    "capability:edit": {
+        "category": "capability",
+        "display_name": "编辑能力包",
+        "description": "修改能力包、工具关联与调用系统授权",
+        "sort_order": 30,
+    },
+    "capability:manage": {
+        "category": "capability",
+        "display_name": "管理能力包",
+        "description": "启停/归档能力包",
         "sort_order": 40,
     },
     # ── 系统任务 ──

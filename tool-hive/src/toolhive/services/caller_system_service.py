@@ -16,6 +16,7 @@ from toolhive.config import RuntimeSecuritySettings
 from toolhive.core.constants import CALLER_SYSTEM_ID_PREFIX
 from toolhive.core.enums import (
     CallerSystemStatus,
+    CatalogObjectStatus,
     IPRuleStatus,
     PublicKeyStatus,
     ToolScopeStatus,
@@ -28,6 +29,8 @@ from toolhive.models.caller_public_key import CallerPublicKey
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
 from toolhive.models.caller_tool_scope import CallerToolScope
+from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
+from toolhive.models.catalog_tool import CatalogTool
 from toolhive.runtime.authentication.verifiers import get_verifier
 from toolhive.services.audit_service import AuditService, get_current_operator_id
 
@@ -352,6 +355,63 @@ class CallerSystemService:
         )
         return list(result.scalars().all())
 
+    async def list_tool_scopes_with_reference(
+        self, system_id: str,
+    ) -> list[dict]:
+        """查询调用系统工具范围并附带 Catalog 引用状态（管理页标红提示）。"""
+        scopes = await self.list_tool_scopes(system_id)
+        tool_codes = [
+            s.scope_code for s in scopes if s.scope_type == ToolScopeType.TOOL
+        ]
+        pack_codes = [
+            s.scope_code for s in scopes if s.scope_type == ToolScopeType.CAPABILITY
+        ]
+        tool_by_code: dict[str, CatalogTool] = {}
+        pack_by_code: dict[str, CatalogCapabilityPack] = {}
+        if tool_codes:
+            result = await self.db.execute(
+                select(CatalogTool).where(
+                    (CatalogTool.namespace + "." + CatalogTool.tool_code).in_(
+                        tool_codes
+                    )
+                )
+            )
+            tool_by_code = {
+                (t.namespace + "." + t.tool_code): t
+                for t in result.scalars().all()
+            }
+        if pack_codes:
+            result = await self.db.execute(
+                select(CatalogCapabilityPack).where(
+                    CatalogCapabilityPack.pack_code.in_(pack_codes)
+                )
+            )
+            pack_by_code = {p.pack_code: p for p in result.scalars().all()}
+        rows = []
+        for scope in scopes:
+            ref = (
+                tool_by_code.get(scope.scope_code)
+                if scope.scope_type == ToolScopeType.TOOL
+                else pack_by_code.get(scope.scope_code)
+            )
+            rows.append(
+                {
+                    "id": scope.id,
+                    "system_id": scope.system_id,
+                    "scope_type": scope.scope_type,
+                    "scope_code": scope.scope_code,
+                    "status": scope.status,
+                    "row_version": scope.row_version,
+                    "created_at": scope.create_time,
+                    "reference_exists": ref is not None,
+                    "reference_archived": bool(
+                        ref is not None
+                        and ref.status == CatalogObjectStatus.ARCHIVED
+                    ),
+                }
+            )
+        return rows
+
     @transactional()
     async def replace_tool_scopes(
         self,
@@ -369,6 +429,9 @@ class CallerSystemService:
                 raise ValidationError(f"无效的工具范围类型: {scope_type}")
             if status not in tuple(ToolScopeStatus):
                 raise ValidationError(f"无效的工具范围状态: {status}")
+
+        # 引用校验回补（阶段 1）：工具/能力包编码必须真实存在且未归档
+        await self._validate_scope_references(items)
 
         old_scopes = await self.list_tool_scopes(system_id)
         for scope in old_scopes:
@@ -395,6 +458,54 @@ class CallerSystemService:
             after_summary={"count": len(new_scopes)},
         )
         return new_scopes
+
+    async def _validate_scope_references(self, items: list[dict]) -> None:
+        """校验工具范围编码在 Catalog 中存在且未归档（批量查询避免 N+1）。"""
+        tool_codes = [
+            item["scope_code"].strip()
+            for item in items
+            if item["scope_type"] == ToolScopeType.TOOL
+        ]
+        pack_codes = [
+            item["scope_code"].strip()
+            for item in items
+            if item["scope_type"] == ToolScopeType.CAPABILITY
+        ]
+        if tool_codes:
+            result = await self.db.execute(
+                select(CatalogTool).where(
+                    (CatalogTool.namespace + "." + CatalogTool.tool_code).in_(
+                        tool_codes
+                    )
+                )
+            )
+            tools = {
+                (t.namespace + "." + t.tool_code): t
+                for t in result.scalars().all()
+            }
+            for code in tool_codes:
+                tool = tools.get(code)
+                if tool is None:
+                    raise ValidationError(f"工具范围引用了不存在的工具: {code}")
+                if tool.status == CatalogObjectStatus.ARCHIVED:
+                    raise ValidationError(f"工具范围引用了已归档的工具: {code}")
+        if pack_codes:
+            result = await self.db.execute(
+                select(CatalogCapabilityPack).where(
+                    CatalogCapabilityPack.pack_code.in_(pack_codes)
+                )
+            )
+            packs = {p.pack_code: p for p in result.scalars().all()}
+            for code in pack_codes:
+                pack = packs.get(code)
+                if pack is None:
+                    raise ValidationError(
+                        f"工具范围引用了不存在的能力包: {code}"
+                    )
+                if pack.status == CatalogObjectStatus.ARCHIVED:
+                    raise ValidationError(
+                        f"工具范围引用了已归档的能力包: {code}"
+                    )
 
     # ═════════════════════════════════════════════════════════════
     # 紧急禁用

@@ -56,6 +56,10 @@ nonce_retention_minutes: 10
 signing_key_min_bits: 2048
 signing_algorithm: RSA-PSS-SHA256
 signature_version: TOOLHIVE-SIGN-V1
+# 调用系统维度熔断：连续 5xx 达到阈值后打开，打开期间请求直接拒绝
+circuit_breaker_failure_threshold: 5
+circuit_breaker_window_seconds: 60
+circuit_breaker_open_seconds: 30
 
 # ── 密钥（生产环境务必通过环境变量覆盖） ──
 csrf_secret: ""

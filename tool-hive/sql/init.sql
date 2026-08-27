@@ -571,4 +571,337 @@ COMMENT ON COLUMN outbox_delivery.update_time IS '最后更新时间';
 COMMENT ON COLUMN outbox_delivery.create_by IS '创建人 ID';
 COMMENT ON COLUMN outbox_delivery.update_by IS '修改人 ID';
 
+-- ------------------------------------------------------------
+-- Catalog：Provider
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_provider (
+    id                   VARCHAR(32) PRIMARY KEY,
+    provider_code        VARCHAR(128) NOT NULL,
+    name                 VARCHAR(256) NOT NULL,
+    provider_type        VARCHAR(20) NOT NULL DEFAULT 'http',
+    status               VARCHAR(20) NOT NULL DEFAULT 'enabled',
+    description          TEXT,
+    target_security_config JSONB,
+    row_version          INTEGER NOT NULL DEFAULT 0,
+    create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time          TIMESTAMPTZ,
+    create_by            VARCHAR(32),
+    update_by            VARCHAR(32),
+    CONSTRAINT uq_catalog_provider_code UNIQUE (provider_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_provider_status
+    ON catalog_provider (status);
+
+COMMENT ON TABLE catalog_provider IS 'Provider：工具执行的固定通道';
+COMMENT ON COLUMN catalog_provider.provider_code IS 'Provider 编码（全局唯一）';
+COMMENT ON COLUMN catalog_provider.provider_type IS '类型：builtin | http';
+COMMENT ON COLUMN catalog_provider.status IS '状态：enabled | disabled | archived';
+COMMENT ON COLUMN catalog_provider.target_security_config IS 'http 类型目标安全配置（JSON）';
+
+-- ------------------------------------------------------------
+-- Catalog：能力包
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_capability_pack (
+    id            VARCHAR(32) PRIMARY KEY,
+    pack_code     VARCHAR(128) NOT NULL,
+    name          VARCHAR(256) NOT NULL,
+    description   TEXT,
+    status        VARCHAR(20) NOT NULL DEFAULT 'enabled',
+    row_version   INTEGER NOT NULL DEFAULT 0,
+    create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time   TIMESTAMPTZ,
+    create_by     VARCHAR(32),
+    update_by     VARCHAR(32),
+    CONSTRAINT uq_catalog_capability_pack_code UNIQUE (pack_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_capability_pack_status
+    ON catalog_capability_pack (status);
+
+COMMENT ON TABLE catalog_capability_pack IS '能力包：工具的打包与调用系统授权单元';
+COMMENT ON COLUMN catalog_capability_pack.pack_code IS '能力包编码（全局唯一）';
+COMMENT ON COLUMN catalog_capability_pack.status IS '状态：enabled | disabled | archived';
+
+-- ------------------------------------------------------------
+-- Catalog：工具
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_tool (
+    id                 VARCHAR(32) PRIMARY KEY,
+    namespace          VARCHAR(128) NOT NULL,
+    tool_code          VARCHAR(128) NOT NULL,
+    name               VARCHAR(256) NOT NULL,
+    description        TEXT,
+    risk_level         VARCHAR(20) NOT NULL DEFAULT 'low',
+    discoverable       BOOLEAN NOT NULL DEFAULT TRUE,
+    executable         BOOLEAN NOT NULL DEFAULT TRUE,
+    input_schema       JSONB,
+    output_schema      JSONB,
+    status             VARCHAR(20) NOT NULL DEFAULT 'enabled',
+    default_version_id VARCHAR(32),
+    row_version        INTEGER NOT NULL DEFAULT 0,
+    create_time        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time        TIMESTAMPTZ,
+    create_by          VARCHAR(32),
+    update_by          VARCHAR(32),
+    CONSTRAINT uq_catalog_tool_namespace_code UNIQUE (namespace, tool_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_tool_namespace
+    ON catalog_tool (namespace);
+CREATE INDEX IF NOT EXISTS idx_catalog_tool_status
+    ON catalog_tool (status);
+
+COMMENT ON TABLE catalog_tool IS '工具：Catalog 目录条目，持有多个工具版本';
+COMMENT ON COLUMN catalog_tool.namespace IS '命名空间（点分两级，如 math.basic）';
+COMMENT ON COLUMN catalog_tool.tool_code IS '工具编码（命名空间内唯一）';
+COMMENT ON COLUMN catalog_tool.risk_level IS '风险等级：low | medium | high';
+COMMENT ON COLUMN catalog_tool.discoverable IS '是否可被发现';
+COMMENT ON COLUMN catalog_tool.executable IS '是否可被执行';
+COMMENT ON COLUMN catalog_tool.input_schema IS '输入 JSON Schema';
+COMMENT ON COLUMN catalog_tool.output_schema IS '输出 JSON Schema';
+COMMENT ON COLUMN catalog_tool.status IS '状态：enabled | disabled | archived';
+COMMENT ON COLUMN catalog_tool.default_version_id IS '默认工具版本 ID';
+
+-- ------------------------------------------------------------
+-- Catalog：工具版本
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_tool_version (
+    id            VARCHAR(32) PRIMARY KEY,
+    tool_id       VARCHAR(32) NOT NULL REFERENCES catalog_tool(id) ON DELETE CASCADE,
+    version       VARCHAR(32) NOT NULL,
+    status        VARCHAR(24) NOT NULL DEFAULT 'draft',
+    input_schema  JSONB,
+    output_schema JSONB,
+    release_note  TEXT,
+    review_comment TEXT,
+    row_version   INTEGER NOT NULL DEFAULT 0,
+    create_time   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time   TIMESTAMPTZ,
+    create_by     VARCHAR(32),
+    update_by     VARCHAR(32),
+    CONSTRAINT uq_catalog_tool_version UNIQUE (tool_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_tool_version_tool_id
+    ON catalog_tool_version (tool_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_tool_version_status
+    ON catalog_tool_version (status);
+
+COMMENT ON TABLE catalog_tool_version IS '工具版本：唯一走完整审核发布流程的对象';
+COMMENT ON COLUMN catalog_tool_version.version IS '版本号（同一工具下唯一）';
+COMMENT ON COLUMN catalog_tool_version.status IS '状态：draft | pending_review | approved | rejected | published | disabled | withdrawn | archived';
+COMMENT ON COLUMN catalog_tool_version.input_schema IS '输入 JSON Schema（可覆盖工具级）';
+COMMENT ON COLUMN catalog_tool_version.output_schema IS '输出 JSON Schema（可覆盖工具级）';
+COMMENT ON COLUMN catalog_tool_version.release_note IS '版本说明';
+COMMENT ON COLUMN catalog_tool_version.review_comment IS '审核意见/驳回原因';
+
+-- ------------------------------------------------------------
+-- Catalog：执行绑定
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_execution_binding (
+    id                VARCHAR(32) PRIMARY KEY,
+    version_id        VARCHAR(32) NOT NULL REFERENCES catalog_tool_version(id) ON DELETE CASCADE,
+    provider_id       VARCHAR(32) NOT NULL REFERENCES catalog_provider(id) ON DELETE RESTRICT,
+    method            VARCHAR(16) NOT NULL DEFAULT 'COMPUTE',
+    path_template     VARCHAR(512) NOT NULL,
+    parameter_mapping JSONB,
+    allowed_headers   JSONB,
+    response_handling JSONB,
+    timeout_seconds   INTEGER,
+    retry_max         INTEGER,
+    idempotent        BOOLEAN NOT NULL DEFAULT TRUE,
+    row_version       INTEGER NOT NULL DEFAULT 0,
+    create_time       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time       TIMESTAMPTZ,
+    create_by         VARCHAR(32),
+    update_by         VARCHAR(32),
+    CONSTRAINT uq_catalog_execution_binding_version UNIQUE (version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_execution_binding_provider_id
+    ON catalog_execution_binding (provider_id);
+
+COMMENT ON TABLE catalog_execution_binding IS '执行绑定：工具版本与 Provider 的固定映射';
+COMMENT ON COLUMN catalog_execution_binding.version_id IS '工具版本 ID（一对一）';
+COMMENT ON COLUMN catalog_execution_binding.provider_id IS 'Provider ID';
+COMMENT ON COLUMN catalog_execution_binding.method IS '方法：builtin 为 COMPUTE，http 为 GET/POST/PUT/DELETE';
+COMMENT ON COLUMN catalog_execution_binding.path_template IS 'http 路径模板或 builtin:// 标识';
+COMMENT ON COLUMN catalog_execution_binding.parameter_mapping IS '参数映射（JSON）';
+COMMENT ON COLUMN catalog_execution_binding.allowed_headers IS '允许 Header 列表';
+COMMENT ON COLUMN catalog_execution_binding.response_handling IS '响应处理规则（JSON）';
+COMMENT ON COLUMN catalog_execution_binding.timeout_seconds IS '执行超时（秒）';
+COMMENT ON COLUMN catalog_execution_binding.retry_max IS '最大重试次数';
+COMMENT ON COLUMN catalog_execution_binding.idempotent IS '是否幂等';
+
+-- ------------------------------------------------------------
+-- Catalog：审核记录
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_review_record (
+    id                  VARCHAR(32) PRIMARY KEY,
+    tool_id             VARCHAR(32) NOT NULL REFERENCES catalog_tool(id) ON DELETE CASCADE,
+    version_id          VARCHAR(32) NOT NULL REFERENCES catalog_tool_version(id) ON DELETE CASCADE,
+    action              VARCHAR(32) NOT NULL,
+    from_status         VARCHAR(24) NOT NULL,
+    to_status           VARCHAR(24) NOT NULL,
+    comment             TEXT,
+    operator_account_id VARCHAR(32),
+    create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time         TIMESTAMPTZ,
+    create_by           VARCHAR(32),
+    update_by           VARCHAR(32)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_review_record_version_id
+    ON catalog_review_record (version_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_review_record_tool_id
+    ON catalog_review_record (tool_id);
+
+COMMENT ON TABLE catalog_review_record IS '工具版本送审/审核记录';
+COMMENT ON COLUMN catalog_review_record.action IS '动作：submit_review | approve | reject';
+COMMENT ON COLUMN catalog_review_record.from_status IS '变更前状态';
+COMMENT ON COLUMN catalog_review_record.to_status IS '变更后状态';
+COMMENT ON COLUMN catalog_review_record.operator_account_id IS '操作人账号 ID';
+
+-- ------------------------------------------------------------
+-- Catalog：发布历史
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_publish_history (
+    id                  VARCHAR(32) PRIMARY KEY,
+    tool_id             VARCHAR(32) NOT NULL REFERENCES catalog_tool(id) ON DELETE CASCADE,
+    version_id          VARCHAR(32) NOT NULL REFERENCES catalog_tool_version(id) ON DELETE CASCADE,
+    action              VARCHAR(32) NOT NULL,
+    comment             TEXT,
+    operator_account_id VARCHAR(32),
+    create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time         TIMESTAMPTZ,
+    create_by           VARCHAR(32),
+    update_by           VARCHAR(32)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_publish_history_version_id
+    ON catalog_publish_history (version_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_publish_history_tool_id
+    ON catalog_publish_history (tool_id);
+
+COMMENT ON TABLE catalog_publish_history IS '工具版本发布/停用/撤回/归档/默认切换历史';
+COMMENT ON COLUMN catalog_publish_history.action IS '动作：publish | disable | enable | withdraw | archive | set_default';
+COMMENT ON COLUMN catalog_publish_history.operator_account_id IS '操作人账号 ID';
+
+-- ------------------------------------------------------------
+-- Catalog：能力包 ↔ 工具 关联
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_capability_pack_tool (
+    id          VARCHAR(32) PRIMARY KEY,
+    pack_id     VARCHAR(32) NOT NULL REFERENCES catalog_capability_pack(id) ON DELETE CASCADE,
+    tool_id     VARCHAR(32) NOT NULL REFERENCES catalog_tool(id) ON DELETE CASCADE,
+    create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time TIMESTAMPTZ,
+    create_by   VARCHAR(32),
+    update_by   VARCHAR(32),
+    CONSTRAINT uq_catalog_pack_tool UNIQUE (pack_id, tool_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_pack_tool_tool_id
+    ON catalog_capability_pack_tool (tool_id);
+
+COMMENT ON TABLE catalog_capability_pack_tool IS '能力包与工具的多对多关联';
+
+-- ------------------------------------------------------------
+-- Catalog：能力包 ↔ 调用系统 授权关联
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS catalog_capability_pack_system (
+    id          VARCHAR(32) PRIMARY KEY,
+    pack_id     VARCHAR(32) NOT NULL REFERENCES catalog_capability_pack(id) ON DELETE CASCADE,
+    system_id   VARCHAR(64) NOT NULL REFERENCES caller_system(system_id) ON DELETE CASCADE,
+    create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time TIMESTAMPTZ,
+    create_by   VARCHAR(32),
+    update_by   VARCHAR(32),
+    CONSTRAINT uq_catalog_pack_system UNIQUE (pack_id, system_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_pack_system_system_id
+    ON catalog_capability_pack_system (system_id);
+
+COMMENT ON TABLE catalog_capability_pack_system IS '能力包与调用系统的授权关联';
+
+-- ------------------------------------------------------------
+-- 预置数据：内置计算 Provider（阶段 0 确认，首批数学工具使用 builtin 类型）
+-- ------------------------------------------------------------
+INSERT INTO catalog_provider (
+    id, provider_code, name, provider_type, status, description,
+    target_security_config, row_version, create_time
+) VALUES (
+    'builtin_math_provider', 'builtin-math', '内置计算 Provider', 'builtin', 'enabled',
+    '平台内置的数学计算占位工具执行通道（阶段 1 预置，首批工具阶段 8 接入）',
+    NULL, 0, now()
+) ON CONFLICT (provider_code) DO NOTHING;
+
+-- ------------------------------------------------------------
+-- 运行 Trace 记录
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS runtime_trace_log (
+    id          VARCHAR(32) PRIMARY KEY,
+    trace_id    VARCHAR(64) NOT NULL,
+    system_id   VARCHAR(64),
+    action      VARCHAR(64) NOT NULL,
+    status      VARCHAR(20) NOT NULL DEFAULT 'success',
+    error_code  VARCHAR(64),
+    summary     JSONB,
+    source_ip   VARCHAR(64),
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_trace_id
+    ON runtime_trace_log (trace_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_system_id
+    ON runtime_trace_log (system_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_occurred_at
+    ON runtime_trace_log (occurred_at);
+
+COMMENT ON TABLE runtime_trace_log IS '运行请求基础 Trace 记录（追加式）';
+COMMENT ON COLUMN runtime_trace_log.trace_id IS 'Trace ID，跨认证/授权/执行/Provider 关联';
+COMMENT ON COLUMN runtime_trace_log.system_id IS '调用系统标识';
+COMMENT ON COLUMN runtime_trace_log.action IS '事件动作：runtime.auth / runtime.scope / runtime.traffic / runtime.request';
+COMMENT ON COLUMN runtime_trace_log.status IS '结果：success | failure';
+COMMENT ON COLUMN runtime_trace_log.error_code IS '失败时的稳定业务错误码';
+COMMENT ON COLUMN runtime_trace_log.summary IS '事件摘要（JSON，脱敏）';
+COMMENT ON COLUMN runtime_trace_log.source_ip IS '来源 IP';
+COMMENT ON COLUMN runtime_trace_log.occurred_at IS '事件发生时间';
+
+-- ------------------------------------------------------------
+-- 运行侧高风险执行确认
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS runtime_confirmation (
+    id          VARCHAR(32) PRIMARY KEY,
+    system_id   VARCHAR(64) NOT NULL,
+    tool_id     VARCHAR(32) NOT NULL,
+    version_id  VARCHAR(32),
+    tool_code   VARCHAR(256) NOT NULL,
+    token_hash  VARCHAR(64) NOT NULL,
+    status      VARCHAR(20) NOT NULL DEFAULT 'pending',
+    expires_at  TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
+    trace_id    VARCHAR(64),
+    create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_runtime_confirmation_system_id
+    ON runtime_confirmation (system_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_confirmation_status
+    ON runtime_confirmation (status);
+
+COMMENT ON TABLE runtime_confirmation IS '高风险工具执行确认申请';
+COMMENT ON COLUMN runtime_confirmation.system_id IS '调用系统标识';
+COMMENT ON COLUMN runtime_confirmation.tool_id IS '工具 ID';
+COMMENT ON COLUMN runtime_confirmation.version_id IS '工具版本 ID';
+COMMENT ON COLUMN runtime_confirmation.tool_code IS '完整工具标识';
+COMMENT ON COLUMN runtime_confirmation.token_hash IS '一次性确认令牌 SHA-256 哈希';
+COMMENT ON COLUMN runtime_confirmation.status IS '状态：pending | consumed | expired';
+COMMENT ON COLUMN runtime_confirmation.expires_at IS '令牌过期时间';
+COMMENT ON COLUMN runtime_confirmation.consumed_at IS '消费时间';
+COMMENT ON COLUMN runtime_confirmation.trace_id IS '关联 Trace ID';
+
 COMMIT;

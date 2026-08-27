@@ -26,6 +26,7 @@ class OutboxService:
         status: str | None = None,
         target: str | None = None,
         event_type: str | None = None,
+        event_type_prefix: str | None = None,
         object_id: str | None = None,
         event_id: str | None = None,
         create_time_start: datetime | None = None,
@@ -41,6 +42,10 @@ class OutboxService:
             conditions.append(OutboxDelivery.target == target)
         if event_type:
             conditions.append(OutboxEvent.event_type == event_type)
+        if event_type_prefix:
+            conditions.append(
+                OutboxEvent.event_type.like(f"{event_type_prefix}%")
+            )
         if object_id:
             conditions.append(OutboxEvent.object_id == object_id)
         if event_id:
