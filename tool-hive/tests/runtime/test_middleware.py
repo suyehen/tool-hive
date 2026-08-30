@@ -47,6 +47,18 @@ async def test_trace_action_mapping() -> None:
         "RUNTIME_SCOPE_NOT_ALLOWED"
     ) == "runtime.scope"
     assert RuntimeSecurityMiddleware._trace_action_for(
+        "RUNTIME_PROVIDER_ERROR"
+    ) == "runtime.provider"
+    assert RuntimeSecurityMiddleware._trace_action_for(
+        "RUNTIME_RETRIEVAL_UNAVAILABLE"
+    ) == "runtime.retrieval"
+    assert RuntimeSecurityMiddleware._trace_action_for(
+        "RUNTIME_CONFIRMATION_INVALID"
+    ) == "runtime.confirmation"
+    assert RuntimeSecurityMiddleware._trace_action_for(
+        "RUNTIME_PARAMETER_INVALID"
+    ) == "runtime.request"
+    assert RuntimeSecurityMiddleware._trace_action_for(
         "RUNTIME_RATE_LIMITED"
     ) == "runtime.traffic"
 

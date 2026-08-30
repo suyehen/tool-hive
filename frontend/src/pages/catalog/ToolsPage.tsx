@@ -10,6 +10,7 @@ import {
   createVersion, updateVersion, submitReview, publishVersion,
   setDefaultVersion, versionTransition, getToolHistory,
   listProviders,
+  testExecuteTool,
   type ToolItem, type ToolDetail, type VersionItem, type BindingPayload,
   type ProviderItem, type HistoryItem,
 } from '../../api/catalog';
@@ -103,6 +104,12 @@ export default function ToolsPage() {
   const [publishVersionItem, setPublishVersionItem] = useState<VersionItem | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [testOpen, setTestOpen] = useState(false);
+  const [testVersion, setTestVersion] = useState<VersionItem | null>(null);
+  const [testArguments, setTestArguments] = useState('');
+  const [testConfirm, setTestConfirm] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
   const [toolForm] = Form.useForm<ToolFormValues>();
   const [versionForm] = Form.useForm<VersionFormValues>();
   const [publishForm] = Form.useForm<{ set_default: boolean; comment?: string }>();
@@ -297,6 +304,35 @@ export default function ToolsPage() {
     }
   };
 
+  const handleTestExecute = async () => {
+    if (!detail || !testVersion) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = testArguments.trim() ? JSON.parse(testArguments) : {};
+      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('must be object');
+      }
+    } catch {
+      message.error('参数 JSON 格式错误');
+      return;
+    }
+    setTestLoading(true);
+    try {
+      const result = await testExecuteTool(detail.id, {
+        arguments: parsed,
+        version: testVersion.version,
+        confirm: testConfirm,
+      });
+      setTestResult(JSON.stringify(result, null, 2));
+      message.success('测试执行成功');
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      message.error(err.response?.data?.detail || '测试执行失败');
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
   const toolColumns: ColumnsType<ToolItem> = [
     { title: '完整标识', dataIndex: 'full_code', width: 200 },
     { title: '名称', dataIndex: 'name', width: 180 },
@@ -393,6 +429,20 @@ export default function ToolsPage() {
             <Popconfirm title="切换为默认版本？" onConfirm={() => handleVersionAction(record, 'set-default')}>
               <Button size="small">设默认</Button>
             </Popconfirm>
+          )}
+          {hasOperation('tool:manage') && record.status === 'published' && (
+            <Button
+              size="small"
+              onClick={() => {
+                setTestVersion(record);
+                setTestArguments('');
+                setTestConfirm(false);
+                setTestResult(null);
+                setTestOpen(true);
+              }}
+            >
+              测试
+            </Button>
           )}
           {hasOperation('tool:manage') && record.status === 'published' && (
             <Popconfirm title="确认停用？" onConfirm={() => handleVersionAction(record, 'disable')}>
@@ -624,6 +674,46 @@ export default function ToolsPage() {
             { title: '时间', dataIndex: 'created_at', width: 170 },
           ]}
         />
+      </Modal>
+
+      {/* 工具测试 */}
+      <Modal
+        title={`测试工具 ${detail?.full_code ?? ''}${testVersion ? `（${testVersion.version}）` : ''}`}
+        open={testOpen}
+        onCancel={() => setTestOpen(false)}
+        footer={null}
+        destroyOnClose
+      >
+        <Form layout="vertical">
+          <Form.Item label="参数（JSON）">
+            <Input.TextArea
+              rows={6}
+              value={testArguments}
+              onChange={(e) => setTestArguments(e.target.value)}
+              placeholder='{"a":1,"b":2,"operation":"add"}'
+            />
+          </Form.Item>
+          <Form.Item label="高风险 / 写操作确认" valuePropName="checked">
+            <Switch checked={testConfirm} onChange={setTestConfirm} />
+          </Form.Item>
+          <Button type="primary" loading={testLoading} onClick={handleTestExecute}>
+            执行测试
+          </Button>
+          {testResult !== null && (
+            <pre
+              style={{
+                marginTop: 16,
+                background: '#f5f5f5',
+                padding: 12,
+                borderRadius: 6,
+                maxHeight: 300,
+                overflow: 'auto',
+              }}
+            >
+              {testResult}
+            </pre>
+          )}
+        </Form>
       </Modal>
     </div>
   );

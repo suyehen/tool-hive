@@ -76,6 +76,14 @@ psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
 TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
   ./.venv/bin/toolhive init-admin --account admin --real-name '<姓名>'
 
+# 接入首批数学计算工具（幂等；含建工具、版本、绑定、审核、发布）
+./.venv/bin/toolhive seed-tools
+
+# （可选）全量重建 Chroma 检索索引；需在 .env 配置 TOOLHIVE_MODEL_API_KEY 与
+# TOOLHIVE_EMBEDDING_MODEL（腾讯云 TokenHub，一期模型 kinfra-text-embedding-4b），
+# 未配置时 Discover 自动降级为关键词检索。
+./.venv/bin/toolhive rebuild-chroma
+
 # 启动（监听 127.0.0.1:8100，自动读取 .env）
 ./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 
@@ -97,6 +105,9 @@ psql "postgresql://toolhive:<密码>@localhost:5432/toolhive" -f sql/init.sql
 # 初始化首个超级管理员（仅空库可执行；PowerShell 使用 $env: 设置环境变量）
 $env:TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>'
 toolhive init-admin --account admin --real-name '<姓名>'
+
+# 接入首批数学计算工具（幂等）
+toolhive seed-tools
 
 # 启动（需先激活 Python 环境，如 conda activate toolhive 或 .\.venv\Scripts\Activate.ps1）
 python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100

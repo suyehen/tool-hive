@@ -18,6 +18,26 @@ def test_help_lists_init_admin_command(capsys) -> None:
     assert "init-admin" in out
 
 
+def test_help_lists_seed_tools_and_sign_request(capsys) -> None:
+    """帮助信息包含 seed-tools 与 sign-request。"""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "seed-tools" in out
+    assert "sign-request" in out
+
+
+def test_seed_tools_dispatches() -> None:
+    """seed-tools 命令分派到 _seed_tools。"""
+    with patch("toolhive.cli.load_settings") as load:
+        with patch("toolhive.cli._seed_tools", new=AsyncMock(return_value=0)) as seed:
+            code = cli.main(["seed-tools"])
+    assert code == 0
+    load.assert_called_once_with(None)
+    seed.assert_awaited_once()
+
+
 def test_init_admin_help_documents_password_env(capsys) -> None:
     """init-admin 帮助中必须说明初始密码环境变量，便于使用者了解。"""
     with pytest.raises(SystemExit) as exc:

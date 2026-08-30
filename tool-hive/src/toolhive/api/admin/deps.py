@@ -15,7 +15,7 @@ from toolhive.config import AdminSecuritySettings
 from toolhive.core.exceptions import ToolHiveError
 from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
-from toolhive.services.audit_service import set_audit_actor
+from toolhive.services.audit_service import set_audit_actor, set_audit_trace
 
 
 async def _get_current_user(
@@ -56,9 +56,12 @@ def require_operation(code: OperationCode):
     """
 
     async def _dependency(
+        request: Request,
         account=Depends(_get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
+        # 捕获管理请求透传 Trace ID（非法忽略），供审计记录关联
+        set_audit_trace(request.headers.get("X-ToolHive-Trace-Id"))
         # 记录当前请求操作人，供 Service 层审计埋点读取
         set_audit_actor(account.id, account.account)
         from toolhive.services.role_service import RoleService

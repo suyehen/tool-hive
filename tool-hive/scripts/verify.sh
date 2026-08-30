@@ -16,4 +16,13 @@ curl -fsS \
     "$BASE_URL/api/admin/bootstrap/status"
 echo
 
-echo "验收通过：服务可访问，初始化状态接口正常。"
+echo "== 运行入口配置 =="
+NGINX_CONF="${NGINX_CONF:-../deploy/nginx/toolhive.conf}"
+if [ -f "$NGINX_CONF" ] && grep -q "X-ToolHive-Ingress runtime" "$NGINX_CONF"; then
+    echo "运行入口配置存在（$NGINX_CONF）"
+else
+    echo "运行入口配置缺失或未包含 runtime ingress（$NGINX_CONF）" >&2
+    exit 1
+fi
+
+echo "验收通过：服务可访问，初始化状态接口正常，运行入口配置就绪。"

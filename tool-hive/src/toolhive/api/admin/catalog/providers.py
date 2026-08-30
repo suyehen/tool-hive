@@ -16,6 +16,7 @@ from toolhive.api.admin.deps import require_operation
 from toolhive.core.exceptions import ConflictError, NotFoundError, ValidationError
 from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
+from toolhive.runtime.execution.health import check_provider_health
 from toolhive.services.catalog_provider_service import CatalogProviderService
 
 router = APIRouter(prefix="/providers", tags=["Catalog-Providers"])
@@ -160,6 +161,21 @@ async def archive_provider(
 ):
     """归档 Provider（终态，不可恢复）。"""
     return await _set_status(provider_id, "archived", db)
+
+
+@router.post("/{provider_id}/health-check")
+async def health_check_provider(
+    provider_id: str,
+    db: AsyncSession = Depends(get_db),
+    _account=Depends(require_operation(OperationCode.PROVIDER_VIEW)),
+):
+    """Provider 健康检查：域名解析 + IP 校验 + HTTPS 可达性。"""
+    svc = CatalogProviderService(db)
+    try:
+        provider = await svc.get_provider(provider_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return await check_provider_health(provider)
 
 
 async def _set_status(provider_id: str, status: str, db: AsyncSession) -> ProviderResponse:

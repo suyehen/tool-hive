@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from toolhive.api.admin.catalog.schemas import (
     CreateToolRequest,
     ExecutionBindingResponse,
     StatusCommentRequest,
+    TestExecuteRequest,
     ToolDetailResponse,
     ToolListResponse,
     ToolResponse,
@@ -22,6 +23,8 @@ from toolhive.core.operation_codes import OperationCode
 from toolhive.infrastructure.database import get_db
 from toolhive.models.catalog_execution_binding import CatalogExecutionBinding
 from toolhive.models.catalog_provider import CatalogProvider
+from toolhive.runtime.errors import RuntimeApiError
+from toolhive.services.catalog_test_service import CatalogTestService
 from toolhive.services.catalog_tool_service import CatalogToolService
 from toolhive.services.catalog_version_service import CatalogVersionService
 
@@ -271,3 +274,30 @@ async def _set_status(tool_id: str, status: str, db: AsyncSession) -> ToolRespon
     except (ConflictError, ValidationError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _to_response(tool)
+
+
+@router.post("/{tool_id}/test-execute")
+async def test_execute_tool(
+    tool_id: str,
+    body: TestExecuteRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _account=Depends(require_operation(OperationCode.TOOL_MANAGE)),
+):
+    """管理端工具测试（一期仅 builtin 类型，统一 ProviderGateway + 审计）。"""
+    svc = CatalogTestService(db)
+    source_ip = getattr(request.state, "client_ip", None)
+    try:
+        return await svc.test_execute(
+            tool_id=tool_id,
+            arguments=body.arguments,
+            confirm=body.confirm,
+            version=body.version,
+            source_ip=source_ip,
+        )
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (ValidationError, ConflictError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeApiError as e:
+        raise HTTPException(status_code=400, detail=e.message)

@@ -230,6 +230,14 @@ class StatusCommentRequest(BaseModel):
     comment: str | None = Field(None, max_length=512)
 
 
+class TestExecuteRequest(BaseModel):
+    """管理端工具测试请求。"""
+
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    version: str | None = Field(None, max_length=32)
+    confirm: bool = False
+
+
 # ── 审核与历史 ──
 
 

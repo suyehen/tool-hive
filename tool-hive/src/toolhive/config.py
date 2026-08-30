@@ -56,6 +56,9 @@ class RuntimeSecuritySettings(BaseModel):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_window_seconds: int = 60
     circuit_breaker_open_seconds: int = 30
+    provider_max_response_bytes: int = 1048576
+    provider_max_header_count: int = 50
+    provider_connect_timeout_seconds: int = 5
 
 
 class RetrievalSettings(BaseModel):
@@ -63,6 +66,7 @@ class RetrievalSettings(BaseModel):
 
     model_api_key: str = ""
     embedding_model: str = ""
+    timeout_seconds: int = 10
 
 
 class OutboxRetrySettings(BaseModel):
@@ -213,6 +217,7 @@ class Settings(BaseSettings):
     # ── 模型服务 ──
     model_api_key: str = ""
     embedding_model: str = ""
+    retrieval_timeout_seconds: int = 10
 
     # ── 安全：登录与账号 ──
     login_max_failures: int = 5
@@ -239,6 +244,9 @@ class Settings(BaseSettings):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_window_seconds: int = 60
     circuit_breaker_open_seconds: int = 30
+    provider_max_response_bytes: int = 1048576
+    provider_max_header_count: int = 50
+    provider_connect_timeout_seconds: int = 5
 
     # ── 密钥（生产环境务必通过环境变量覆盖） ──
     csrf_secret: str = ""
@@ -299,6 +307,9 @@ class Settings(BaseSettings):
             circuit_breaker_failure_threshold=self.circuit_breaker_failure_threshold,
             circuit_breaker_window_seconds=self.circuit_breaker_window_seconds,
             circuit_breaker_open_seconds=self.circuit_breaker_open_seconds,
+            provider_max_response_bytes=self.provider_max_response_bytes,
+            provider_max_header_count=self.provider_max_header_count,
+            provider_connect_timeout_seconds=self.provider_connect_timeout_seconds,
         )
 
     @computed_field
@@ -307,6 +318,7 @@ class Settings(BaseSettings):
         return RetrievalSettings(
             model_api_key=self.model_api_key,
             embedding_model=self.embedding_model,
+            timeout_seconds=self.retrieval_timeout_seconds,
         )
 
     @computed_field
@@ -468,6 +480,34 @@ def validate_production_settings(settings: Settings) -> None:
         errors.append("bind_host 在生产环境必须绑定回环地址（127.0.0.1 或 ::1）")
     if not settings.network.trusted_proxies:
         errors.append("network.trusted_proxies 不能为空，必须包含部署的 Nginx 地址")
+    # ── 运行侧签名 ──
+    if settings.signature_time_window_seconds <= 0:
+        errors.append("signature_time_window_seconds 必须大于 0")
+    if settings.nonce_retention_minutes <= 0:
+        errors.append("nonce_retention_minutes 必须大于 0")
+    if settings.signing_key_min_bits < 2048:
+        errors.append("signing_key_min_bits 不能小于 2048")
+    if settings.signing_algorithm not in ("RSA-PSS-SHA256", "Ed25519"):
+        errors.append("signing_algorithm 必须是 RSA-PSS-SHA256 或 Ed25519")
+    if settings.signature_version != "TOOLHIVE-SIGN-V1":
+        errors.append("signature_version 必须为 TOOLHIVE-SIGN-V1")
+    # ── Embedding 与 Chroma ──
+    if bool(settings.embedding_model) != bool(settings.model_api_key):
+        errors.append("embedding_model 与 model_api_key 必须同时配置或同时为空")
+    if not settings.chroma.persist_directory:
+        errors.append("chroma.persist_directory 不能为空")
+    if settings.chroma.mode != "embedded":
+        errors.append("一期 chroma.mode 必须为 embedded")
+    # ── Provider 出站限制 ──
+    if (
+        settings.provider_max_response_bytes <= 0
+        or settings.provider_max_header_count <= 0
+        or settings.provider_connect_timeout_seconds <= 0
+    ):
+        errors.append(
+            "provider_max_response_bytes / provider_max_header_count / "
+            "provider_connect_timeout_seconds 必须大于 0"
+        )
     if errors:
         raise ValueError(
             "生产配置校验失败，拒绝启动：\n- " + "\n- ".join(errors),

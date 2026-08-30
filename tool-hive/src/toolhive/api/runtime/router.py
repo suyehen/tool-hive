@@ -8,6 +8,8 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from toolhive.api.deps import get_runtime_security
+from toolhive.api.runtime.v1.confirmations import router as confirmations_router
+from toolhive.api.runtime.v1.tools import router as tools_router
 from toolhive.runtime.errors import (
     RUNTIME_INTERNAL_ERROR,
     RuntimeApiError,
@@ -68,3 +70,5 @@ async def runtime_ping(request: Request):
 
 
 runtime_app.include_router(router)
+runtime_app.include_router(tools_router)
+runtime_app.include_router(confirmations_router)

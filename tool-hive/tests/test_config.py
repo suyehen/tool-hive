@@ -196,6 +196,62 @@ class TestProductionValidation:
             validate_production_settings(s)
         assert "allow_loopback_direct" in str(exc_info.value)
 
+    def test_production_rejects_invalid_signing_config(self) -> None:
+        """运行侧签名配置非法时拒绝启动。"""
+        s = Settings(
+            _env_file=None,
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+            signing_algorithm="HMAC",
+            signature_version="v2",
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        message = str(exc_info.value)
+        assert "signing_algorithm" in message
+        assert "signature_version" in message
+
+    def test_production_rejects_embedding_key_mismatch(self) -> None:
+        """embedding_model 与 model_api_key 必须成对配置。"""
+        s = Settings(
+            _env_file=None,
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+            embedding_model="kinfra-text-embedding-4b",
+            model_api_key="",
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        assert "embedding_model" in str(exc_info.value)
+
+    def test_production_rejects_non_embedded_chroma(self) -> None:
+        """一期 chroma.mode 必须为 embedded。"""
+        s = Settings(
+            _env_file=None,
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+            chroma={"mode": "service"},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        assert "chroma.mode" in str(exc_info.value)
+
+    def test_production_rejects_zero_provider_limits(self) -> None:
+        """Provider 出站限制参数必须大于 0。"""
+        s = Settings(
+            _env_file=None,
+            csrf_secret="x" * 32,
+            database_url="postgresql+asyncpg://toolhive:realpass@db:5432/toolhive",
+            redis_url="redis://:realpass@redis:6379/0",
+            provider_max_response_bytes=0,
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_production_settings(s)
+        assert "provider_max_response_bytes" in str(exc_info.value)
+
 
 class TestDotenvAndEnvLoading:
     """.env 文件与复杂环境变量的加载测试（支持嵌套与列表字段）。"""

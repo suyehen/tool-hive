@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,12 +27,20 @@ _SENSITIVE_KEY_HINTS: tuple[str, ...] = (
     "credential",
     "old_password",
     "new_password",
+    "nonce",
+    "signature",
 )
 
 # 当前请求操作人（由 require_operation 依赖注入），CLI/系统初始化时为空
 _current_actor: contextvars.ContextVar[dict[str, str | None]] = (
     contextvars.ContextVar("toolhive_audit_actor", default={})
 )
+# 当前请求透传 Trace ID（管理侧由 X-ToolHive-Trace-Id 捕获，运行时由中间件维护）
+_current_trace: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("toolhive_audit_trace", default=None)
+)
+
+_TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def set_audit_actor(account_id: str | None, account_name: str | None) -> None:
@@ -47,6 +56,21 @@ def get_audit_actor() -> dict[str, str | None]:
 def get_current_operator_id() -> str | None:
     """读取当前请求操作人 ID（管理 API 依赖阶段注入）。"""
     return get_audit_actor().get("account_id")
+
+
+def set_audit_trace(trace_id: str | None) -> None:
+    """设置当前请求透传 Trace ID（非法值忽略）。"""
+    if trace_id is None or not isinstance(trace_id, str):
+        _current_trace.set(None)
+        return
+    value = trace_id.strip()
+    if _TRACE_ID_PATTERN.match(value):
+        _current_trace.set(value)
+
+
+def get_audit_trace() -> str | None:
+    """读取当前请求透传 Trace ID。"""
+    return _current_trace.get()
 
 
 def _sanitize_value(key: str, value: Any) -> Any:
@@ -121,7 +145,7 @@ class AuditService:
             after_summary=_dump(after_summary),
             reason=reason,
             result=result,
-            trace_id=trace_id,
+        trace_id=trace_id if trace_id is not None else get_audit_trace(),
             source_ip=source_ip,
         )
         self.db.add(record)
@@ -162,7 +186,7 @@ class AuditService:
                 after_summary=_dump(after_summary),
                 reason=reason,
                 result=result,
-                trace_id=trace_id,
+            trace_id=trace_id if trace_id is not None else get_audit_trace(),
                 source_ip=source_ip,
             )
             db.add(record)

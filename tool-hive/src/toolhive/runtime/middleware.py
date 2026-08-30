@@ -36,6 +36,7 @@ from toolhive.runtime.errors import (
     RUNTIME_INTERNAL_ERROR,
     RUNTIME_RATE_LIMITED,
     RUNTIME_REQUEST_TIMEOUT,
+    RUNTIME_RETRIEVAL_UNAVAILABLE,
     RUNTIME_SCOPE_NOT_ALLOWED,
     RUNTIME_TOOL_NOT_AVAILABLE,
     RUNTIME_TOOL_NOT_FOUND,
@@ -165,13 +166,21 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
         """按错误码归类 Trace 事件动作。"""
         if code.startswith("RUNTIME_AUTH"):
             return "runtime.auth"
+        if code.startswith("RUNTIME_PROVIDER"):
+            return "runtime.provider"
+        if code == RUNTIME_RETRIEVAL_UNAVAILABLE:
+            return "runtime.retrieval"
+        if code.startswith("RUNTIME_CONFIRMATION"):
+            return "runtime.confirmation"
+        if code == RUNTIME_SCOPE_NOT_ALLOWED:
+            return "runtime.scope"
         if code in (
             RUNTIME_RATE_LIMITED,
             RUNTIME_CIRCUIT_OPEN,
             RUNTIME_AUTH_SECURITY_UNAVAILABLE,
         ):
             return "runtime.traffic"
-        return "runtime.scope"
+        return "runtime.request"
 
     async def _authorize(self, request: Request, session, system_id: str):
         """运行 API 范围 + 工具路径预校验 + 策略有效期。"""

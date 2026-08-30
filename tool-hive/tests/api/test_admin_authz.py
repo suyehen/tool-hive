@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from toolhive.api.admin.deps import _get_current_user, require_operation
 from toolhive.core.enums import AccountStatus
 from toolhive.core.operation_codes import OperationCode
+from toolhive.services.audit_service import get_audit_trace, set_audit_trace
 
 
 def _make_account(account_id: str = "acc-1") -> MagicMock:
@@ -28,7 +29,7 @@ async def test_require_operation_allows_with_permission():
         role_svc = role_cls.return_value
         role_svc.check_operation = AsyncMock(return_value=True)
         dep = require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)
-        result = await dep(account=account, db=db)
+        result = await dep(request=MagicMock(), account=account, db=db)
     assert result is account
     role_svc.check_operation.assert_awaited_once_with(
         "acc-1",
@@ -45,7 +46,7 @@ async def test_require_operation_denies_without_permission():
         role_svc.check_operation = AsyncMock(return_value=False)
         dep = require_operation(OperationCode.ROLE_MANAGE)
         with pytest.raises(HTTPException) as exc_info:
-            await dep(account=account, db=db)
+            await dep(request=MagicMock(), account=account, db=db)
     assert exc_info.value.status_code == 403
     assert "缺少操作项" in str(exc_info.value.detail)
 
@@ -58,12 +59,28 @@ async def test_require_operation_caller_policy():
         role_svc = role_cls.return_value
         role_svc.check_operation = AsyncMock(return_value=True)
         dep = require_operation(OperationCode.CALLER_SYSTEM_POLICY)
-        result = await dep(account=account, db=db)
+        result = await dep(request=MagicMock(), account=account, db=db)
     assert result is account
     role_svc.check_operation.assert_awaited_once_with(
         "acc-1",
         OperationCode.CALLER_SYSTEM_POLICY,
     )
+
+
+async def test_require_operation_captures_trace_header():
+    """require_operation 捕获 X-ToolHive-Trace-Id 写入审计上下文。"""
+    set_audit_trace(None)
+    db = AsyncMock()
+    account = _make_account()
+    request = MagicMock()
+    request.headers.get = MagicMock(return_value="trace-abc")
+    with patch("toolhive.services.role_service.RoleService") as role_cls:
+        role_svc = role_cls.return_value
+        role_svc.check_operation = AsyncMock(return_value=True)
+        dep = require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)
+        await dep(request=request, account=account, db=db)
+    assert get_audit_trace() == "trace-abc"
+    set_audit_trace(None)
 
 
 async def test_get_current_user_requires_session():

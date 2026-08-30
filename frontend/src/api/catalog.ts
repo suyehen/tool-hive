@@ -380,6 +380,28 @@ export async function getToolHistory(toolId: string): Promise<HistoryItem[]> {
   return data;
 }
 
+export interface TestExecuteResult {
+  tool_code: string;
+  version: string;
+  result: Record<string, unknown>;
+  trace_id: string;
+}
+
+export async function testExecuteTool(
+  toolId: string,
+  params: {
+    arguments: Record<string, unknown>;
+    version?: string;
+    confirm?: boolean;
+  },
+): Promise<TestExecuteResult> {
+  const { data } = await client.post(
+    `/catalog/tools/${toolId}/test-execute`,
+    params,
+  );
+  return data;
+}
+
 // ── 审核 ──
 
 export interface PendingReviewItem {

@@ -47,14 +47,53 @@ class RedisCacheDelivery(DeliveryTarget):
 class ChromaIndexDelivery(DeliveryTarget):
     """Chroma 派生索引投递。
 
-    所有 Chroma 写入只允许通过本投递执行；检索实现在一期下半接入
-    ``VectorIndex`` 后按稳定业务 ID 执行 upsert/delete。
+    所有 Chroma 写入只允许通过本投递执行；``catalog.tool.changed`` /
+    ``catalog.version.changed`` 驱动工具文档 upsert/delete；
+    provider/capability 事件不影响工具索引内容，跳过。
     """
 
     name = "chroma"
 
     async def deliver(self, event: OutboxEvent) -> None:
-        logger.info("outbox delivery target=chroma event=%s", event.event_id)
+        from toolhive.infrastructure import database
+        from toolhive.infrastructure.vector_index import VectorIndexError
+        from toolhive.runtime.retrieval.embedding import EmbeddingUnavailableError
+        from toolhive.runtime.retrieval.service import RetrievalService
+
+        if event.event_type in (
+            "catalog.provider.changed",
+            "catalog.capability.changed",
+        ):
+            logger.info(
+                "chroma delivery skip event=%s type=%s",
+                event.event_id, event.event_type,
+            )
+            return
+        if event.event_type not in (
+            "catalog.tool.changed",
+            "catalog.version.changed",
+        ):
+            raise DeterministicDeliveryError(
+                f"未知事件类型: {event.event_type}"
+            )
+        if event.event_type == "catalog.version.changed":
+            tool_id = (event.payload or {}).get("tool_id")
+        else:
+            tool_id = event.object_id
+        if not tool_id:
+            raise DeterministicDeliveryError("事件缺少 tool_id")
+        try:
+            async with database.async_session_factory() as session:
+                await RetrievalService(session).sync_tool(tool_id)
+            logger.info(
+                "chroma delivery succeeded event=%s tool_id=%s",
+                event.event_id, tool_id,
+            )
+        except (VectorIndexError, EmbeddingUnavailableError) as exc:
+            raise DeliveryError(f"索引同步失败: {exc}") from exc
+        except Exception as exc:
+            logger.exception("chroma delivery failed event=%s", event.event_id)
+            raise DeliveryError(str(exc)[:500]) from exc
 
 
 TARGETS: dict[str, DeliveryTarget] = {

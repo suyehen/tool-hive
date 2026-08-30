@@ -74,6 +74,14 @@ psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
 TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
   ./.venv/bin/toolhive init-admin --account admin --real-name '<real name>'
 
+# Seed the first-batch math tools (idempotent; creates tool, version, binding, review, publish)
+./.venv/bin/toolhive seed-tools
+
+# (Optional) Rebuild the Chroma retrieval index; requires TOOLHIVE_MODEL_API_KEY and
+# TOOLHIVE_EMBEDDING_MODEL (Tencent TokenHub, Phase 1 model kinfra-text-embedding-4b).
+# Without them, Discover falls back to keyword search automatically.
+./.venv/bin/toolhive rebuild-chroma
+
 # Start the service (listens on 127.0.0.1:8100, loads .env automatically)
 ./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 
@@ -95,6 +103,9 @@ psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
 # Initialize the first super admin (only on an empty database; set the env var with $env: in PowerShell)
 $env:TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>'
 toolhive init-admin --account admin --real-name '<real name>'
+
+# Seed the first-batch math tools (idempotent)
+toolhive seed-tools
 
 # Start the service (activate the Python environment first, e.g. conda activate toolhive or .\.venv\Scripts\Activate.ps1)
 python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100

@@ -7,6 +7,8 @@
 - 操作系统：Linux（生产建议与 Nginx 同机部署）
 - Python：CPython 3.11.6（`pyproject.toml` 要求 `>=3.11.6,<3.12`）
 - PostgreSQL（含 `TIMESTAMPTZ` 支持）与 Redis 可访问
+- 嵌入式 Chroma：`chromadb` 随 `install.sh` 安装，生产持久化目录固定为配置的 `chroma.persist_directory`（默认 `/vdb/tool-hive/chroma`，需可写）
+- 检索 Embedding（可选，未配置时 Discover 自动降级为关键词检索）：腾讯云 TokenHub API Key（`model_api_key`）与模型名（`embedding_model`，一期为 `kinfra-text-embedding-4b`）
 
 ## 2. 创建数据库和用户（先执行）
 
@@ -44,6 +46,18 @@ PYTHON_BIN=/path/to/python3.11 bash scripts/install.sh
 psql "$DATABASE_URL" -f sql/init.sql
 ```
 
+### 4.1 首批工具与索引
+
+建表完成后执行（幂等，可重复执行）：
+
+```bash
+# 接入首批数学计算工具 math.basic.calculator（建工具 → 建版本+绑定 → 审核 → 发布设默认）
+./.venv/bin/toolhive seed-tools --config /vdb/tool-hive/config/production.yaml
+
+# 全量重建 Chroma 索引（需已配置 model_api_key / embedding_model；未配置时用于确认降级路径）
+./.venv/bin/toolhive rebuild-chroma --config /vdb/tool-hive/config/production.yaml
+```
+
 ## 5. 首个超级管理员初始化
 
 ```bash
@@ -60,7 +74,7 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 参考 [deploy/nginx/toolhive.conf](./nginx/toolhive.conf)：
 
 - 管理入口：公网 `443`，转发 `/admin/**` 与 `/api/admin/**` 到 `127.0.0.1:8100`，写入 `X-ToolHive-Ingress: admin`；
-- 运行入口：内网 `8081`，仅转发 `/api/runtime/v1/**`，写入 `X-ToolHive-Ingress: runtime`；
+- 运行入口：内网 `8081`，仅转发 `/api/runtime/v1/**`，写入 `X-ToolHive-Ingress: runtime`；**默认只允许本机来源**（`allow 127.0.0.1; allow ::1; deny all;`），若调用系统分布在其他主机，按实际内网网段替换为 `allow 10.0.0.0/8;`、`allow 172.16.0.0/12;`、`allow 192.168.0.0/16;` 等，一期不允许公网访问运行入口；
 - Header 清洗：清除客户端提交的 `Forwarded` / `X-Forwarded-For` / `X-Real-IP`，按实际 TCP 连接写入 `X-ToolHive-Client-IP: $remote_addr`；
 - 限流：管理入口全局 `10 r/s`（burst 20），`/api/admin/auth/**` 登录/验证码等接口 `5 r/s`（burst 8），运行入口内网基础限流 `50 r/s`（burst 100）；zone 定义位于示例配置顶部，需处于 Nginx `http` 上下文；
 - 应用只监听回环地址，生产必须由 Nginx 转发，不允许直连应用端口。
@@ -86,6 +100,9 @@ TOOLHIVE_CONFIG_FILE=/vdb/tool-hive/config/production.yaml bash scripts/start.sh
 - `network.allow_loopback_direct` 必须为 `false`；
 - `bind_host` 必须绑定回环地址（`127.0.0.1` 或 `::1`）；
 - `network.trusted_proxies` 不能为空，必须包含部署的 Nginx 地址。
+- 运行侧签名：`signature_time_window_seconds` / `nonce_retention_minutes` / `signing_key_min_bits`（≥2048）必须为正，`signing_algorithm` 必须是 `RSA-PSS-SHA256` 或 `Ed25519`，`signature_version` 必须为 `TOOLHIVE-SIGN-V1`。
+- Embedding 与 Chroma：`embedding_model` 与 `model_api_key` 必须同时配置或同时为空；`chroma.persist_directory` 不能为空；一期 `chroma.mode` 必须为 `embedded`。
+- Provider 出站限制：`provider_max_response_bytes` / `provider_max_header_count` / `provider_connect_timeout_seconds` 必须大于 0。
 
 开发模式（`debug=true`）跳过该校验，允许宽松配置。
 
@@ -98,7 +115,47 @@ BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 验收项：
 
 - `/health` 返回 `{"status": "ok"}`；
-- `/api/admin/bootstrap/status` 返回初始化状态（需携带入口 Header；生产建议通过 Nginx 访问）。
+- `/api/admin/bootstrap/status` 返回初始化状态（需携带入口 Header；生产建议通过 Nginx 访问）；
+- 运行入口配置存在且包含 `X-ToolHive-Ingress: runtime`。
+
+## 9.1 运行入口端到端验收（签名 → 认证 → 发现 → 执行 → Trace）
+
+运行 API 只接受签名请求。验收前先在管理端完成调用系统登记：
+
+1. 管理端「调用系统」登记一个已启用系统（`system_id`），添加 RSA-PSS-SHA256 公钥（记下 `key_id`）、来源 IP 规则（本机 `127.0.0.1/32`）、运行策略（允许 `/api/runtime/v1/**`）、工具范围（`math.basic.calculator`）；
+2. 调用系统侧保管私钥 PEM 文件（如 `caller.pem`）；
+3. 用 `toolhive sign-request` 生成签名 curl 命令：
+
+```bash
+./.venv/bin/toolhive sign-request \
+  --method POST \
+  --path /api/runtime/v1/ping \
+  --system-id sys_xxx \
+  --key-id key_xxx \
+  --private-key caller.pem \
+  --base-url http://127.0.0.1:8081
+```
+
+4. 执行输出的 curl 命令，预期返回 `{"status":"ok","system_id":"sys_xxx","trace_id":"..."}`；
+5. 依次验收：
+
+```bash
+# 精确解析
+toolhive sign-request --method POST --path /api/runtime/v1/tools/resolve \
+  --body '{"tool_code":"math.basic.calculator"}' --system-id sys_xxx --key-id key_xxx --private-key caller.pem
+# 发现（关键词）
+toolhive sign-request --method POST --path /api/runtime/v1/tools/discover \
+  --body '{"query":"数学"}' --system-id sys_xxx --key-id key_xxx --private-key caller.pem
+# 执行
+toolhive sign-request --method POST --path /api/runtime/v1/tools/math.basic.calculator/execute \
+  --body '{"arguments":{"a":1,"b":2,"operation":"add"}}' --system-id sys_xxx --key-id key_xxx --private-key caller.pem
+```
+
+执行接口预期返回 `{"result":{"result":3},...}` 与 `trace_id`；
+6. 低风险工具无需确认；高风险/写操作工具需先调用 `POST /api/runtime/v1/confirmations` 申请令牌，再在 execute 请求体携带 `confirmation_id` 与 `confirmation_token`；
+7. Trace 落库：`runtime_trace_log` 中按 `trace_id` 可查到 `runtime.auth` / `runtime.scope` / `runtime.retrieval` / `runtime.control` / `runtime.provider` / `runtime.execute` 等事件；管理端「工具测试」执行产生的 Trace 以 `system_id=management` 标注 `source=admin-test`。
+
+> 提示：`sign-request` 只生成命令不自动发起请求；时间戳与 Nonce 默认当前生成，重复执行同一命令会因时间窗/Nonce 变化失效，属预期行为。
 
 ## 10. 基础失败恢复说明
 

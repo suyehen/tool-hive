@@ -61,7 +61,7 @@ class CallControlService:
             return self._denied(
                 RUNTIME_TOOL_NOT_FOUND, f"工具不存在: {full_code}",
             )
-        if tool.status == CatalogObjectStatus.ARCHIVED or not tool.discoverable:
+        if tool.status != CatalogObjectStatus.ENABLED or not tool.discoverable:
             return self._denied(
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可发现", tool=tool,
             )
@@ -202,6 +202,7 @@ class CallControlService:
             for tool in all_tools
             if tool.id in allowed_ids
             and tool.id in published_ids
+            and tool.status == CatalogObjectStatus.ENABLED
             and tool.discoverable
         ]
 
