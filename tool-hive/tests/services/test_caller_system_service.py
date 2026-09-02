@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,13 +10,96 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from toolhive.config import RuntimeSecuritySettings
-from toolhive.core.enums import PublicKeyStatus
+from toolhive.core.enums import (
+    CallerSystemStatus,
+    IPRuleStatus,
+    PublicKeyStatus,
+)
 from toolhive.core.exceptions import ConflictError, ValidationError
+from toolhive.models.caller_ip_rule import CallerIPRule
+from toolhive.models.caller_public_key import CallerPublicKey
+from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
 from toolhive.services.caller_system_service import (
     CallerSystemService,
     build_caller_system_filters,
 )
+
+
+def _system() -> CallerSystem:
+    return CallerSystem(
+        system_id="sys_1",
+        name="测试系统",
+        environment="development",
+        code="test",
+        owner="owner-1",
+        contact="owner@example.com",
+        status=CallerSystemStatus.DISABLED,
+    )
+
+
+def _public_key(status: str) -> CallerPublicKey:
+    return CallerPublicKey(
+        key_id="key_1",
+        system_id="sys_1",
+        public_key="pem",
+        fingerprint="fp",
+        algorithm="RSA-PSS-SHA256",
+        status=status,
+        effective_from=datetime.now(UTC) - timedelta(hours=1),
+        effective_to=None,
+    )
+
+
+def _ip_rule(status: str) -> CallerIPRule:
+    return CallerIPRule(
+        system_id="sys_1", ip_cidr="10.0.0.0/8", status=status,
+    )
+
+
+def _policy() -> CallerRuntimePolicy:
+    return CallerRuntimePolicy(
+        system_id="sys_1",
+        allowed_api_patterns='["/api/runtime/v1/**"]',
+        qps_limit=10,
+        concurrency_limit=2,
+        quota_per_day=100,
+        request_timeout_seconds=30,
+        circuit_breaker_enabled=True,
+    )
+
+
+async def test_enable_conditions_require_active_valid_public_key() -> None:
+    """启用前置条件要求至少一把 ACTIVE 且在有效期内的公钥。"""
+    svc = CallerSystemService.__new__(CallerSystemService)
+    svc.get_by_system_id = AsyncMock(return_value=_system())
+    svc.list_public_keys = AsyncMock(return_value=[_public_key(PublicKeyStatus.PENDING)])
+    svc.list_ip_rules = AsyncMock(return_value=[_ip_rule(IPRuleStatus.ACTIVE)])
+    svc.get_runtime_policy = AsyncMock(return_value=_policy())
+    conditions = await svc._check_enable_conditions("sys_1")
+    assert any("公钥" in condition for condition in conditions)
+
+
+async def test_enable_conditions_require_active_ip_rule() -> None:
+    """启用前置条件要求至少一条 ACTIVE 来源 IP 规则。"""
+    svc = CallerSystemService.__new__(CallerSystemService)
+    svc.get_by_system_id = AsyncMock(return_value=_system())
+    svc.list_public_keys = AsyncMock(return_value=[_public_key(PublicKeyStatus.ACTIVE)])
+    svc.list_ip_rules = AsyncMock(return_value=[_ip_rule(IPRuleStatus.DISABLED)])
+    svc.get_runtime_policy = AsyncMock(return_value=_policy())
+    conditions = await svc._check_enable_conditions("sys_1")
+    assert any("IP 规则" in condition for condition in conditions)
+
+
+async def test_enable_conditions_pass_with_valid_credentials() -> None:
+    """公钥与 IP 规则均 ACTIVE 且策略存在时满足启用前置。"""
+    svc = CallerSystemService.__new__(CallerSystemService)
+    svc.get_by_system_id = AsyncMock(return_value=_system())
+    svc.list_public_keys = AsyncMock(return_value=[_public_key(PublicKeyStatus.ACTIVE)])
+    svc.list_ip_rules = AsyncMock(return_value=[_ip_rule(IPRuleStatus.ACTIVE)])
+    svc.get_runtime_policy = AsyncMock(return_value=_policy())
+    conditions = await svc._check_enable_conditions("sys_1")
+    assert conditions == []
 
 
 def _generate_rsa_public_key_pem(key_size: int = 2048) -> str:

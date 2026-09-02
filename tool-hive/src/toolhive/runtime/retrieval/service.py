@@ -9,13 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.config import settings
-from toolhive.core.enums import CatalogObjectStatus, ToolVersionStatus
+from toolhive.core.enums import CatalogObjectStatus
 from toolhive.infrastructure.vector_index import (
     EmbeddedChromaVectorIndex,
     VectorIndexError,
 )
 from toolhive.models.catalog_tool import CatalogTool
-from toolhive.models.catalog_tool_version import CatalogToolVersion
 from toolhive.runtime.errors import (
     RUNTIME_RETRIEVAL_UNAVAILABLE,
     RuntimeApiError,
@@ -60,16 +59,29 @@ class RetrievalService:
 
     async def discover(
         self, system_id: str, query: str, limit: int = 20,
-    ) -> tuple[list[dict], bool]:
-        """向量检索优先；失败降级关键词；返回 (items, degraded)。"""
+    ) -> tuple[list[dict], bool, float]:
+        """向量检索优先；失败降级关键词；返回 (items, degraded, coverage)。"""
         try:
             items = await self._vector_discover(system_id, query, limit)
-            return items, False
+            degraded = False
         except (VectorIndexError, EmbeddingUnavailableError) as exc:
             logger.warning(
                 "vector retrieval unavailable, fallback keyword: %s", exc,
             )
-            return await self._keyword_discover(system_id, query, limit), True
+            items = await self._keyword_discover(system_id, query, limit)
+            degraded = True
+        except Exception as exc:
+            # 非特定异常也统一受控降级，避免向调用方暴露内部错误
+            logger.error(
+                "vector retrieval failed unexpectedly, fallback keyword: %s", exc,
+            )
+            items = await self._keyword_discover(system_id, query, limit)
+            degraded = True
+        total = len(
+            await CallControlService(self.db).list_discoverable_tools(system_id)
+        )
+        coverage = round(len(items) / total, 4) if total else 0.0
+        return items, degraded, coverage
 
     async def sync_tool(self, tool_id: str) -> None:
         """按工具当前状态同步索引：启用+可发现+已发布 → upsert，否则 delete。"""
@@ -77,15 +89,8 @@ class RetrievalService:
         if tool is None:
             return
         index = EmbeddedChromaVectorIndex(settings.chroma)
-        version = await self.db.scalar(
-            select(CatalogToolVersion.version)
-            .where(
-                CatalogToolVersion.tool_id == tool_id,
-                CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
-            )
-            .order_by(CatalogToolVersion.create_time.desc())
-            .limit(1)
-        )
+        versions = await fetch_default_versions(self.db, [tool])
+        version = versions.get(tool.id)
         if (
             tool.status != CatalogObjectStatus.ENABLED
             or not tool.discoverable

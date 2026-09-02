@@ -271,7 +271,6 @@ async def test_execute_explicit_version_must_be_published() -> None:
 async def test_execute_explicit_version_does_not_depend_on_default_provider() -> None:
     """显式指定版本时只校验目标版本 Provider，不被默认版本绑定状态阻塞。"""
     tool = _tool(default_version_id="ver-1")
-    default_version = _version()
     explicit_version = CatalogToolVersion(
         id="ver-2",
         tool_id="tool-1",
@@ -287,7 +286,7 @@ async def test_execute_explicit_version_does_not_depend_on_default_provider() ->
         side_effect=[tool, explicit_version, explicit_binding],
     )
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
-    db.get = AsyncMock(side_effect=[default_version, _provider()])
+    db.get = AsyncMock(return_value=_provider())
     svc = CallControlService(db)
     decision = await svc.evaluate_executable(
         "sys_1", "math.basic.calculator", version="2.0.0",
@@ -297,21 +296,56 @@ async def test_execute_explicit_version_does_not_depend_on_default_provider() ->
     assert decision.version.version == "2.0.0"
 
 
-async def test_execute_without_version_uses_same_fallback_as_resolve() -> None:
-    """未传版本且无默认版本时 Execute 与 Resolve 回退到同一已发布版本。"""
+async def test_execute_without_version_denies_when_no_default_version() -> None:
+    """未传版本且未配置默认版本时执行必须拒绝，不回退最新发布。"""
     tool = _tool(default_version_id=None)
-    version = _version()
-    binding = _binding("COMPUTE")
     db = AsyncMock()
-    db.scalar = AsyncMock(side_effect=[tool, version, binding])
+    db.scalar = AsyncMock(return_value=tool)
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    svc = CallControlService(db)
+    decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
+    assert not decision.allowed
+    assert decision.error_code == RUNTIME_TOOL_NOT_AVAILABLE
+
+
+async def test_resolve_by_tool_id() -> None:
+    """Resolve 支持按工具 ID 精确解析。"""
+    tool = _tool()
+    version = _version()
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=[tool, version])
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.scalar = AsyncMock(return_value=None)
+    svc = CallControlService(db)
+    decision = await svc.resolve_tool("sys_1", tool_id="tool-1")
+    assert decision.allowed
+    assert decision.version is not None
+    assert decision.version.version == "1.0.0"
+
+
+async def test_resolve_honors_explicit_version() -> None:
+    """Resolve 显式版本请求必须返回该已发布版本。"""
+    tool = _tool()
+    explicit_version = CatalogToolVersion(
+        id="ver-2",
+        tool_id="tool-1",
+        version="2.0.0",
+        status=ToolVersionStatus.PUBLISHED,
+        row_version=0,
+    )
+    binding = _binding("COMPUTE")
+    binding.version_id = "ver-2"
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, explicit_version, binding])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
     db.get = AsyncMock(return_value=_provider())
     svc = CallControlService(db)
-    decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
+    decision = await svc.resolve_tool(
+        "sys_1", "math.basic.calculator", version="2.0.0",
+    )
     assert decision.allowed
-    assert decision.executable
     assert decision.version is not None
-    assert decision.version.version == "1.0.0"
+    assert decision.version.version == "2.0.0"
 
 
 async def test_list_discoverable_tools_via_tool_scope() -> None:

@@ -48,24 +48,22 @@ class KeywordRetrieval:
 async def fetch_default_versions(
     db: AsyncSession, tools: list[CatalogTool],
 ) -> dict[str, str]:
-    """返回工具 → 已发布版本号（默认版本优先，其次最新已发布）。"""
+    """返回工具 → 默认已发布版本号（严格只认默认版本，不回退）。"""
     if not tools:
         return {}
     tool_ids = [tool.id for tool in tools]
     rows = (
         await db.execute(
-            select(
-                CatalogToolVersion.tool_id, CatalogToolVersion.version,
+            select(CatalogToolVersion.tool_id, CatalogToolVersion.version)
+            .join(
+                CatalogTool,
+                CatalogTool.id == CatalogToolVersion.tool_id,
             )
             .where(
-                CatalogToolVersion.tool_id.in_(tool_ids),
+                CatalogTool.id.in_(tool_ids),
+                CatalogTool.default_version_id == CatalogToolVersion.id,
                 CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
             )
-            .order_by(CatalogToolVersion.create_time.desc())
         )
     ).all()
-    result: dict[str, str] = {}
-    for tool_id, version in rows:
-        if tool_id not in result:
-            result[tool_id] = version
-    return result
+    return {tool_id: version for tool_id, version in rows}

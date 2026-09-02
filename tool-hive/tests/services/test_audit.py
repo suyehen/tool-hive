@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from toolhive.config import AdminSecuritySettings
-from toolhive.core.enums import AccountStatus, CallerSystemStatus
+from toolhive.core.enums import (
+    AccountStatus,
+    CallerSystemStatus,
+    IPRuleStatus,
+    PublicKeyStatus,
+)
 from toolhive.core.exceptions import ValidationError
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.management_audit_log import ManagementAuditLog
@@ -31,6 +37,20 @@ def _account(status: AccountStatus = AccountStatus.ENABLED) -> MagicMock:
     account.auth_state.security_version = 0
     account.auth_state.login_failures = 0
     return account
+
+
+def _active_key() -> MagicMock:
+    key = MagicMock()
+    key.status = PublicKeyStatus.ACTIVE
+    key.effective_from = datetime.now(UTC) - timedelta(hours=1)
+    key.effective_to = None
+    return key
+
+
+def _active_rule() -> MagicMock:
+    rule = MagicMock()
+    rule.status = IPRuleStatus.ACTIVE
+    return rule
 
 
 def _execute_result(items: list) -> MagicMock:
@@ -240,8 +260,8 @@ async def test_caller_system_enable_records_audit() -> None:
     db.scalar = AsyncMock(side_effect=[system, system, system, policy])
     db.execute = AsyncMock(
         side_effect=[
-            _execute_result([MagicMock()]),
-            _execute_result([MagicMock()]),
+            _execute_result([_active_key()]),
+            _execute_result([_active_rule()]),
         ],
     )
     svc = CallerSystemService(db)

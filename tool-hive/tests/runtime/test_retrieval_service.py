@@ -70,9 +70,10 @@ async def test_discover_vector_success() -> None:
                 )
             )
         )
-        items, degraded = await svc.discover("sys_1", "计算", limit=20)
+        items, degraded, coverage = await svc.discover("sys_1", "计算", limit=20)
     assert not degraded
     assert items[0]["tool_code"] == "math.basic.calculator"
+    assert coverage == 1.0
 
 
 async def test_discover_falls_back_to_keyword() -> None:
@@ -90,6 +91,9 @@ async def test_discover_falls_back_to_keyword() -> None:
             "toolhive.runtime.retrieval.service.KeywordRetrieval"
         ) as keyword_cls,
         patch(
+            "toolhive.runtime.retrieval.service.CallControlService"
+        ) as control_cls,
+        patch(
             "toolhive.runtime.retrieval.service.fetch_default_versions",
             new=AsyncMock(return_value={"tool-1": "1.0.0"}),
         ),
@@ -100,16 +104,18 @@ async def test_discover_falls_back_to_keyword() -> None:
         )
         index_cls.return_value.query = AsyncMock()
         keyword_cls.return_value.search = AsyncMock(return_value=[_tool()])
-        items, degraded = await svc.discover("sys_1", "计算", limit=20)
+        control_cls.return_value.list_discoverable_tools = AsyncMock(
+            return_value=[_tool()]
+        )
+        items, degraded, coverage = await svc.discover("sys_1", "计算", limit=20)
     assert degraded is True
     assert len(items) == 1
+    assert coverage == 1.0
 
 
-async def test_sync_tool_upserts_when_published() -> None:
-    """启用+可发现+已发布工具 upsert 索引。"""
+async def test_discover_falls_back_on_unexpected_vector_error() -> None:
+    """向量链路非特定异常同样降级关键词，不向调用方暴露内部错误。"""
     db = AsyncMock()
-    db.get = AsyncMock(return_value=_tool())
-    db.scalar = AsyncMock(return_value="1.0.0")
     svc = RetrievalService(db)
     with (
         patch(
@@ -118,6 +124,48 @@ async def test_sync_tool_upserts_when_published() -> None:
         patch(
             "toolhive.runtime.retrieval.service.EmbeddedChromaVectorIndex"
         ) as index_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.KeywordRetrieval"
+        ) as keyword_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.CallControlService"
+        ) as control_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.fetch_default_versions",
+            new=AsyncMock(return_value={"tool-1": "1.0.0"}),
+        ),
+    ):
+        embed_cls.return_value.is_available.return_value = True
+        embed_cls.return_value.embed_one = AsyncMock(
+            side_effect=ValueError("unexpected")
+        )
+        index_cls.return_value.query = AsyncMock()
+        keyword_cls.return_value.search = AsyncMock(return_value=[_tool()])
+        control_cls.return_value.list_discoverable_tools = AsyncMock(
+            return_value=[_tool()]
+        )
+        items, degraded, coverage = await svc.discover("sys_1", "计算", limit=20)
+    assert degraded is True
+    assert len(items) == 1
+    assert coverage == 1.0
+
+
+async def test_sync_tool_upserts_when_published() -> None:
+    """启用+可发现+已发布工具 upsert 索引。"""
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=_tool())
+    svc = RetrievalService(db)
+    with (
+        patch(
+            "toolhive.runtime.retrieval.service.EmbeddingService"
+        ) as embed_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.EmbeddedChromaVectorIndex"
+        ) as index_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.fetch_default_versions",
+            new=AsyncMock(return_value={"tool-1": "1.0.0"}),
+        ),
     ):
         embed_cls.return_value.embed_one = AsyncMock(return_value=[0.1])
         index_cls.return_value.upsert = AsyncMock()
@@ -130,9 +178,15 @@ async def test_sync_tool_deletes_when_disabled() -> None:
     db = AsyncMock()
     db.get = AsyncMock(return_value=_tool(status=CatalogObjectStatus.DISABLED))
     svc = RetrievalService(db)
-    with patch(
-        "toolhive.runtime.retrieval.service.EmbeddedChromaVectorIndex"
-    ) as index_cls:
+    with (
+        patch(
+            "toolhive.runtime.retrieval.service.EmbeddedChromaVectorIndex"
+        ) as index_cls,
+        patch(
+            "toolhive.runtime.retrieval.service.fetch_default_versions",
+            new=AsyncMock(return_value={}),
+        ),
+    ):
         index_cls.return_value.delete = AsyncMock()
         await svc.sync_tool("tool-1")
     index_cls.return_value.delete.assert_awaited_once()

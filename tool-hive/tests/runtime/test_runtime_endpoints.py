@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from toolhive.api.runtime.v1.confirmations import (
     request_confirmation,
@@ -151,6 +152,49 @@ async def test_resolve_tool_denied_raises() -> None:
     assert exc_info.value.code == RUNTIME_TOOL_NOT_FOUND
 
 
+async def test_runtime_request_rejects_unknown_fields() -> None:
+    """运行请求出现未知字段时直接拒绝，防止绕过校验。"""
+    with pytest.raises(ValidationError):
+        ResolveRequest.model_validate(
+            {"tool_code": "math.basic.calculator", "evil": "x"},
+        )
+    with pytest.raises(ValidationError):
+        ExecuteRequest.model_validate(
+            {"arguments": {}, "evil": "x"},
+        )
+
+
+async def test_resolve_requires_exactly_one_identifier() -> None:
+    """Resolve 必须提供 tool_code 或 tool_id 中的一个。"""
+    with pytest.raises(ValidationError):
+        ResolveRequest.model_validate({})
+    with pytest.raises(ValidationError):
+        ResolveRequest.model_validate(
+            {
+                "tool_code": "math.basic.calculator",
+                "tool_id": "tool-1",
+            }
+        )
+
+
+async def test_resolve_endpoint_accepts_tool_id(_patch_trace) -> None:
+    """Resolve 端点按 tool_id 查询并透传版本参数。"""
+    with patch(
+        "toolhive.api.runtime.v1.tools.CallControlService"
+    ) as control_cls:
+        control_cls.return_value.resolve_tool = AsyncMock(
+            return_value=_decision()
+        )
+        await resolve_tool(
+            _request(),
+            ResolveRequest(tool_id="tool-1", version="2.0.0"),
+            db=AsyncMock(),
+        )
+    control_cls.return_value.resolve_tool.assert_awaited_once_with(
+        "sys_1", None, tool_id="tool-1", version="2.0.0",
+    )
+
+
 async def test_discover_returns_controlled_candidates(_patch_trace) -> None:
     """discover 返回受控候选与降级标记。"""
     with patch("toolhive.api.runtime.v1.tools.RetrievalService") as retrieval_cls:
@@ -166,6 +210,7 @@ async def test_discover_returns_controlled_candidates(_patch_trace) -> None:
                     }
                 ],
                 True,
+                1.0,
             )
         )
         response = await discover_tools(
@@ -175,6 +220,7 @@ async def test_discover_returns_controlled_candidates(_patch_trace) -> None:
     assert response.items[0].tool_code == "math.basic.calculator"
     assert response.items[0].version == "1.0.0"
     assert response.degraded is True
+    assert response.coverage == 1.0
     retrieval_calls = [
         call.kwargs
         for call in _patch_trace.call_args_list

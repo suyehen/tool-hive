@@ -137,7 +137,18 @@ async def enable_provider(
     db: AsyncSession = Depends(get_db),
     _account=Depends(require_operation(OperationCode.PROVIDER_MANAGE)),
 ):
-    """启用 Provider。"""
+    """启用 Provider：启用前必须通过域名解析与 HTTPS 可达性健康检查。"""
+    svc = CatalogProviderService(db)
+    try:
+        provider = await svc.get_provider(provider_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    health = await check_provider_health(provider)
+    if not health.get("healthy"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider 健康检查未通过，拒绝启用: {health.get('detail')}",
+        )
     return await _set_status(provider_id, "enabled", db)
 
 

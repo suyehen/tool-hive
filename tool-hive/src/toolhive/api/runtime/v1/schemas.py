@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from toolhive.core.time_utils import UTCDateTime
 
 
 class ToolContextRequest(BaseModel):
     """请求体顶层业务身份上下文（一期声明制）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     user_id: str | None = Field(None, max_length=128)
     tenant_id: str | None = Field(None, max_length=128)
@@ -20,9 +22,19 @@ class ToolContextRequest(BaseModel):
 
 
 class ResolveRequest(BaseModel):
-    tool_code: str = Field(min_length=1, max_length=256)
+    model_config = ConfigDict(extra="forbid")
+
+    tool_code: str | None = Field(None, min_length=1, max_length=256)
+    tool_id: str | None = Field(None, min_length=1, max_length=64)
     version: str | None = Field(None, max_length=32)
     context: ToolContextRequest | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_identifier(self) -> ResolveRequest:
+        """工具完整编码与工具 ID 必须且只能提供一个。"""
+        if bool(self.tool_code) == bool(self.tool_id):
+            raise ValueError("tool_code 与 tool_id 必须且只能提供一个")
+        return self
 
 
 class ResolveResponse(BaseModel):
@@ -40,6 +52,8 @@ class ResolveResponse(BaseModel):
 
 
 class DiscoverRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=1, max_length=512)
     limit: int = Field(default=20, ge=1, le=50)
     context: ToolContextRequest | None = None
@@ -58,10 +72,13 @@ class DiscoverResponse(BaseModel):
     total: int
     limit: int
     degraded: bool = True
+    coverage: float = Field(default=1.0, ge=0.0, le=1.0)
     trace_id: str
 
 
 class ExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     arguments: dict[str, Any] = Field(default_factory=dict)
     version: str | None = Field(None, max_length=32)
     idempotency_key: str | None = Field(None, max_length=128)
@@ -78,6 +95,8 @@ class ExecuteResponse(BaseModel):
 
 
 class ConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tool_code: str = Field(min_length=1, max_length=256)
     version: str | None = Field(None, max_length=32)
 
@@ -91,6 +110,8 @@ class ConfirmResponse(BaseModel):
 
 
 class VerifyConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     confirmation_id: str = Field(min_length=1, max_length=64)
     token: str = Field(min_length=1, max_length=256)
 

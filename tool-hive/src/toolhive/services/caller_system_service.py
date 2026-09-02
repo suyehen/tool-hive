@@ -908,15 +908,23 @@ class CallerSystemService:
         if not system.contact:
             conditions.append("缺少联系方式")
 
-        # 检查公钥
+        # 检查公钥：仅启用状态且处于有效期内的公钥可作为运行认证凭据
         keys = await self.list_public_keys(system_id)
-        if not keys:
-            conditions.append("缺少认证凭据（公钥）")
+        now = datetime.now(UTC)
+        active_keys = [
+            key
+            for key in keys
+            if key.status == PublicKeyStatus.ACTIVE
+            and key.effective_from <= now
+            and (key.effective_to is None or key.effective_to > now)
+        ]
+        if not active_keys:
+            conditions.append("缺少启用状态且在有效期内的公钥")
 
-        # 检查 IP 规则
+        # 检查 IP 规则：仅启用状态的规则参与运行时来源校验
         rules = await self.list_ip_rules(system_id)
-        if not rules:
-            conditions.append("缺少来源 IP 规则")
+        if not [rule for rule in rules if rule.status == IPRuleStatus.ACTIVE]:
+            conditions.append("缺少启用状态的来源 IP 规则")
 
         # 检查运行策略（API 范围）
         policy = await self.get_runtime_policy(system_id)

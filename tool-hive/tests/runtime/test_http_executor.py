@@ -141,6 +141,40 @@ async def test_http_response_size_limited() -> None:
             await executor.execute(_binding(), _provider(), {})
 
 
+async def test_http_request_body_size_limited() -> None:
+    """出站请求体超过大小上限时拒绝且不发起请求。"""
+    binding = _binding(method="POST")
+    binding.parameter_mapping = {"body": {"payload": "$.payload"}}
+    executor = HttpExecutor(
+        _redis(), _security(provider_max_request_bytes=4),
+    )
+    executor._send = AsyncMock()
+    with _bypass_dns():
+        with pytest.raises(RuntimeApiError) as exc_info:
+            await executor.execute(
+                binding, _provider(), {"payload": "x" * 100},
+            )
+    assert exc_info.value.code == RUNTIME_PROVIDER_ERROR
+    executor._send.assert_not_awaited()
+
+
+async def test_http_request_header_count_limited() -> None:
+    """出站请求 Header 数量超过上限时拒绝。"""
+    binding = _binding()
+    binding.allowed_headers = ["X-Auth"]
+    binding.parameter_mapping = {"header": {"X-Auth": "$.token"}}
+    executor = HttpExecutor(
+        _redis(), _security(provider_max_request_header_count=0),
+    )
+    executor._send = AsyncMock()
+    with _bypass_dns():
+        with pytest.raises(RuntimeApiError):
+            await executor.execute(
+                binding, _provider(), {"token": "abc"},
+            )
+    executor._send.assert_not_awaited()
+
+
 async def test_read_retry_on_transient_timeout() -> None:
     """读操作瞬时超时按 retry_max 重试后成功。"""
     executor = HttpExecutor(_redis(), _security())

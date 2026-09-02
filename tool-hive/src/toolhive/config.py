@@ -56,9 +56,12 @@ class RuntimeSecuritySettings(BaseModel):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_window_seconds: int = 60
     circuit_breaker_open_seconds: int = 30
+    provider_max_request_bytes: int = 1048576
+    provider_max_request_header_count: int = 50
     provider_max_response_bytes: int = 1048576
     provider_max_header_count: int = 50
     provider_connect_timeout_seconds: int = 5
+    provider_read_timeout_seconds: int = 10
 
 
 class RetrievalSettings(BaseModel):
@@ -244,9 +247,12 @@ class Settings(BaseSettings):
     circuit_breaker_failure_threshold: int = 5
     circuit_breaker_window_seconds: int = 60
     circuit_breaker_open_seconds: int = 30
+    provider_max_request_bytes: int = 1048576
+    provider_max_request_header_count: int = 50
     provider_max_response_bytes: int = 1048576
     provider_max_header_count: int = 50
     provider_connect_timeout_seconds: int = 5
+    provider_read_timeout_seconds: int = 10
 
     # ── 密钥（生产环境务必通过环境变量覆盖） ──
     csrf_secret: str = ""
@@ -307,9 +313,14 @@ class Settings(BaseSettings):
             circuit_breaker_failure_threshold=self.circuit_breaker_failure_threshold,
             circuit_breaker_window_seconds=self.circuit_breaker_window_seconds,
             circuit_breaker_open_seconds=self.circuit_breaker_open_seconds,
+            provider_max_request_bytes=self.provider_max_request_bytes,
+            provider_max_request_header_count=(
+                self.provider_max_request_header_count
+            ),
             provider_max_response_bytes=self.provider_max_response_bytes,
             provider_max_header_count=self.provider_max_header_count,
             provider_connect_timeout_seconds=self.provider_connect_timeout_seconds,
+            provider_read_timeout_seconds=self.provider_read_timeout_seconds,
         )
 
     @computed_field
@@ -500,13 +511,18 @@ def validate_production_settings(settings: Settings) -> None:
         errors.append("一期 chroma.mode 必须为 embedded")
     # ── Provider 出站限制 ──
     if (
-        settings.provider_max_response_bytes <= 0
+        settings.provider_max_request_bytes <= 0
+        or settings.provider_max_request_header_count <= 0
+        or settings.provider_max_response_bytes <= 0
         or settings.provider_max_header_count <= 0
         or settings.provider_connect_timeout_seconds <= 0
+        or settings.provider_read_timeout_seconds <= 0
     ):
         errors.append(
+            "provider_max_request_bytes / provider_max_request_header_count / "
             "provider_max_response_bytes / provider_max_header_count / "
-            "provider_connect_timeout_seconds 必须大于 0"
+            "provider_connect_timeout_seconds / "
+            "provider_read_timeout_seconds 必须大于 0"
         )
     if errors:
         raise ValueError(

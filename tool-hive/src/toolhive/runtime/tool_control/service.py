@@ -56,42 +56,74 @@ class CallControlService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def resolve_tool(self, system_id: str, full_code: str) -> ControlDecision:
-        """精确解析工具：存在性、可发现性、范围、版本与确认需求。"""
-        base = await self._base_resolve_tool(system_id, full_code)
+    async def resolve_tool(
+        self,
+        system_id: str,
+        full_code: str | None = None,
+        *,
+        tool_id: str | None = None,
+        version: str | None = None,
+    ) -> ControlDecision:
+        """精确解析工具：按完整标识或工具 ID 查询，支持显式版本。"""
+        base = await self._base_resolve_tool(
+            system_id, full_code, tool_id=tool_id,
+        )
         if not base.allowed:
             return base
-        assert base.tool is not None and base.version is not None
+        assert base.tool is not None
+        tool = base.tool
+        selected = await self._select_published_version(tool, version)
+        if selected is None:
+            message = (
+                "工具未配置默认已发布版本，请显式指定版本"
+                if version is None
+                else f"版本 {version} 未发布或不存在"
+            )
+            return self._denied(
+                RUNTIME_TOOL_NOT_AVAILABLE, message,
+                discoverable=True, tool=tool,
+            )
         decision = ControlDecision(
             allowed=True,
             discoverable=True,
-            tool=base.tool,
-            version=base.version,
+            tool=tool,
+            version=selected,
         )
         # 解析边界同步完成执行绑定与确认需求计算（与 Execute 共用同一来源）
-        if base.tool.executable:
-            control = await self._binding_control(base.tool, base.version)
+        if tool.executable:
+            control = await self._binding_control(tool, selected)
             if control is None:
                 return self._denied(
                     RUNTIME_TOOL_NOT_AVAILABLE,
                     "工具执行通道不可用：Provider 已停用或不存在",
-                    discoverable=True, tool=base.tool,
+                    discoverable=True, tool=tool,
                 )
             decision.binding, decision.confirmation_required = control
         return decision
 
     async def _base_resolve_tool(
-        self, system_id: str, full_code: str,
+        self,
+        system_id: str,
+        full_code: str | None = None,
+        *,
+        tool_id: str | None = None,
     ) -> ControlDecision:
-        """解析工具基础可用性：状态、范围与已发布版本（不含执行绑定校验）。"""
-        tool = await self.db.scalar(
-            select(CatalogTool).where(
-                (CatalogTool.namespace + "." + CatalogTool.tool_code) == full_code
+        """解析工具基础可用性：存在性、状态与范围（不含版本选择）。"""
+        if tool_id is not None:
+            tool = await self.db.get(CatalogTool, tool_id)
+            label = tool_id
+        elif full_code:
+            tool = await self.db.scalar(
+                select(CatalogTool).where(
+                    (CatalogTool.namespace + "." + CatalogTool.tool_code) == full_code
+                )
             )
-        )
+            label = full_code
+        else:
+            return self._denied(RUNTIME_TOOL_NOT_FOUND, "工具不存在")
         if tool is None:
             return self._denied(
-                RUNTIME_TOOL_NOT_FOUND, f"工具不存在: {full_code}",
+                RUNTIME_TOOL_NOT_FOUND, f"工具不存在: {label}",
             )
         if tool.status != CatalogObjectStatus.ENABLED or not tool.discoverable:
             return self._denied(
@@ -100,19 +132,13 @@ class CallControlService:
         if not await self._tool_in_scope(system_id, tool):
             return self._denied(
                 RUNTIME_SCOPE_NOT_ALLOWED,
-                f"调用系统无权访问工具: {full_code}",
+                f"调用系统无权访问工具: {tool.full_code}",
                 tool=tool,
-            )
-        default_version = await self._default_published_version(tool)
-        if default_version is None:
-            return self._denied(
-                RUNTIME_TOOL_NOT_AVAILABLE, "工具暂无已发布版本", tool=tool,
             )
         return ControlDecision(
             allowed=True,
             discoverable=True,
             tool=tool,
-            version=default_version,
         )
 
     async def evaluate_executable(
@@ -133,45 +159,26 @@ class CallControlService:
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可执行",
                 discoverable=True, tool=tool,
             )
-        if version is None:
-            # 未传版本时与 Resolve 使用完全相同的版本决策
-            selected = base.version
-            if selected is None:
-                return self._denied(
-                    RUNTIME_TOOL_NOT_AVAILABLE,
-                    "工具暂无已发布版本",
-                    discoverable=True, tool=tool,
-                )
-            control = await self._binding_control(tool, selected)
-            if control is None:
-                return self._denied(
-                    RUNTIME_TOOL_NOT_AVAILABLE,
-                    "工具执行通道不可用：Provider 已停用或不存在",
-                    discoverable=True, tool=tool,
-                )
-            binding, confirmation_required = control
-        else:
-            selected = await self.db.scalar(
-                select(CatalogToolVersion).where(
-                    CatalogToolVersion.tool_id == tool.id,
-                    CatalogToolVersion.version == version,
-                    CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
-                )
+        # 版本选择与 Resolve 共用同一决策：未传版本只认默认版本
+        selected = await self._select_published_version(tool, version)
+        if selected is None:
+            message = (
+                "工具未配置默认已发布版本，请显式指定版本"
+                if version is None
+                else f"版本 {version} 未发布或不存在"
             )
-            if selected is None:
-                return self._denied(
-                    RUNTIME_TOOL_NOT_AVAILABLE,
-                    f"版本 {version} 未发布或不存在",
-                    discoverable=True, tool=tool,
-                )
-            control = await self._binding_control(tool, selected)
-            if control is None:
-                return self._denied(
-                    RUNTIME_TOOL_NOT_AVAILABLE,
-                    "工具执行通道不可用：Provider 已停用或不存在",
-                    discoverable=True, tool=tool,
-                )
-            binding, confirmation_required = control
+            return self._denied(
+                RUNTIME_TOOL_NOT_AVAILABLE, message,
+                discoverable=True, tool=tool,
+            )
+        control = await self._binding_control(tool, selected)
+        if control is None:
+            return self._denied(
+                RUNTIME_TOOL_NOT_AVAILABLE,
+                "工具执行通道不可用：Provider 已停用或不存在",
+                discoverable=True, tool=tool,
+            )
+        binding, confirmation_required = control
         return ControlDecision(
             allowed=True,
             discoverable=True,
@@ -254,12 +261,19 @@ class CallControlService:
                 )
             ).all()
             allowed_ids.update(row[0] for row in rows)
+        # 仅默认版本（PUBLISHED）参与 Discover 默认可见性
         published_ids: set[str] = set()
         if allowed_ids:
             version_rows = (
                 await self.db.execute(
-                    select(CatalogToolVersion.tool_id).where(
-                        CatalogToolVersion.tool_id.in_(tuple(allowed_ids)),
+                    select(CatalogToolVersion.tool_id)
+                    .join(
+                        CatalogTool,
+                        CatalogTool.id == CatalogToolVersion.tool_id,
+                    )
+                    .where(
+                        CatalogTool.id.in_(tuple(allowed_ids)),
+                        CatalogTool.default_version_id == CatalogToolVersion.id,
                         CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
                     )
                 )
@@ -309,26 +323,25 @@ class CallControlService:
                     return True
         return False
 
-    async def _default_published_version(
+    async def _select_published_version(
         self, tool: CatalogTool,
+        version: str | None,
     ) -> CatalogToolVersion | None:
-        """返回工具默认版本（必须已发布），未配置时回退最新已发布版本。"""
-        if tool.default_version_id:
-            version = await self.db.get(CatalogToolVersion, tool.default_version_id)
-            if (
-                version is not None
-                and version.status == ToolVersionStatus.PUBLISHED
-            ):
-                return version
-        return await self.db.scalar(
-            select(CatalogToolVersion)
-            .where(
-                CatalogToolVersion.tool_id == tool.id,
-                CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
+        """选择已发布版本：显式版本精确匹配；缺省时只认默认版本，不回退。"""
+        if version is not None:
+            return await self.db.scalar(
+                select(CatalogToolVersion).where(
+                    CatalogToolVersion.tool_id == tool.id,
+                    CatalogToolVersion.version == version,
+                    CatalogToolVersion.status == ToolVersionStatus.PUBLISHED,
+                )
             )
-            .order_by(CatalogToolVersion.create_time.desc())
-            .limit(1)
-        )
+        if not tool.default_version_id:
+            return None
+        row = await self.db.get(CatalogToolVersion, tool.default_version_id)
+        if row is not None and row.status == ToolVersionStatus.PUBLISHED:
+            return row
+        return None
 
     async def _get_binding(
         self, version_id: str,

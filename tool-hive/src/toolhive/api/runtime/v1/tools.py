@@ -88,8 +88,12 @@ async def resolve_tool(
             context=context,
             source_ip=identity.source_ip,
         )
+    tool_ref = body.tool_code or body.tool_id or ""
     decision = await CallControlService(db).resolve_tool(
-        identity.system.system_id, body.tool_code,
+        identity.system.system_id,
+        body.tool_code,
+        tool_id=body.tool_id,
+        version=body.version,
     )
     await TraceService.log_event(
         trace_id=identity.trace_id,
@@ -97,7 +101,7 @@ async def resolve_tool(
         action="runtime.control",
         status="success" if decision.allowed else "failure",
         error_code=None if decision.allowed else decision.error_code,
-        summary={"tool_code": body.tool_code, "decision": "allow" if decision.allowed else "deny"},
+        summary={"tool_ref": tool_ref, "decision": "allow" if decision.allowed else "deny"},
         source_ip=identity.source_ip,
     )
     if not decision.allowed:
@@ -135,7 +139,7 @@ async def discover_tools(
             context=context,
             source_ip=identity.source_ip,
         )
-    items, degraded = await RetrievalService(db).discover(
+    items, degraded, coverage = await RetrievalService(db).discover(
         identity.system.system_id, body.query, limit=body.limit,
     )
     await TraceService.log_event(
@@ -157,6 +161,7 @@ async def discover_tools(
         total=len(items),
         limit=body.limit,
         degraded=degraded,
+        coverage=coverage,
         trace_id=identity.trace_id,
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from toolhive.api.deps import get_runtime_security
@@ -12,6 +13,7 @@ from toolhive.api.runtime.v1.confirmations import router as confirmations_router
 from toolhive.api.runtime.v1.tools import router as tools_router
 from toolhive.runtime.errors import (
     RUNTIME_INTERNAL_ERROR,
+    RUNTIME_PARAMETER_INVALID,
     RuntimeApiError,
 )
 from toolhive.runtime.middleware import RuntimeSecurityMiddleware
@@ -37,6 +39,20 @@ async def _runtime_error_handler(request: Request, exc: RuntimeApiError):
     return JSONResponse(
         status_code=exc.http_status,
         content={"code": exc.code, "message": exc.message, "trace_id": trace_id},
+    )
+
+
+@runtime_app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """请求体未知/非法字段 → 统一 RUNTIME_PARAMETER_INVALID 错误体。"""
+    trace_id = getattr(request.state, "trace_id", None) or new_trace_id()
+    return JSONResponse(
+        status_code=400,
+        content={
+            "code": RUNTIME_PARAMETER_INVALID,
+            "message": "请求参数无效",
+            "trace_id": trace_id,
+        },
     )
 
 

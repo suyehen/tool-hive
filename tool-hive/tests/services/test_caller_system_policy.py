@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from toolhive.core.enums import CallerSystemStatus
+from toolhive.core.enums import (
+    CallerSystemStatus,
+    IPRuleStatus,
+    PublicKeyStatus,
+)
 from toolhive.core.exceptions import ConflictError, ValidationError
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_tool_scope import CallerToolScope
@@ -40,6 +45,22 @@ def _execute_result(items: list) -> MagicMock:
     result = MagicMock()
     result.scalars.return_value.all.return_value = items
     return result
+
+
+def _active_key() -> MagicMock:
+    """构造 ACTIVE 且在有效期内的公钥 mock。"""
+    key = MagicMock()
+    key.status = PublicKeyStatus.ACTIVE
+    key.effective_from = datetime.now(UTC) - timedelta(hours=1)
+    key.effective_to = None
+    return key
+
+
+def _active_rule() -> MagicMock:
+    """构造 ACTIVE 来源 IP 规则 mock。"""
+    rule = MagicMock()
+    rule.status = IPRuleStatus.ACTIVE
+    return rule
 
 
 async def test_save_runtime_policy_creates_when_missing() -> None:
@@ -270,8 +291,8 @@ async def test_emergency_disable_rejects_non_enabled() -> None:
 async def test_enable_rejects_without_runtime_policy() -> None:
     """启用校验增强：缺少运行策略（API 范围）时拒绝启用。"""
     system = _system()
-    key = MagicMock()
-    rule = MagicMock()
+    key = _active_key()
+    rule = _active_rule()
     db = AsyncMock()
     # get_by_system_id ×3（enable、_check、get_runtime_policy）+ policy 查询 None
     db.scalar = AsyncMock(side_effect=[system, system, system, None])
@@ -288,8 +309,8 @@ async def test_enable_rejects_without_runtime_policy() -> None:
 async def test_enable_succeeds_with_runtime_policy() -> None:
     """运行策略已配置且其他条件满足时允许启用。"""
     system = _system()
-    key = MagicMock()
-    rule = MagicMock()
+    key = _active_key()
+    rule = _active_rule()
     policy = CallerRuntimePolicy(
         system_id="sys_1",
         allowed_api_patterns=json.dumps(["/api/runtime/v1/tools/execute"]),
@@ -314,8 +335,8 @@ async def test_enable_succeeds_with_runtime_policy() -> None:
 async def test_revive_rejects_without_runtime_policy() -> None:
     """恢复启用同样校验前置条件：缺少运行策略时拒绝。"""
     system = _system(status=CallerSystemStatus.DISABLED)
-    key = MagicMock()
-    rule = MagicMock()
+    key = _active_key()
+    rule = _active_rule()
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[system, system, system, None])
     db.execute = AsyncMock(
@@ -331,8 +352,8 @@ async def test_revive_rejects_without_runtime_policy() -> None:
 async def test_revive_succeeds_with_conditions() -> None:
     """前置条件满足时允许恢复启用。"""
     system = _system(status=CallerSystemStatus.DISABLED)
-    key = MagicMock()
-    rule = MagicMock()
+    key = _active_key()
+    rule = _active_rule()
     policy = CallerRuntimePolicy(
         system_id="sys_1",
         allowed_api_patterns=json.dumps(["/api/runtime/v1/tools/execute"]),
@@ -359,8 +380,8 @@ async def test_revive_keeps_emergency_disabled_flag() -> None:
     system = _system(status=CallerSystemStatus.DISABLED)
     system.emergency_disabled = True
     system.emergency_disabled_reason = "安全事件"
-    key = MagicMock()
-    rule = MagicMock()
+    key = _active_key()
+    rule = _active_rule()
     policy = CallerRuntimePolicy(
         system_id="sys_1",
         allowed_api_patterns=json.dumps(["/api/runtime/v1/tools/execute"]),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -47,6 +48,7 @@ class HttpExecutor(ProviderExecutor):
         """执行受控出站请求并返回标准化 JSON 结果。"""
         await self._check_circuit(binding.provider_id)
         request = build_outbound_request(provider, binding, arguments)
+        self._validate_outbound_request(request)
         # SSRF：DNS 全量解析后校验全部地址（任一不合格即整请求拒绝）
         addresses = resolve_host(request.host)
         validate_resolved_addresses(
@@ -94,7 +96,11 @@ class HttpExecutor(ProviderExecutor):
         """发起 HTTPS 请求（证书校验、不跟随重定向、超时限制）。"""
         total = request.timeout_seconds
         connect_timeout = min(self._security.provider_connect_timeout_seconds, total)
-        timeout = httpx.Timeout(total, connect=connect_timeout)
+        timeout = httpx.Timeout(
+            total,
+            connect=connect_timeout,
+            read=self._security.provider_read_timeout_seconds,
+        )
         try:
             async with httpx.AsyncClient(
                 timeout=timeout, verify=True, follow_redirects=False,
@@ -116,6 +122,26 @@ class HttpExecutor(ProviderExecutor):
             raise RuntimeApiError(
                 RUNTIME_PROVIDER_ERROR, "目标请求失败", 502,
             ) from exc
+
+    def _validate_outbound_request(self, request) -> None:
+        """出站前校验请求体大小与 Header 数量，超限直接拒绝。"""
+        if len(request.headers) > self._security.provider_max_request_header_count:
+            raise RuntimeApiError(
+                RUNTIME_PROVIDER_ERROR,
+                "出站请求 Header 数量超过上限",
+                502,
+            )
+        body_bytes = json.dumps(
+            request.json_body or {},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(body_bytes) > self._security.provider_max_request_bytes:
+            raise RuntimeApiError(
+                RUNTIME_PROVIDER_ERROR,
+                "出站请求体超过大小上限",
+                502,
+            )
 
     def _normalize_response(self, response: httpx.Response) -> dict[str, Any]:
         """响应限制与 JSON 标准化。"""
