@@ -1,28 +1,27 @@
 <h1 align="center">ToolHive</h1>
 
 <p align="center">
-  <a href="tool-hive/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="README.md"><img src="https://img.shields.io/badge/docs-中文-red" alt="Chinese Docs"></a>
+  A unified, policy-governed tool platform for AI agents and service callers
 </p>
 
 <p align="center">
-  A managed tool hive for AI agents.<br/>
-  Centralize tools, enforce policy, and execute safely without exposing networks or secrets to the LLM.
+  <a href="tool-hive/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/Docs-中文-red" alt="Chinese Docs"></a>
+  <a href="docs/一期功能/验收报告/一期验收报告.md"><img src="https://img.shields.io/badge/Phase%201-Passed-brightgreen" alt="Phase 1 Acceptance"></a>
 </p>
 
----
+ToolHive is a unified tool platform for agents, business systems, and other service callers. External capabilities are registered as governed tools. Before execution, ToolHive authenticates the caller, evaluates tool-call policy, validates arguments, and executes approved requests, so an LLM/agent decides *what to call* without touching target URLs, HTTP methods, or credentials.
 
-## Overview
+> Status: Phase 1 is complete and accepted (2026-09-02). See the [Phase 1 acceptance report](docs/一期功能/验收报告/一期验收报告.md).
 
-ToolHive is a unified tool platform for agents, business systems, and other service callers. External capabilities are registered as governed tools; before execution, ToolHive authenticates callers, evaluates tool-call policy, validates arguments, and executes approved requests. Callers can only use the tools ToolHive makes discoverable in the current context, and cannot choose target URLs, HTTP methods, authentication headers, or platform-managed credentials.
+## Key Features
 
-Core capabilities:
-
-- Central tool catalog: Providers, tools, versions, and capability bundles are managed centrally; only reviewed and published definitions can be called.
-- Management and runtime separation: the management entry (`/admin/**`, `/api/admin/**`) and the runtime entry (`/api/runtime/**`) use distinct identities and authentication, isolated from each other.
-- Context-aware discovery and revalidation: execution re-checks real arguments, resource scope, and high-risk actions.
-- Controlled Provider execution: Providers call external services through approved fixed request mappings, with credential references, timeouts, error normalization, and response sanitization.
-- Traceable governance: management changes, authentication, authorization decisions, and execution retain necessary redacted trace/audit records.
+- **Central tool catalog**: providers, tools, versions, and capability packs are managed centrally; tool versions must be reviewed and published before use, and the default version is unique and strictly authoritative for default resolution.
+- **Separated admin and runtime**: the admin entry (`/admin/**`, `/api/admin/**`) and the runtime entry (`/api/runtime/v1/**`) use different identity systems and are isolated from each other.
+- **Runtime security chain**: caller-system status, IP rules, and public-key signatures (RSA-PSS-SHA256, Ed25519) are validated per request, with timestamp windows and Nonce replay protection; QPS, concurrency, daily quota, total timeout, and circuit breaking are enforced.
+- **Context-aware discovery and revalidation**: Discover/Resolve only return tools allowed in the current context; Execute revalidates real arguments, tool state, scope, and high-risk/write confirmation.
+- **Controlled Provider execution**: built-in and HTTP providers execute only reviewed fixed mappings, with SSRF/private-network protection, TLS, timeout/size/header limits, output-schema validation, and error normalization.
+- **Traceable governance**: management audit and runtime traces are linked; confirmation tokens are bound to caller, tool, and version and consumed atomically.
 
 ## Tech Stack
 
@@ -37,26 +36,15 @@ Core capabilities:
 
 ```text
 toolhive/
-├── tool-hive/    # Backend service (FastAPI app, CLI, deploy scripts)
-├── frontend/     # Admin frontend (React + Vite)
-├── deploy/       # Deployment assets (Nginx gateway sample, deployment doc)
-└── docs/         # Architecture and requirements docs
+├── tool-hive/    # Backend service (FastAPI app, CLI, tests, deployment scripts)
+├── frontend/     # Admin frontend (React + Vite, served under /admin/)
+├── deploy/       # Nginx gateway sample and deployment guide
+└── docs/         # Requirements, frozen design, development notes, acceptance reports
 ```
 
-## Requirements
+## Quick Start
 
-- Linux (production: deploy on the same host as Nginx)
-- CPython 3.11.6 (`>=3.11.6,<3.12`)
-- PostgreSQL and Redis
-- Node.js 18+ (only needed for frontend development and builds)
-
-## Deployment & Startup
-
-### 1. Local development (.env)
-
-Copy [.env.example](./tool-hive/.env.example) to `tool-hive/.env` and edit database/Redis connections (IP/port/password). `.env` supports all settings, including nested groups (`network`, `chroma`, etc.). For local development, set `TOOLHIVE_DEBUG=true` and `TOOLHIVE_NETWORK_ALLOW_LOOPBACK_DIRECT=true` (the Vite dev proxy does not send ingress headers).
-
-On first deployment, create the application user and database on the server with the PostgreSQL superuser first (template: [sql/create_database.sql](./tool-hive/sql/create_database.sql)), then run the schema steps below. Order: create database → create tables.
+Requirements: Linux (production on the same host as Nginx) · CPython 3.11.6 (`>=3.11.6,<3.12`) · PostgreSQL · Redis; Node.js 18+ for frontend development.
 
 ```bash
 cd tool-hive
@@ -64,87 +52,62 @@ cd tool-hive
 # Install dependencies (creates .venv and installs toolhive)
 bash scripts/install.sh
 
-# Prepare local config
+# Prepare local configuration (database/Redis connections)
 cp .env.example .env
 
-# Initialize the database: schema (database created by create_database.sql; connection from .env)
+# Create the database, then initialize the schema
 psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
 
-# Initialize the first super admin (only on an empty database)
+# Initialize the first super admin (empty database only)
 TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>' \
   ./.venv/bin/toolhive init-admin --account admin --real-name '<real name>'
 
-# Seed the first-batch math tools (idempotent; creates tool, version, binding, review, publish)
+# Seed the first-batch math tools (idempotent: create tool → version+binding → review → publish)
 ./.venv/bin/toolhive seed-tools
 
-# (Optional) Rebuild the Chroma retrieval index; requires TOOLHIVE_MODEL_API_KEY and
-# TOOLHIVE_EMBEDDING_MODEL (Tencent TokenHub, Phase 1 model kinfra-text-embedding-4b).
-# Without them, Discover falls back to keyword search automatically.
-./.venv/bin/toolhive rebuild-chroma
-
-# Start the service (listens on 127.0.0.1:8100, loads .env automatically)
+# Start the service (listens on 127.0.0.1:8100)
 ./.venv/bin/uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 
-# Verify
+# Basic verification
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-On Windows (PowerShell), use the equivalent commands:
+On Windows PowerShell, use `Copy-Item .env.example .env` and the `toolhive` CLI (or `python -m toolhive.cli`) with equivalent commands; run `verify.sh` under Git Bash/WSL.
 
-```powershell
-cd tool-hive
-
-# Prepare local config
-Copy-Item .env.example .env
-
-# Initialize the database schema (database created by create_database.sql; connection from .env)
-psql "postgresql://toolhive:<password>@localhost:5432/toolhive" -f sql/init.sql
-
-# Initialize the first super admin (only on an empty database; set the env var with $env: in PowerShell)
-$env:TOOLHIVE_INIT_ADMIN_PASSWORD='<strong password>'
-toolhive init-admin --account admin --real-name '<real name>'
-
-# Seed the first-batch math tools (idempotent)
-toolhive seed-tools
-
-# Start the service (activate the Python environment first, e.g. conda activate toolhive or .\.venv\Scripts\Activate.ps1)
-python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
-```
-
-> If the `toolhive` command is not installed, use `python -m toolhive.cli init-admin --account admin --real-name '<real name>'` instead. `scripts/verify.sh` is a bash script; on Windows run it with Git Bash / WSL. Settings precedence: real environment variables > external YAML > `.env` file > defaults; all fields are documented in [.env.example](./tool-hive/.env.example) and [toolhive.example.yaml](./tool-hive/toolhive.example.yaml).
-
-### 2. Frontend (development)
+## Frontend Development & Build
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev      # open http://localhost:5173/admin/
 ```
 
-The dev server runs at `http://localhost:5173` and proxies `/api` to `http://127.0.0.1:8100`.
-
-### 3. Frontend (production build)
+The dev server proxies `/api` to `http://127.0.0.1:8100`. Production build:
 
 ```bash
 cd frontend
-npm run build
+npm run build    # outputs to frontend/dist/
 ```
 
-Build output goes to `frontend/dist/`.
+In production, Nginx serves `frontend/dist` under `/admin/**`. See [deploy/README.md](deploy/README.md) and the [Nginx sample](deploy/nginx/toolhive.conf).
 
-### 4. Production deployment (YAML)
+## Documentation
 
-In production, copy [toolhive.example.yaml](./tool-hive/toolhive.example.yaml) as the configuration file and point `TOOLHIVE_CONFIG_FILE` to it (e.g., `config/production.yaml`). See [deploy/README.md](./deploy/README.md) for the full production deployment, configuration validation, and acceptance steps.
+- [Overall functionality & architecture](docs/ToolHive总体功能与架构说明.md)
+- Phase 1: [goals](docs/一期功能/一期目标.md) · [frozen design](docs/一期功能/一期下半设计冻结.md) · [development notes](docs/一期功能/一期开发完成情况.md) · [acceptance report](docs/一期功能/验收报告/一期验收报告.md)
+- Phase 2: [goals](docs/二期功能/二期目标.md)
+- Deployment: [deploy/README.md](deploy/README.md)
 
-### 5. Production gateway (Nginx)
+## Phase 1 Boundary & Phase 2 Direction
 
-In production the backend listens on loopback only and must be fronted by Nginx. See [deploy/nginx/toolhive.conf](./deploy/nginx/toolhive.conf): the management entry is exposed on public port 443, the runtime entry on internal port 8081 only, with client-supplied headers stripped and trusted ingress/client-IP headers written by Nginx.
+Confirmed Phase 1 boundaries:
+
+- No target-system credential holding; no Secret Store or `credential_ref`;
+- The first batch of tools are built-in math placeholder tools (`builtin` Provider) that validate the end-to-end chain;
+- ToolContext uses the caller-declared model; tenant/business-identity filtering belongs to Phase 2;
+- DNS resolution pinning (fixed IP + bound connection) and multi-instance shared concurrency are designed for Phase 2;
+- HTTP `response_handling` is descriptive metadata in Phase 1; rule-based response sanitization belongs to Phase 2.
 
 ## License
 
-Apache License 2.0
-
-## Phase 1 scope note (2026-08-27)
-
-- Credential references are a Phase 2 capability: Phase 1 does not hold target-system credentials and does not introduce `credential_ref` or a Secret Store.
-- The first batch of Phase 1 tools are built-in math placeholder tools (`builtin` Provider) used to validate the end-to-end chain; real external HTTP tools follow the same approved fixed-mapping contract later (see docs/功能架构梳理/一期下半设计冻结.md).
+[Apache License 2.0](tool-hive/LICENSE)
