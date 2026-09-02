@@ -26,7 +26,11 @@ _CIRCUIT_OPEN_PREFIX = "toolhive:circuit:open:"
 
 
 class RuntimeTrafficGuard:
-    """调用系统维度流量控制（一期单 Worker：并发计数在进程内）。"""
+    """调用系统维度流量控制（一期单 Worker：并发计数在进程内）。
+
+    一期仅支持单实例部署；多实例扩容前必须先迁移到 Redis 原子计数，
+    否则各实例并发上限会按实例数放大。
+    """
 
     def __init__(self) -> None:
         self._active: dict[str, int] = {}
@@ -40,7 +44,9 @@ class RuntimeTrafficGuard:
         security: RuntimeSecuritySettings,
     ) -> None:
         """QPS / 日配额 / 熔断 / 并发检查，任一超限抛出 429/503。"""
-        await self._check_circuit(system_id, redis)
+        # 熔断开关关闭时跳过历史熔断状态检查（仅影响后续记录与否由中间件决定）
+        if policy.circuit_breaker_enabled:
+            await self._check_circuit(system_id, redis)
         await self._check_qps(system_id, policy.qps_limit, redis)
         await self._check_quota(system_id, policy.quota_per_day, redis)
         await self._acquire(system_id, policy.concurrency_limit)

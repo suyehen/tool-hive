@@ -18,6 +18,7 @@ from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
 from toolhive.models.catalog_capability_pack_tool import CatalogCapabilityPackTool
 from toolhive.models.catalog_execution_binding import CatalogExecutionBinding
+from toolhive.models.catalog_provider import CatalogProvider
 from toolhive.models.catalog_tool import CatalogTool
 from toolhive.models.catalog_tool_version import CatalogToolVersion
 from toolhive.runtime.errors import (
@@ -27,6 +28,11 @@ from toolhive.runtime.errors import (
 )
 
 _WRITE_METHODS = ("POST", "PUT", "DELETE")
+
+
+def catalog_object_runnable(status: str | None) -> bool:
+    """Catalog 对象是否可运行：仅 ENABLED 状态参与运行时授权与执行。"""
+    return status == CatalogObjectStatus.ENABLED
 
 
 @dataclass
@@ -51,7 +57,33 @@ class CallControlService:
         self.db = db
 
     async def resolve_tool(self, system_id: str, full_code: str) -> ControlDecision:
-        """精确解析工具：存在性、可发现性、调用系统范围与发布状态。"""
+        """精确解析工具：存在性、可发现性、范围、版本与确认需求。"""
+        base = await self._base_resolve_tool(system_id, full_code)
+        if not base.allowed:
+            return base
+        assert base.tool is not None and base.version is not None
+        decision = ControlDecision(
+            allowed=True,
+            discoverable=True,
+            tool=base.tool,
+            version=base.version,
+        )
+        # 解析边界同步完成执行绑定与确认需求计算（与 Execute 共用同一来源）
+        if base.tool.executable:
+            control = await self._binding_control(base.tool, base.version)
+            if control is None:
+                return self._denied(
+                    RUNTIME_TOOL_NOT_AVAILABLE,
+                    "工具执行通道不可用：Provider 已停用或不存在",
+                    discoverable=True, tool=base.tool,
+                )
+            decision.binding, decision.confirmation_required = control
+        return decision
+
+    async def _base_resolve_tool(
+        self, system_id: str, full_code: str,
+    ) -> ControlDecision:
+        """解析工具基础可用性：状态、范围与已发布版本（不含执行绑定校验）。"""
         tool = await self.db.scalar(
             select(CatalogTool).where(
                 (CatalogTool.namespace + "." + CatalogTool.tool_code) == full_code
@@ -91,7 +123,7 @@ class CallControlService:
         version: str | None = None,
     ) -> ControlDecision:
         """执行决策：在可发现基础上校验可执行标志、版本与确认条件。"""
-        base = await self.resolve_tool(system_id, full_code)
+        base = await self._base_resolve_tool(system_id, full_code)
         if not base.allowed:
             return base
         tool = base.tool
@@ -101,7 +133,24 @@ class CallControlService:
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可执行",
                 discoverable=True, tool=tool,
             )
-        if version is not None:
+        if version is None:
+            # 未传版本时与 Resolve 使用完全相同的版本决策
+            selected = base.version
+            if selected is None:
+                return self._denied(
+                    RUNTIME_TOOL_NOT_AVAILABLE,
+                    "工具暂无已发布版本",
+                    discoverable=True, tool=tool,
+                )
+            control = await self._binding_control(tool, selected)
+            if control is None:
+                return self._denied(
+                    RUNTIME_TOOL_NOT_AVAILABLE,
+                    "工具执行通道不可用：Provider 已停用或不存在",
+                    discoverable=True, tool=tool,
+                )
+            binding, confirmation_required = control
+        else:
             selected = await self.db.scalar(
                 select(CatalogToolVersion).where(
                     CatalogToolVersion.tool_id == tool.id,
@@ -115,19 +164,14 @@ class CallControlService:
                     f"版本 {version} 未发布或不存在",
                     discoverable=True, tool=tool,
                 )
-        else:
-            selected = base.version
-            if selected is None or selected.id != tool.default_version_id:
+            control = await self._binding_control(tool, selected)
+            if control is None:
                 return self._denied(
                     RUNTIME_TOOL_NOT_AVAILABLE,
-                    "工具未配置默认版本，请显式指定版本",
+                    "工具执行通道不可用：Provider 已停用或不存在",
                     discoverable=True, tool=tool,
                 )
-        binding = await self._get_binding(selected.id)
-        confirmation_required = (
-            tool.risk_level == RiskLevel.HIGH
-            or bool(binding and binding.method in _WRITE_METHODS)
-        )
+            binding, confirmation_required = control
         return ControlDecision(
             allowed=True,
             discoverable=True,
@@ -136,6 +180,30 @@ class CallControlService:
             tool=tool,
             version=selected,
             binding=binding,
+        )
+
+    async def _binding_control(
+        self,
+        tool: CatalogTool,
+        version: CatalogToolVersion,
+    ) -> tuple[CatalogExecutionBinding | None, bool] | None:
+        """校验版本执行绑定与 Provider 状态并计算确认需求；通道不可用时返回 None。"""
+        binding = await self._get_binding(version.id)
+        if binding is None:
+            return binding, False
+        provider = await self.db.get(CatalogProvider, binding.provider_id)
+        if not catalog_object_runnable(getattr(provider, "status", None)):
+            return None
+        return binding, self._confirmation_required(tool, binding)
+
+    @staticmethod
+    def _confirmation_required(
+        tool: CatalogTool, binding: CatalogExecutionBinding | None,
+    ) -> bool:
+        """统一确认需求：高风险或写操作执行需要确认。"""
+        return (
+            tool.risk_level == RiskLevel.HIGH
+            or bool(binding and binding.method in _WRITE_METHODS)
         )
 
     async def list_discoverable_tools(
@@ -181,7 +249,7 @@ class CallControlService:
                     .where(
                         CatalogCapabilityPack.pack_code.in_(tuple(pack_codes)),
                         CatalogCapabilityPack.status
-                        != CatalogObjectStatus.ARCHIVED,
+                        == CatalogObjectStatus.ENABLED,
                     )
                 )
             ).all()
@@ -232,7 +300,7 @@ class CallControlService:
                     .where(
                         CatalogCapabilityPack.pack_code == scope.scope_code,
                         CatalogCapabilityPack.status
-                        != CatalogObjectStatus.ARCHIVED,
+                        == CatalogObjectStatus.ENABLED,
                         CatalogCapabilityPackTool.tool_id == tool.id,
                     )
                     .limit(1)

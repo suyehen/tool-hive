@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 
@@ -88,8 +89,9 @@ class EmbeddedChromaVectorIndex(VectorIndex):
         document: str,
         metadata: dict,
     ) -> None:
-        collection = self._ensure_collection()
-        collection.upsert(
+        collection = await asyncio.to_thread(self._ensure_collection)
+        await asyncio.to_thread(
+            collection.upsert,
             ids=[doc_id],
             embeddings=[embedding],
             documents=[document],
@@ -98,15 +100,19 @@ class EmbeddedChromaVectorIndex(VectorIndex):
         logger.info("chroma upsert doc_id=%s", doc_id)
 
     async def delete(self, doc_id: str) -> None:
-        collection = self._ensure_collection()
-        collection.delete(ids=[doc_id])
+        collection = await asyncio.to_thread(self._ensure_collection)
+        await asyncio.to_thread(collection.delete, ids=[doc_id])
         logger.info("chroma delete doc_id=%s", doc_id)
 
     async def query(
         self, embedding: list[float], top_k: int = 10,
     ) -> list[tuple[str, float]]:
-        collection = self._ensure_collection()
-        result = collection.query(query_embeddings=[embedding], n_results=top_k)
+        collection = await asyncio.to_thread(self._ensure_collection)
+        result = await asyncio.to_thread(
+            collection.query,
+            query_embeddings=[embedding],
+            n_results=top_k,
+        )
         ids = result.get("ids", [[]])[0]
         distances = result.get("distances", [[]])[0]
         return list(zip(ids, distances))
@@ -116,9 +122,9 @@ class EmbeddedChromaVectorIndex(VectorIndex):
         entries: list[tuple[str, list[float], str, dict]],
     ) -> None:
         """全量重建：清空集合后一次性写入全部文档。"""
-        collection = self._ensure_collection()
+        collection = await asyncio.to_thread(self._ensure_collection)
         try:
-            collection.delete(where={})
+            await asyncio.to_thread(collection.delete, where={})
         except Exception:
             # 空集合删除可能无效果，忽略
             pass
@@ -129,7 +135,8 @@ class EmbeddedChromaVectorIndex(VectorIndex):
         embeddings = [entry[1] for entry in entries]
         documents = [entry[2] for entry in entries]
         metadatas = [entry[3] for entry in entries]
-        collection.add(
+        await asyncio.to_thread(
+            collection.add,
             ids=ids,
             embeddings=embeddings,
             documents=documents,

@@ -180,8 +180,8 @@ export async function addIPRule(systemId: string, ipCidr: string, description?: 
   return data;
 }
 
-export async function updateIPRuleStatus(ruleId: string, reason?: string): Promise<void> {
-  await client.patch(`/caller-systems/ip-rules/${ruleId}/status`, { reason: reason || '' });
+export async function updateIPRuleStatus(ruleId: string, enabled: boolean): Promise<void> {
+  await client.patch(`/caller-systems/ip-rules/${ruleId}/status`, { enabled });
 }
 
 export async function getRuntimePolicy(systemId: string): Promise<RuntimePolicy> {

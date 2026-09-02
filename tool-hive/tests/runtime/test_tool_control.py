@@ -13,6 +13,7 @@ from toolhive.core.enums import (
 )
 from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.models.catalog_execution_binding import CatalogExecutionBinding
+from toolhive.models.catalog_provider import CatalogProvider
 from toolhive.models.catalog_tool import CatalogTool
 from toolhive.models.catalog_tool_version import CatalogToolVersion
 from toolhive.runtime.errors import (
@@ -60,11 +61,24 @@ def _binding(method: str = "COMPUTE") -> CatalogExecutionBinding:
     )
 
 
-def _scope(scope_type: str = ToolScopeType.TOOL) -> CallerToolScope:
+def _provider(status: str = CatalogObjectStatus.ENABLED) -> CatalogProvider:
+    return CatalogProvider(
+        provider_code="builtin-math",
+        name="内置数学通道",
+        provider_type="builtin",
+        status=status,
+        row_version=0,
+    )
+
+
+def _scope(
+    scope_type: str = ToolScopeType.TOOL,
+    scope_code: str = "math.basic.calculator",
+) -> CallerToolScope:
     return CallerToolScope(
         system_id="sys_1",
         scope_type=scope_type,
-        scope_code="math.basic.calculator",
+        scope_code=scope_code,
         status=ToolScopeStatus.ACTIVE,
     )
 
@@ -120,7 +134,7 @@ async def test_resolve_tool_discoverable() -> None:
     tool = _tool()
     version = _version()
     db = AsyncMock()
-    db.scalar = AsyncMock(return_value=tool)
+    db.scalar = AsyncMock(side_effect=[tool, None])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
     db.get = AsyncMock(return_value=version)
     svc = CallControlService(db)
@@ -128,6 +142,22 @@ async def test_resolve_tool_discoverable() -> None:
     assert decision.allowed
     assert decision.discoverable
     assert not decision.executable
+    assert not decision.confirmation_required
+
+
+async def test_resolve_high_risk_reports_confirmation_required() -> None:
+    """Resolve 决策输出与 Execute 同源的确认需求。"""
+    tool = _tool(risk_level=RiskLevel.HIGH)
+    version = _version()
+    binding = _binding("COMPUTE")
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, binding])
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.get = AsyncMock(side_effect=[version, _provider()])
+    svc = CallControlService(db)
+    decision = await svc.resolve_tool("sys_1", "math.basic.calculator")
+    assert decision.allowed
+    assert decision.confirmation_required
 
 
 async def test_execute_rejects_non_executable_tool() -> None:
@@ -153,7 +183,7 @@ async def test_execute_low_risk_compute_no_confirmation() -> None:
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[tool, binding])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
-    db.get = AsyncMock(return_value=version)
+    db.get = AsyncMock(side_effect=[version, _provider()])
     svc = CallControlService(db)
     decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
     assert decision.allowed
@@ -169,7 +199,7 @@ async def test_execute_high_risk_requires_confirmation() -> None:
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[tool, binding])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
-    db.get = AsyncMock(return_value=version)
+    db.get = AsyncMock(side_effect=[version, _provider()])
     svc = CallControlService(db)
     decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
     assert decision.confirmation_required
@@ -183,10 +213,43 @@ async def test_execute_write_method_requires_confirmation() -> None:
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[tool, binding])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
-    db.get = AsyncMock(return_value=version)
+    db.get = AsyncMock(side_effect=[version, _provider()])
     svc = CallControlService(db)
     decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
     assert decision.confirmation_required
+
+
+async def test_execute_rejects_disabled_provider() -> None:
+    """Provider 已停用时执行决策必须拒绝。"""
+    tool = _tool()
+    version = _version()
+    binding = _binding()
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, binding])
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.get = AsyncMock(
+        side_effect=[version, _provider(status=CatalogObjectStatus.DISABLED)]
+    )
+    svc = CallControlService(db)
+    decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
+    assert not decision.allowed
+    assert decision.discoverable
+    assert decision.error_code == RUNTIME_TOOL_NOT_AVAILABLE
+
+
+async def test_execute_rejects_missing_provider() -> None:
+    """执行绑定指向的 Provider 不存在时执行决策必须拒绝。"""
+    tool = _tool()
+    version = _version()
+    binding = _binding()
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, binding])
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.get = AsyncMock(side_effect=[version, None])
+    svc = CallControlService(db)
+    decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
+    assert not decision.allowed
+    assert decision.error_code == RUNTIME_TOOL_NOT_AVAILABLE
 
 
 async def test_execute_explicit_version_must_be_published() -> None:
@@ -194,7 +257,7 @@ async def test_execute_explicit_version_must_be_published() -> None:
     tool = _tool()
     version = _version()
     db = AsyncMock()
-    db.scalar = AsyncMock(side_effect=[tool, None])
+    db.scalar = AsyncMock(side_effect=[tool, None, None])
     db.execute = AsyncMock(return_value=_execute_result([_scope()]))
     db.get = AsyncMock(return_value=version)
     svc = CallControlService(db)
@@ -203,6 +266,52 @@ async def test_execute_explicit_version_must_be_published() -> None:
     )
     assert not decision.allowed
     assert decision.error_code == RUNTIME_TOOL_NOT_AVAILABLE
+
+
+async def test_execute_explicit_version_does_not_depend_on_default_provider() -> None:
+    """显式指定版本时只校验目标版本 Provider，不被默认版本绑定状态阻塞。"""
+    tool = _tool(default_version_id="ver-1")
+    default_version = _version()
+    explicit_version = CatalogToolVersion(
+        id="ver-2",
+        tool_id="tool-1",
+        version="2.0.0",
+        status=ToolVersionStatus.PUBLISHED,
+        row_version=0,
+    )
+    explicit_binding = _binding("COMPUTE")
+    explicit_binding.version_id = "ver-2"
+    explicit_binding.provider_id = "prov-2"
+    db = AsyncMock()
+    db.scalar = AsyncMock(
+        side_effect=[tool, explicit_version, explicit_binding],
+    )
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.get = AsyncMock(side_effect=[default_version, _provider()])
+    svc = CallControlService(db)
+    decision = await svc.evaluate_executable(
+        "sys_1", "math.basic.calculator", version="2.0.0",
+    )
+    assert decision.allowed
+    assert decision.version is not None
+    assert decision.version.version == "2.0.0"
+
+
+async def test_execute_without_version_uses_same_fallback_as_resolve() -> None:
+    """未传版本且无默认版本时 Execute 与 Resolve 回退到同一已发布版本。"""
+    tool = _tool(default_version_id=None)
+    version = _version()
+    binding = _binding("COMPUTE")
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, version, binding])
+    db.execute = AsyncMock(return_value=_execute_result([_scope()]))
+    db.get = AsyncMock(return_value=_provider())
+    svc = CallControlService(db)
+    decision = await svc.evaluate_executable("sys_1", "math.basic.calculator")
+    assert decision.allowed
+    assert decision.executable
+    assert decision.version is not None
+    assert decision.version.version == "1.0.0"
 
 
 async def test_list_discoverable_tools_via_tool_scope() -> None:
@@ -238,3 +347,19 @@ async def test_list_discoverable_tools_filters_hidden_and_unpublished() -> None:
     svc = CallControlService(db)
     tools = await svc.list_discoverable_tools("sys_1")
     assert [t.id for t in tools] == [visible.id]
+
+
+async def test_list_discoverable_excludes_tools_without_enabled_pack_grant() -> None:
+    """能力包授权缺失（含包已停用）时工具不进可发现集合。"""
+    tool = _tool()
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _execute_result([_scope(ToolScopeType.CAPABILITY, "pack-1")]),
+            _execute_result([tool]),
+            MagicMock(all=MagicMock(return_value=[])),
+        ]
+    )
+    svc = CallControlService(db)
+    tools = await svc.list_discoverable_tools("sys_1")
+    assert tools == []

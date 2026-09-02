@@ -43,8 +43,10 @@ class CatalogExecutionBinding(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )
     response_handling: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True,
-    )
+    )  # 一期描述性元数据：无运行时转换规则，二期需定义结构后才可执行
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    idempotent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    idempotent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True,
+    )  # Provider 幂等声明：一期仅管理端展示，不改变 Execute 幂等去重
     row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

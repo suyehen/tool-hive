@@ -21,6 +21,7 @@ from toolhive.api.runtime.v1.schemas import (
     ResolveResponse,
 )
 from toolhive.config import RuntimeSecuritySettings
+from toolhive.core.enums import CatalogObjectStatus
 from toolhive.infrastructure.database import get_db
 from toolhive.infrastructure.redis import get_redis
 from toolhive.runtime.confirmations.service import ConfirmationService
@@ -37,7 +38,10 @@ from toolhive.runtime.errors import (
 )
 from toolhive.runtime.execution.gateway import BuiltinExecutor, ProviderGateway
 from toolhive.runtime.execution.http_executor import HttpExecutor
-from toolhive.runtime.execution.idempotency import check_idempotency
+from toolhive.runtime.execution.idempotency import (
+    check_idempotency,
+    update_idempotency_result,
+)
 from toolhive.runtime.execution.outbound import build_outbound_request
 from toolhive.runtime.retrieval.service import RetrievalService
 from toolhive.runtime.tool_control.service import CallControlService
@@ -107,6 +111,7 @@ async def resolve_tool(
         version=decision.version.version,
         executable=decision.tool.executable,
         discoverable=True,
+        confirmation_required=decision.confirmation_required,
         input_schema=decision.version.input_schema or decision.tool.input_schema,
         output_schema=decision.version.output_schema or decision.tool.output_schema,
         trace_id=identity.trace_id,
@@ -207,6 +212,8 @@ async def execute_tool(
             system_id=system_id,
             confirmation_id=body.confirmation_id,
             token=body.confirmation_token,
+            tool_id=decision.tool.id,
+            version_id=decision.version.id,
             trace_id=identity.trace_id,
         )
 
@@ -222,20 +229,62 @@ async def execute_tool(
         raise RuntimeApiError(
             RUNTIME_PARAMETER_INVALID, "写操作必须携带幂等键", 400,
         )
-    await check_idempotency(system_id, body.idempotency_key, redis)
-
-    # Provider 调用（统一网关，固定映射）
+    # Provider 实时状态校验在幂等键消费之前完成，确定性拒绝不消耗幂等键
     provider = await CatalogProviderService(db).get_provider(
         decision.binding.provider_id
     )
+    if provider.status != CatalogObjectStatus.ENABLED:
+        raise RuntimeApiError(
+            RUNTIME_PROVIDER_ERROR,
+            "Provider 已停用，工具不可执行",
+            503,
+        )
+    await check_idempotency(system_id, body.idempotency_key, redis)
+
+    # Provider 调用（统一网关，固定映射）
     gateway = ProviderGateway(
         {
             BuiltinExecutor.provider_type: BuiltinExecutor(),
             HttpExecutor.provider_type: HttpExecutor(redis, runtime_security),
         }
     )
-    result = await gateway.execute(
-        decision.binding, provider, body.arguments,
+    try:
+        result = await gateway.execute(
+            decision.binding, provider, body.arguments,
+        )
+    except RuntimeApiError:
+        # 远端是否已执行不可确定时保留幂等键并标记 unknown，禁止同键盲目重放
+        await update_idempotency_result(
+            system_id,
+            body.idempotency_key,
+            redis,
+            status="unknown",
+            trace_id=identity.trace_id,
+        )
+        raise
+    # 运行时按声明 output_schema 校验 Provider 结果，防止契约漂移
+    output_schema = decision.version.output_schema or decision.tool.output_schema
+    try:
+        JsonSchemaValidator(output_schema).validate(result, path="result")
+    except RuntimeApiError:
+        await update_idempotency_result(
+            system_id,
+            body.idempotency_key,
+            redis,
+            status="unknown",
+            trace_id=identity.trace_id,
+        )
+        raise RuntimeApiError(
+            RUNTIME_PROVIDER_ERROR,
+            "Provider 返回结果不符合声明的输出 Schema",
+            502,
+        ) from None
+    await update_idempotency_result(
+        system_id,
+        body.idempotency_key,
+        redis,
+        status="success",
+        trace_id=identity.trace_id,
     )
     provider_summary: dict = {
         "tool_code": tool_code,

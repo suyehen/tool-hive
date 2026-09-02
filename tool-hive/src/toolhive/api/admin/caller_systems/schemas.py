@@ -42,6 +42,10 @@ class StatusRequest(BaseModel):
     reason: str | None = Field(None, description="停用/注销原因")
 
 
+class IPRuleStatusUpdateRequest(BaseModel):
+    enabled: bool = Field(..., description="目标状态：true 启用 / false 停用")
+
+
 class CallerSystemResponse(BaseModel):
     id: str
     system_id: str

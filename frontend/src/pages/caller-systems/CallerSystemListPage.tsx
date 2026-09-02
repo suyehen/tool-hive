@@ -496,7 +496,10 @@ export default function CallerSystemListPage() {
       title: '操作', key: 'actions', width: 100,
       render: (_, record) => (
         hasOperation('caller_system:manage') ? (
-          <Popconfirm title="切换启用/停用" onConfirm={() => updateIPRuleStatus(record.id, 'toggle').then(() => openDetail(detailId!))}>
+          <Popconfirm
+            title="切换启用/停用"
+            onConfirm={() => updateIPRuleStatus(record.id, record.status !== 'active').then(() => openDetail(detailId!))}
+          >
             <Button size="small">{record.status === 'active' ? '停用' : '启用'}</Button>
           </Popconfirm>
         ) : null

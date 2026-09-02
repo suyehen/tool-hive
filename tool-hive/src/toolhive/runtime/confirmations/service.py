@@ -6,6 +6,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.enums import ConfirmationStatus
@@ -78,36 +79,68 @@ class ConfirmationService:
         system_id: str,
         confirmation_id: str,
         token: str,
+        tool_id: str | None = None,
+        version_id: str | None = None,
         trace_id: str | None = None,
     ) -> RuntimeConfirmation:
         """一次性校验确认令牌；失败或重放抛出 RUNTIME_CONFIRMATION_INVALID。"""
+        now = datetime.now(UTC)
+        # 条件更新原子消费：仅在记录仍为 PENDING、未过期、令牌匹配且
+        # （如提供）工具/版本一致时消费成功，杜绝并发双重消费
+        conditions = [
+            RuntimeConfirmation.id == confirmation_id,
+            RuntimeConfirmation.system_id == system_id,
+            RuntimeConfirmation.status == ConfirmationStatus.PENDING,
+            RuntimeConfirmation.expires_at > now,
+            RuntimeConfirmation.token_hash == hash_token(token),
+        ]
+        if tool_id is not None:
+            conditions.append(RuntimeConfirmation.tool_id == tool_id)
+        if version_id is not None:
+            conditions.append(RuntimeConfirmation.version_id == version_id)
+        result = await self.db.execute(
+            update(RuntimeConfirmation)
+            .where(*conditions)
+            .values(
+                status=ConfirmationStatus.CONSUMED,
+                consumed_at=now,
+                update_time=now,
+            )
+        )
+        if result.rowcount != 1:
+            # 原子消费未命中：读取记录定位失败原因（用于区分过期/重放/错配）
+            record = await self.db.get(RuntimeConfirmation, confirmation_id)
+            if record is None or record.system_id != system_id:
+                raise RuntimeApiError(
+                    RUNTIME_CONFIRMATION_INVALID, "确认申请不存在", 400,
+                )
+            if record.status != ConfirmationStatus.PENDING:
+                raise RuntimeApiError(
+                    RUNTIME_CONFIRMATION_INVALID,
+                    "确认令牌已使用或已失效",
+                    400,
+                )
+            if record.expires_at <= now:
+                record.status = ConfirmationStatus.EXPIRED
+                record.update_time = now
+                await self.db.flush()
+                raise RuntimeApiError(
+                    RUNTIME_CONFIRMATION_INVALID, "确认令牌已过期", 400,
+                )
+            if not secrets.compare_digest(record.token_hash, hash_token(token)):
+                raise RuntimeApiError(
+                    RUNTIME_CONFIRMATION_INVALID, "确认令牌无效", 400,
+                )
+            raise RuntimeApiError(
+                RUNTIME_CONFIRMATION_INVALID,
+                "确认令牌与目标工具或版本不匹配",
+                400,
+            )
         record = await self.db.get(RuntimeConfirmation, confirmation_id)
-        if record is None or record.system_id != system_id:
+        if record is None:
             raise RuntimeApiError(
                 RUNTIME_CONFIRMATION_INVALID, "确认申请不存在", 400,
             )
-        now = datetime.now(UTC)
-        if record.status != ConfirmationStatus.PENDING:
-            raise RuntimeApiError(
-                RUNTIME_CONFIRMATION_INVALID,
-                "确认令牌已使用或已失效",
-                400,
-            )
-        if record.expires_at <= now:
-            record.status = ConfirmationStatus.EXPIRED
-            record.update_time = now
-            await self.db.flush()
-            raise RuntimeApiError(
-                RUNTIME_CONFIRMATION_INVALID, "确认令牌已过期", 400,
-            )
-        if not secrets.compare_digest(record.token_hash, hash_token(token)):
-            raise RuntimeApiError(
-                RUNTIME_CONFIRMATION_INVALID, "确认令牌无效", 400,
-            )
-        record.status = ConfirmationStatus.CONSUMED
-        record.consumed_at = now
-        record.update_time = now
-        await self.db.flush()
         await TraceService.log_event(
             trace_id=trace_id or record.trace_id or record.id,
             system_id=system_id,

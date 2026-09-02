@@ -260,6 +260,35 @@ async def test_execute_validates_arguments() -> None:
     assert exc_info.value.code == "RUNTIME_PARAMETER_INVALID"
 
 
+async def test_execute_rejects_result_not_matching_output_schema(_patch_trace) -> None:
+    """Provider 结果不符合声明 output_schema 时以运行错误拒绝。"""
+    version = _version()
+    version.output_schema = {"type": "array"}
+    with (
+        patch("toolhive.api.runtime.v1.tools.CallControlService") as control_cls,
+        patch("toolhive.api.runtime.v1.tools.CatalogProviderService") as provider_cls,
+        patch("toolhive.api.runtime.v1.tools.ProviderGateway") as gateway_cls,
+    ):
+        control_cls.return_value.evaluate_executable = AsyncMock(
+            return_value=_decision(version=version)
+        )
+        provider_cls.return_value.get_provider = AsyncMock(
+            return_value=_provider()
+        )
+        gateway_cls.return_value.execute = AsyncMock(
+            return_value={"result": 3}
+        )
+        with pytest.raises(RuntimeApiError) as exc_info:
+            await execute_tool(
+                _request(),
+                "math.basic.calculator",
+                ExecuteRequest(arguments={"a": 1, "b": 2}),
+                db=AsyncMock(),
+                redis=AsyncMock(),
+            )
+    assert exc_info.value.code == "RUNTIME_PROVIDER_ERROR"
+
+
 async def test_confirmation_request_and_verify() -> None:
     """确认申请返回令牌，校验消费成功。"""
     record = MagicMock()

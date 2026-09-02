@@ -180,6 +180,24 @@ async def test_authenticate_success() -> None:
     redis.set.assert_awaited_once()
 
 
+async def test_authenticate_rejects_pending_public_key() -> None:
+    """待启用（PENDING）公钥未完成启用流程时拒绝认证。"""
+    public_pem, private_pem = _make_keypair()
+    pending_key = _key(public_pem)
+    pending_key.status = PublicKeyStatus.PENDING
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[_system(), pending_key])
+    db.execute = AsyncMock(return_value=_execute_result([_rule()]))
+    redis = AsyncMock()
+    redis.set = AsyncMock(return_value=True)
+    svc = _service(db, redis)
+
+    with pytest.raises(RuntimeApiError) as exc_info:
+        await svc.authenticate(_FakeRequest(_headers(private_pem)), "trace-1")
+    assert exc_info.value.code == RUNTIME_AUTH_INVALID_SIGNATURE
+    redis.set.assert_not_awaited()
+
+
 async def test_authenticate_rejects_bad_signature() -> None:
     """签名无效时返回 RUNTIME_AUTH_INVALID_SIGNATURE。"""
     public_pem, private_pem = _make_keypair()

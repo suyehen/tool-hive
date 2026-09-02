@@ -48,10 +48,8 @@ class CallerPublicKey(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )
 
     def is_valid(self) -> bool:
-        if self.status not in (
-            PublicKeyStatus.PENDING,
-            PublicKeyStatus.ACTIVE,
-        ):
+        """公钥是否可用于运行时认证（仅启用状态有效）。"""
+        if self.status != PublicKeyStatus.ACTIVE:
             return False
         now = datetime.now(UTC)
         if self.effective_from > now:

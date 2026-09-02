@@ -13,6 +13,7 @@ from toolhive.api.admin.caller_systems.schemas import (
     CreateCallerSystemRequest,
     EmergencyDisableRequest,
     IPRuleResponse,
+    IPRuleStatusUpdateRequest,
     PublicKeyResponse,
     ReplaceToolScopesRequest,
     RuntimePolicyRequest,
@@ -400,15 +401,13 @@ async def add_ip_rule(
 @router.patch("/ip-rules/{rule_id}/status")
 async def update_ip_rule_status(
     rule_id: str,
-    body: StatusRequest,
+    body: IPRuleStatusUpdateRequest,
     db: AsyncSession = Depends(get_db),
     _account=Depends(require_operation(OperationCode.CALLER_SYSTEM_MANAGE)),
 ):
     svc = CallerSystemService(db)
     try:
-        status = (
-            IPRuleStatus.DISABLED if body.reason else IPRuleStatus.ACTIVE
-        )
+        status = IPRuleStatus.ACTIVE if body.enabled else IPRuleStatus.DISABLED
         await svc.update_ip_rule_status(rule_id, status)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

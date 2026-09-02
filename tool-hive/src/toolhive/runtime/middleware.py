@@ -42,6 +42,7 @@ from toolhive.runtime.errors import (
     RUNTIME_TOOL_NOT_FOUND,
     RuntimeApiError,
 )
+from toolhive.runtime.tool_control.service import catalog_object_runnable
 from toolhive.runtime.tracing.service import TraceService, new_trace_id, parse_trace_id
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,8 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
                 # 运行范围与流量控制
                 policy = await self._authorize(request, session, system_id)
                 await self._guard.check(system_id, policy, redis, self._security)
+                # 仅当并发槽位成功获取后才允许 finally 释放
+                request.state.concurrency_acquired = True
                 request.state.runtime_policy = policy
                 await TraceService.log_event(
                     trace_id=trace_id,
@@ -158,7 +161,10 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
             response.headers["X-ToolHive-Trace-Id"] = trace_id
             return response
         finally:
-            if system_id is not None:
+            if (
+                system_id is not None
+                and getattr(request.state, "concurrency_acquired", False)
+            ):
                 await self._guard.release(system_id)
 
     @staticmethod
@@ -250,7 +256,7 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
             raise RuntimeApiError(
                 RUNTIME_TOOL_NOT_FOUND, f"工具不存在: {full_code}", 404,
             )
-        if tool.status == CatalogObjectStatus.ARCHIVED or not tool.executable:
+        if not catalog_object_runnable(tool.status) or not tool.executable:
             raise RuntimeApiError(
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可执行", 403,
             )
@@ -292,7 +298,7 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
                     .where(
                         CatalogCapabilityPack.pack_code == scope.scope_code,
                         CatalogCapabilityPack.status
-                        != CatalogObjectStatus.ARCHIVED,
+                        == CatalogObjectStatus.ENABLED,
                         CatalogCapabilityPackTool.tool_id == tool.id,
                     )
                     .limit(1)

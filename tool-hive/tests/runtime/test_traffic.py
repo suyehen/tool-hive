@@ -87,6 +87,19 @@ async def test_circuit_open_rejected() -> None:
     assert exc_info.value.code == RUNTIME_CIRCUIT_OPEN
 
 
+async def test_circuit_disabled_skips_open_check() -> None:
+    """熔断开关关闭时历史熔断状态不再拒绝请求。"""
+    policy = _policy()
+    policy.circuit_breaker_enabled = False
+    redis = AsyncMock()
+    redis.exists = AsyncMock(return_value=1)
+    redis.incr = AsyncMock(return_value=1)
+    redis.expire = AsyncMock()
+    guard = RuntimeTrafficGuard()
+    await guard.check("sys_1", policy, redis, _security())
+    redis.exists.assert_not_awaited()
+
+
 async def test_record_failure_opens_circuit_after_threshold() -> None:
     """连续失败达到阈值后打开熔断。"""
     redis = AsyncMock()

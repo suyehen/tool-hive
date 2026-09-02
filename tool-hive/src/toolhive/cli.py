@@ -138,7 +138,10 @@ async def _seed_tools() -> int:
 
 def _sign_request(args) -> int:
     """生成签名请求 curl 命令（不自动发起请求）。"""
-    from toolhive.runtime.authentication.service import build_canonical
+    from toolhive.runtime.authentication.service import (
+        build_canonical,
+        normalize_query,
+    )
 
     timestamp = args.timestamp or str(int(time.time()))
     nonce = args.nonce or secrets.token_hex(16)
@@ -160,6 +163,10 @@ def _sign_request(args) -> int:
         return 1
     signature_b64 = base64.b64encode(signature).decode("ascii")
     url = f"{args.base_url.rstrip('/')}{args.path}"
+    # 将规范化后的查询串写入输出 URL，与服务端验签内容保持一致
+    query_string = normalize_query(args.query)
+    if query_string:
+        url = f"{url}?{query_string}"
     lines = [
         f'curl -X {args.method} "{url}"',
         f'  -H "X-ToolHive-System-Id: {args.system_id}"',

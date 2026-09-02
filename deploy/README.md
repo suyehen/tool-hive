@@ -73,13 +73,30 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 
 参考 [deploy/nginx/toolhive.conf](./nginx/toolhive.conf)：
 
-- 管理入口：公网 `443`，转发 `/admin/**` 与 `/api/admin/**` 到 `127.0.0.1:8100`，写入 `X-ToolHive-Ingress: admin`；
+- 管理入口：公网 `443`，仅 `/api/admin/**` 反向代理到 `127.0.0.1:8100` 并写入 `X-ToolHive-Ingress: admin`；
+- 管理前端：由 Nginx 直接托管 `frontend/dist` 产物（复制到 `/var/www/toolhive/admin/`），`/assets/` 走静态文件、`/admin/` 与站点根路径按 SPA 回退到 `index.html`；仅 `/api/admin/**` 反向代理到应用；
 - 运行入口：内网 `8081`，仅转发 `/api/runtime/v1/**`，写入 `X-ToolHive-Ingress: runtime`；**默认只允许本机来源**（`allow 127.0.0.1; allow ::1; deny all;`），若调用系统分布在其他主机，按实际内网网段替换为 `allow 10.0.0.0/8;`、`allow 172.16.0.0/12;`、`allow 192.168.0.0/16;` 等，一期不允许公网访问运行入口；
 - Header 清洗：清除客户端提交的 `Forwarded` / `X-Forwarded-For` / `X-Real-IP`，按实际 TCP 连接写入 `X-ToolHive-Client-IP: $remote_addr`；
 - 限流：管理入口全局 `10 r/s`（burst 20），`/api/admin/auth/**` 登录/验证码等接口 `5 r/s`（burst 8），运行入口内网基础限流 `50 r/s`（burst 100）；zone 定义位于示例配置顶部，需处于 Nginx `http` 上下文；
 - 应用只监听回环地址，生产必须由 Nginx 转发，不允许直连应用端口。
 
 应用侧 `network.trusted_proxies` 必须包含 Nginx 来源地址（同机部署为 `127.0.0.1/32`、`::1/128`），否则入口请求会被拒绝。
+
+### 6.1 前端构建与静态资源部署
+
+```bash
+cd frontend
+npm ci
+npm run build
+mkdir -p /var/www/toolhive/admin
+cp -r dist/. /var/www/toolhive/admin/
+nginx -t
+nginx -s reload
+```
+
+- 部署包 / 发布镜像必须包含 `frontend/dist` 构建产物，否则管理前端返回 404；
+- 应用只负责 API（`/api/admin`、`/api/runtime`），不再以 `/admin` 前缀兜底页面；
+- 修改前端后需重新执行构建与复制，浏览器静态资源建议按构建指纹缓存。
 
 应用层限流：登录失败按来源 IP 在 `login_failure_window_minutes` 窗口内累计，达到 `login_max_failures` 次后拒绝；验证码挑战接口按来源 IP 每分钟最多 `captcha_challenge_max_per_minute` 次（默认 10 次）。Nginx 与应用层限流共同构成管理侧基础限流。
 
@@ -162,3 +179,16 @@ toolhive sign-request --method POST --path /api/runtime/v1/tools/math.basic.calc
 - **进程退出/崩溃**：由 systemd/supervisor 等进程守护自动拉起，重启后应用自愈；数据库与 Redis 故障时应用拒绝相关请求而不是带病运行。
 - **配置错误**：启动阶段配置校验失败会直接退出并输出具体缺失项，修复配置后重新启动。
 - **备份恢复、RPO/RTO、多实例高可用与监控告警**：按二期规划，不在本期验收范围。
+
+## 11. 多实例与出站连接安全设计（一期限制）
+
+### 11.1 并发控制与多实例
+
+- 一期并发计数位于进程内（`RuntimeTrafficGuard._active`），**只允许单 Worker / 单实例部署**；`scripts/start.sh` 以单 Uvicorn Worker 启动，编排层不得在一期方案下拉起多个执行实例。
+- 二期多实例方案：并发槽位改为 Redis 原子计数（获取 `INCR` + 释放 `DECR`，配合进程崩溃后的 TTL 回收），QPS/配额/熔断计数已位于 Redis，可直接复用同一通道。
+
+### 11.2 HTTP 出站 DNS Rebinding 防护
+
+- 现状：执行前对域名做全量 DNS 解析并校验全部地址，且不跟随重定向；但 httpx 会按域名二次解析连接，仍存在校验与连接之间的 DNS 变化窗口。
+- 一期风险缓解：Provider 目标白名单由管理端审批锁定，出站仅允许 https，重定向关闭；
+- 二期方案：将“已校验的解析结果”与实际连接绑定——自研/接入支持固定 IP + 保留 TLS SNI 与原 Host 校验的自定义传输，或经允许目标列表的代理出站；重定向链上的每个目标继续逐一校验。

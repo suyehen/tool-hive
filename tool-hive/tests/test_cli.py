@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +27,32 @@ def test_help_lists_seed_tools_and_sign_request(capsys) -> None:
     out = capsys.readouterr().out
     assert "seed-tools" in out
     assert "sign-request" in out
+
+
+def test_sign_request_appends_normalized_query_to_url(capsys) -> None:
+    """带查询参数的签名请求必须把规范化查询串写入输出 URL。"""
+    args = SimpleNamespace(
+        method="POST",
+        path="/api/runtime/v1/ping",
+        query="b=2&a=1",
+        body="",
+        private_key="caller.pem",
+        system_id="sys_1",
+        key_id="key_1",
+        base_url="http://127.0.0.1:8081",
+        timestamp="1700000000",
+        nonce="nonce-1",
+    )
+    with (
+        patch("builtins.open", MagicMock()) as open_mock,
+        patch("toolhive.cli._load_private_key", return_value=object()),
+        patch("toolhive.cli._sign_bytes", return_value=b"signature"),
+    ):
+        open_mock.return_value.__enter__.return_value.read.return_value = b"pem"
+        code = cli._sign_request(args)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert 'http://127.0.0.1:8081/api/runtime/v1/ping?a=1&b=2' in out
 
 
 def test_seed_tools_dispatches() -> None:
