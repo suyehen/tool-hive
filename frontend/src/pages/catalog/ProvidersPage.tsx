@@ -272,6 +272,12 @@ export default function ProvidersPage() {
           <Form.Item label="编码">
             <Input value={editItem?.provider_code} disabled />
           </Form.Item>
+          <Form.Item label="类型">
+            <Input
+              value={editItem ? (typeLabel[editItem.provider_type] || editItem.provider_type) : undefined}
+              disabled
+            />
+          </Form.Item>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
             <Input />
           </Form.Item>

@@ -95,18 +95,18 @@ In production, Nginx serves `frontend/dist` under `/admin/**`. See [deploy/READM
 
 - [Overall functionality & architecture](docs/ToolHive总体功能与架构说明.md)
 - Phase 1: [goals](docs/一期功能/一期目标.md) · [frozen design](docs/一期功能/一期下半设计冻结.md) · [development notes](docs/一期功能/一期开发完成情况.md) · [acceptance report](docs/一期功能/验收报告/v1.0/一期验收报告.md)
-- Phase 2: [goals](docs/二期功能/二期目标.md)
+- Future features: [features for later implementation](docs/待后续实现功能/待后续实现功能.md)
 - Deployment: [deploy/README.md](deploy/README.md)
 
-## Phase 1 Boundary & Phase 2 Direction
+## Phase 1 Boundary & Future Direction
 
 Confirmed Phase 1 boundaries:
 
 - No target-system credential holding; no Secret Store or `credential_ref`;
 - The first batch of tools are built-in math placeholder tools (`builtin` Provider) that validate the end-to-end chain;
-- ToolContext uses the caller-declared model; tenant/business-identity filtering belongs to Phase 2;
-- DNS resolution pinning (fixed IP + bound connection) and multi-instance shared concurrency are designed for Phase 2;
-- HTTP `response_handling` is descriptive metadata in Phase 1; rule-based response sanitization belongs to Phase 2.
+- ToolContext uses the caller-declared model; tenant/business-identity filtering is pending later implementation;
+- DNS resolution pinning (fixed IP + bound connection) is delivered in Phase 1; multi-instance shared concurrency is pending later implementation;
+- HTTP `response_handling` is descriptive metadata in Phase 1; rule-based response sanitization is pending later implementation.
 
 ## License
 

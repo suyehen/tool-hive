@@ -132,18 +132,18 @@ npm run build    # 产物输出到 frontend/dist/
 
 - [总体功能与架构说明](docs/ToolHive总体功能与架构说明.md)
 - 一期： [一期目标](docs/一期功能/一期目标.md) · [设计冻结](docs/一期功能/一期下半设计冻结.md) · [开发完成情况](docs/一期功能/一期开发完成情况.md) · [验收报告](docs/一期功能/验收报告/v1.0/一期验收报告.md)
-- 二期：[二期目标](docs/二期功能/二期目标.md)
+- 待后续实现功能：[待后续实现功能](docs/待后续实现功能/待后续实现功能.md)
 - 部署：[deploy/README.md](deploy/README.md)
 
-## 一期边界与二期方向
+## 一期边界与后续方向
 
 一期确认边界：
 
 - 不代持目标系统凭据，不引入 Secret Store / `credential_ref`；
 - 首批工具为内置数学计算占位工具（`builtin` Provider），用于打通端到端链路；
-- ToolContext 采用调用系统声明制，租户/业务身份级过滤属二期；
-- 出站 DNS 校验后的“固定 IP + 绑定连接”已在本期实现；多实例共享并发计数按二期设计落地；
-- HTTP `response_handling` 为一期描述性元数据，规则化脱敏属二期。
+- ToolContext 采用调用系统声明制，租户/业务身份级过滤待后续实现功能确认；
+- 出站 DNS 校验后的“固定 IP + 绑定连接”已在本期实现；多实例共享并发计数待后续实现功能落地；
+- HTTP `response_handling` 为一期描述性元数据，规则化脱敏待后续实现功能确认。
 
 ## License
 

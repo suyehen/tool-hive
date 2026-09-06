@@ -22,8 +22,9 @@ client.interceptors.response.use(
     if (err.response?.status === 401) {
       localStorage.removeItem('csrf_token');
       const path = window.location.pathname;
-      if (path !== '/login') {
-        window.location.href = '/login';
+      // 登录页路由挂在 /admin basename 下，避免跳到不带前缀的根路径
+      if (path !== '/admin/login') {
+        window.location.href = '/admin/login';
       }
     }
     return Promise.reject(err);
