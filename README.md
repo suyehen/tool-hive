@@ -72,7 +72,44 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 ```
 
-Windows 用户使用 PowerShell 时，用 `Copy-Item .env.example .env`、`toolhive init-admin ...`（或 `python -m toolhive.cli`）执行相同步骤；`verify.sh` 建议在 Git Bash/WSL 下运行。
+## Windows 开发环境执行步骤（当前配置）
+
+当前机器环境已按本仓库 `.env` 就绪：Python 使用本机环境，PostgreSQL/Redis 原生已配置运行，不使用 Docker/WSL。下面是需要执行的步骤。
+
+### 首次初始化
+
+```powershell
+cd F:\pycharm_workspace\toolhive\tool-hive
+
+# 1) 首次执行 sql\create_database.sql（创建用户和 toolhive 数据库）
+#    用数据库管理工具（如 Navicat）以超级用户连接 PostgreSQL 执行，已建过库则跳过
+#
+# 2) 连接 toolhive 数据库，执行 sql\init.sql（建表、约束与种子数据）
+#
+# 3) 初始化首个超级管理员：
+python -m toolhive.cli init-admin --account admin --real-name "Admin"
+
+# 4) 接入首批数学计算工具：
+python -m toolhive.cli seed-tools
+```
+
+### 日常启动
+
+终端一：启动后端
+
+```powershell
+cd F:\pycharm_workspace\toolhive\tool-hive
+python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
+```
+
+终端二：启动前端（首次先执行 `npm install`）
+
+```powershell
+cd F:\pycharm_workspace\toolhive\frontend
+npm run dev
+```
+
+然后浏览器打开 `http://localhost:5173/admin/login` 登录。
 
 ## 前端开发与生产构建
 
@@ -105,7 +142,7 @@ npm run build    # 产物输出到 frontend/dist/
 - 不代持目标系统凭据，不引入 Secret Store / `credential_ref`；
 - 首批工具为内置数学计算占位工具（`builtin` Provider），用于打通端到端链路；
 - ToolContext 采用调用系统声明制，租户/业务身份级过滤属二期；
-- 出站 DNS 校验后的“固定 IP + 绑定连接”与多实例共享并发计数按二期设计落地；
+- 出站 DNS 校验后的“固定 IP + 绑定连接”已在本期实现；多实例共享并发计数按二期设计落地；
 - HTTP `response_handling` 为一期描述性元数据，规则化脱敏属二期。
 
 ## License
