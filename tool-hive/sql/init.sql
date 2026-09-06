@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS management_account_auth_state (
     update_by                  VARCHAR(32)
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_account_auth_state_account'
+    ) THEN
+        ALTER TABLE management_account_auth_state
+            ADD CONSTRAINT fk_management_account_auth_state_account
+            FOREIGN KEY (account_id) REFERENCES management_account(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 COMMENT ON TABLE management_account_auth_state IS '管理账号认证与登录安全状态（与 management_account 1:1）';
 COMMENT ON COLUMN management_account_auth_state.account_id IS '账号 ID（主键，与 management_account.id 一一对应）';
 COMMENT ON COLUMN management_account_auth_state.password_hash IS '密码哈希';
@@ -137,6 +149,26 @@ CREATE TABLE IF NOT EXISTS management_account_role (
     update_by  VARCHAR(32),
     CONSTRAINT uq_management_account_role UNIQUE (account_id, role_id)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_account_role_account'
+    ) THEN
+        ALTER TABLE management_account_role
+            ADD CONSTRAINT fk_management_account_role_account
+            FOREIGN KEY (account_id) REFERENCES management_account(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_account_role_role'
+    ) THEN
+        ALTER TABLE management_account_role
+            ADD CONSTRAINT fk_management_account_role_role
+            FOREIGN KEY (role_id) REFERENCES management_role(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_management_account_role_account_id
     ON management_account_role (account_id);
@@ -241,6 +273,27 @@ CREATE TABLE IF NOT EXISTS management_role_operation (
     CONSTRAINT uq_management_role_operation UNIQUE (role_id, operation_code)
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_role_operation_role'
+    ) THEN
+        ALTER TABLE management_role_operation
+            ADD CONSTRAINT fk_management_role_operation_role
+            FOREIGN KEY (role_id) REFERENCES management_role(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_role_operation_operation'
+    ) THEN
+        ALTER TABLE management_role_operation
+            ADD CONSTRAINT fk_management_role_operation_operation
+            FOREIGN KEY (operation_code)
+            REFERENCES management_operation(operation_code) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_management_role_operation_role_id
     ON management_role_operation (role_id);
 CREATE INDEX IF NOT EXISTS idx_management_role_operation_operation_code
@@ -267,6 +320,19 @@ CREATE TABLE IF NOT EXISTS management_account_password_history (
     create_by      VARCHAR(32),
     update_by      VARCHAR(32)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_management_account_password_history_account'
+    ) THEN
+        ALTER TABLE management_account_password_history
+            ADD CONSTRAINT fk_management_account_password_history_account
+            FOREIGN KEY (account_id)
+            REFERENCES management_account(id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_management_account_password_history_account_id
     ON management_account_password_history (account_id);
@@ -374,6 +440,18 @@ CREATE TABLE IF NOT EXISTS caller_runtime_policy (
     CONSTRAINT uq_caller_runtime_policy_system UNIQUE (system_id)
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_caller_runtime_policy_system'
+    ) THEN
+        ALTER TABLE caller_runtime_policy
+            ADD CONSTRAINT fk_caller_runtime_policy_system
+            FOREIGN KEY (system_id) REFERENCES caller_system(system_id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_caller_runtime_policy_system_id
     ON caller_runtime_policy (system_id);
 
@@ -405,13 +483,25 @@ CREATE TABLE IF NOT EXISTS caller_tool_scope (
     update_by     VARCHAR(32)
 );
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_caller_tool_scope_system'
+    ) THEN
+        ALTER TABLE caller_tool_scope
+            ADD CONSTRAINT fk_caller_tool_scope_system
+            FOREIGN KEY (system_id) REFERENCES caller_system(system_id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_system_id
     ON caller_tool_scope (system_id);
 CREATE INDEX IF NOT EXISTS idx_caller_tool_scope_code
     ON caller_tool_scope (scope_code);
 
 COMMENT ON TABLE caller_tool_scope IS '调用系统可访问的工具/能力包范围';
-COMMENT ON COLUMN caller_tool_scope.scope_type IS '范围类型：capability（能力包）| tool（工具）';
+COMMENT ON COLUMN caller_tool_scope.scope_type IS '范围类型：capability（能力包）| namespace（命名空间）| tool（工具）';
 COMMENT ON COLUMN caller_tool_scope.scope_code IS '工具或能力包编码';
 COMMENT ON COLUMN caller_tool_scope.status IS '状态：active | disabled';
 
@@ -435,6 +525,18 @@ CREATE TABLE IF NOT EXISTS caller_public_key (
     update_by      VARCHAR(32),
     CONSTRAINT uq_caller_public_key_key_id UNIQUE (key_id)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_caller_public_key_system'
+    ) THEN
+        ALTER TABLE caller_public_key
+            ADD CONSTRAINT fk_caller_public_key_system
+            FOREIGN KEY (system_id) REFERENCES caller_system(system_id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_caller_public_key_key_id
     ON caller_public_key (key_id);
@@ -474,6 +576,18 @@ CREATE TABLE IF NOT EXISTS caller_ip_rule (
     create_by  VARCHAR(32),
     update_by  VARCHAR(32)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_caller_ip_rule_system'
+    ) THEN
+        ALTER TABLE caller_ip_rule
+            ADD CONSTRAINT fk_caller_ip_rule_system
+            FOREIGN KEY (system_id) REFERENCES caller_system(system_id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_caller_ip_rule_system_id
     ON caller_ip_rule (system_id);

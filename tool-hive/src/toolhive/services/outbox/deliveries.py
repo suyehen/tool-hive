@@ -9,6 +9,9 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 
+from sqlalchemy import select
+
+from toolhive.models.catalog_tool_version import CatalogToolVersion
 from toolhive.models.outbox_event import OutboxEvent
 
 logger = logging.getLogger(__name__)
@@ -76,14 +79,21 @@ class ChromaIndexDelivery(DeliveryTarget):
             raise DeterministicDeliveryError(
                 f"未知事件类型: {event.event_type}"
             )
-        if event.event_type == "catalog.version.changed":
-            tool_id = (event.payload or {}).get("tool_id")
-        else:
-            tool_id = event.object_id
-        if not tool_id:
-            raise DeterministicDeliveryError("事件缺少 tool_id")
         try:
             async with database.async_session_factory() as session:
+                if event.event_type == "catalog.version.changed":
+                    # 优先读取 payload；旧事件缺少 tool_id 时按版本实体回补
+                    tool_id = (event.payload or {}).get("tool_id")
+                    if not tool_id:
+                        tool_id = await session.scalar(
+                            select(CatalogToolVersion.tool_id).where(
+                                CatalogToolVersion.id == event.object_id
+                            )
+                        )
+                else:
+                    tool_id = event.object_id
+                if not tool_id:
+                    raise DeterministicDeliveryError("事件缺少 tool_id")
                 await RetrievalService(session).sync_tool(tool_id)
             logger.info(
                 "chroma delivery succeeded event=%s tool_id=%s",

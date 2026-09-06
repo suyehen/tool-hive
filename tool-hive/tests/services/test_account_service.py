@@ -293,6 +293,7 @@ async def test_update_profile_updates_fields_with_audit():
     assert updated.real_name == "Alice2"
     assert updated.email == "a@b.com"
     assert updated.row_version == 4
+    db.refresh.assert_awaited_once_with(account, with_for_update=True)
     records = [
         call.args[0] for call in db.add.call_args_list
         if isinstance(call.args[0], ManagementAuditLog)

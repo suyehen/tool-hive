@@ -15,14 +15,21 @@ export default function ReviewsPage() {
   const [items, setItems] = useState<PendingReviewItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [action, setAction] = useState<'approve' | 'reject' | null>(null);
   const [target, setTarget] = useState<PendingReviewItem | null>(null);
   const [comment, setComment] = useState('');
 
-  const fetchItems = async () => {
+  const fetchItems = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const { items: list, total: t } = await listPendingReviews(0, 100);
+      const { items: list, total: t } = await listPendingReviews(
+        (currentPage - 1) * currentSize,
+        currentSize,
+      );
       setItems(list);
       setTotal(t);
     } catch {
@@ -95,13 +102,26 @@ export default function ReviewsPage() {
   return (
     <div>
       <Title level={4}>工具审核</Title>
-      <Button icon={<ReloadOutlined />} style={{ marginBottom: 16 }} onClick={fetchItems}>刷新</Button>
+      <Button icon={<ReloadOutlined />} style={{ marginBottom: 16 }} onClick={() => fetchItems()}>刷新</Button>
       <Table
         rowKey="version_id"
         loading={loading}
         columns={columns}
         dataSource={items}
-        pagination={{ total, pageSize: 100, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchItems(nextPage, nextSize);
+        }}
       />
       <Modal
         title={action === 'approve' ? '审核通过' : '审核驳回'}

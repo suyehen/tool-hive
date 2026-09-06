@@ -125,6 +125,9 @@ class CatalogCapabilityService:
         pack = await self.get_pack(pack_id)
         if pack.status == CatalogObjectStatus.ARCHIVED:
             raise ConflictError("已归档的能力包不可修改")
+        if expected_row_version is not None:
+            # 加锁刷新能力包行后比对版本，防止并发覆盖
+            await self.db.refresh(pack, with_for_update=True)
         if (
             expected_row_version is not None
             and pack.row_version != expected_row_version

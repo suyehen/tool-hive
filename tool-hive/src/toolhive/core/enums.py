@@ -67,10 +67,11 @@ class IPRuleStatus(StrEnum):
 
 
 class ToolScopeType(StrEnum):
-    """工具范围类型：能力包或具体工具。"""
+    """工具范围类型：能力包、具体工具或命名空间。"""
 
     CAPABILITY = "capability"
     TOOL = "tool"
+    NAMESPACE = "namespace"
 
 
 class ToolScopeStatus(StrEnum):

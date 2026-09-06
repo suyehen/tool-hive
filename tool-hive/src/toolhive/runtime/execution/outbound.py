@@ -27,6 +27,22 @@ _CLOUD_METADATA_ADDRESSES = {
 }
 
 
+def pin_outbound_url(
+    url: str, address: str, host: str,
+) -> tuple[str, dict[str, str]]:
+    """将 https URL 的目标替换为固定 IP，同时保留原域名 Host 头。"""
+    prefix = f"https://{host}"
+    if not url.startswith(prefix):
+        raise RuntimeApiError(
+            RUNTIME_PROVIDER_ERROR,
+            f"出站 URL 与目标域名不一致: {host}",
+            500,
+        )
+    address_part = f"[{address}]" if ":" in address else address
+    remainder = url[len(prefix):]
+    return f"https://{address_part}{remainder}", {"Host": host}
+
+
 @dataclass
 class OutboundRequest:
     """经过白名单校验的受控出站请求。"""

@@ -128,6 +128,7 @@ async def test_save_runtime_policy_updates_existing() -> None:
 
     assert policy.row_version == 3
     assert policy.qps_limit == 20
+    db.refresh.assert_awaited_once_with(existing, with_for_update=True)
     # 更新时写入修改时间与当前操作人 ID
     assert policy.update_time is not None
     assert policy.update_by == "acc-9"

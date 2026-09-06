@@ -31,6 +31,9 @@ const keyStatusLabel: Record<string, string> = {
 const ruleStatusLabel: Record<string, string> = {
   active: '已启用', disabled: '已停用',
 };
+const scopeTypeLabel: Record<string, string> = {
+  tool: '工具', capability: '能力包', namespace: '命名空间',
+};
 
 const effectiveStateTag: Record<string, { text: string; color: string }> = {
   not_started: { text: '未生效', color: 'blue' },
@@ -62,6 +65,8 @@ export default function CallerSystemListPage() {
   const [systems, setSystems] = useState<CallerSystemItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [editOpen, setEditOpen] = useState(false);
@@ -86,18 +91,24 @@ export default function CallerSystemListPage() {
     keyword?: string;
     status?: string;
     environment?: string;
-  }) => {
+  }, targetPage?: number, targetSize?: number) => {
     // 未传 override 时使用当前筛选状态；传了则完全以 override 为准（重置场景）
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     const kw = override === undefined ? keyword : (override.keyword ?? '');
     const st = override === undefined ? statusFilter : override.status;
     const env = override === undefined ? envFilter : override.environment;
     setLoading(true);
     try {
-      const { items, total: t } = await listCallerSystems(0, 50, {
+      const { items, total: t } = await listCallerSystems(
+        (currentPage - 1) * currentSize,
+        currentSize,
+        {
         keyword: kw.trim() || undefined,
         status: st,
         environment: env,
-      });
+        },
+      );
       setSystems(items);
       setTotal(t);
     } catch {
@@ -528,14 +539,14 @@ export default function CallerSystemListPage() {
           allowClear
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          onPressEnter={() => fetchSystems()}
+          onPressEnter={() => { setPage(1); fetchSystems(undefined, 1); }}
         />
         <Select
           placeholder="状态"
           style={{ width: 130 }}
           allowClear
           value={statusFilter}
-          onChange={setStatusFilter}
+          onChange={(v) => { setStatusFilter(v); setPage(1); }}
           options={Object.keys(statusLabel).map((s) => ({ label: statusLabel[s], value: s }))}
         />
         <Select
@@ -543,25 +554,48 @@ export default function CallerSystemListPage() {
           style={{ width: 110 }}
           allowClear
           value={envFilter}
-          onChange={setEnvFilter}
+          onChange={(v) => { setEnvFilter(v); setPage(1); }}
           options={[
             { label: '开发', value: 'development' },
             { label: '测试', value: 'staging' },
             { label: '生产', value: 'production' },
           ]}
         />
-        <Button type="primary" onClick={() => fetchSystems()}>查询</Button>
+        <Button type="primary" onClick={() => { setPage(1); fetchSystems(undefined, 1); }}>查询</Button>
         <Button onClick={() => {
           setKeyword('');
           setStatusFilter(undefined);
           setEnvFilter(undefined);
-          fetchSystems({ keyword: '', status: undefined, environment: undefined });
+          setPage(1);
+          fetchSystems(
+            { keyword: '', status: undefined, environment: undefined },
+            1,
+          );
         }}>
           重置
         </Button>
       </Space>
 
-      <Table columns={columns} dataSource={systems} rowKey="id" loading={loading} />
+      <Table
+        columns={columns}
+        dataSource={systems}
+        rowKey="id"
+        loading={loading}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 50;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchSystems(undefined, nextPage, nextSize);
+        }}
+      />
 
       <Modal
         title="登记调用系统"
@@ -797,7 +831,7 @@ export default function CallerSystemListPage() {
                     columns={[
                       {
                         title: '类型', dataIndex: 'scope_type', key: 'scope_type', width: 100,
-                        render: (v) => (v === 'capability' ? <Tag>能力包</Tag> : <Tag color="blue">工具</Tag>),
+                        render: (v) => <Tag color="blue">{scopeTypeLabel[v] || v}</Tag>,
                       },
                       {
                         title: '编码', dataIndex: 'scope_code', key: 'scope_code',
@@ -838,11 +872,12 @@ export default function CallerSystemListPage() {
                         options={[
                           { label: '工具', value: 'tool' },
                           { label: '能力包', value: 'capability' },
+                          { label: '命名空间', value: 'namespace' },
                         ]}
                       />
                     </Form.Item>
                     <Form.Item name="scope_code" rules={[{ required: true }]}>
-                      <Input placeholder="工具/能力包编码" style={{ width: 220 }} />
+                      <Input placeholder="工具/能力包/命名空间编码" style={{ width: 220 }} />
                     </Form.Item>
                     <Form.Item name="status" label="状态" rules={[{ required: true }]} initialValue="active">
                       <Select

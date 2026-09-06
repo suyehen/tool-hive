@@ -179,6 +179,9 @@ class CatalogToolService:
         tool = await self.get_tool(tool_id)
         if tool.status == CatalogObjectStatus.ARCHIVED:
             raise ConflictError("已归档的工具不可修改")
+        if expected_row_version is not None:
+            # 加锁刷新工具行后比对版本，防止并发覆盖
+            await self.db.refresh(tool, with_for_update=True)
         if (
             expected_row_version is not None
             and tool.row_version != expected_row_version

@@ -77,6 +77,16 @@ async def _load_detail(
     return version, binding, provider, tool.default_version_id == version.id
 
 
+async def _require_version_owned(
+    db: AsyncSession, tool_id: str, version_id: str,
+):
+    """校验版本归属 URL 中的工具，防止错误父路径访问或修改其他工具版本。"""
+    version = await CatalogVersionService(db).get_version(version_id)
+    if version.tool_id != tool_id:
+        raise NotFoundError("工具版本不存在")
+    return version
+
+
 @router.get("/{tool_id}/versions", response_model=list[ToolVersionResponse])
 async def list_versions(
     tool_id: str,
@@ -144,6 +154,7 @@ async def get_version(
     _account=Depends(require_operation(OperationCode.TOOL_VIEW)),
 ):
     """查询版本详情。"""
+    await _require_version_owned(db, tool_id, version_id)
     return await _build_response(db, version_id)
 
 
@@ -160,6 +171,7 @@ async def update_version(
     """编辑草稿 / 驳回状态版本。"""
     svc = CatalogVersionService(db)
     try:
+        await _require_version_owned(db, tool_id, version_id)
         await svc.update_version(
             version_id,
             input_schema=body.input_schema,
@@ -194,6 +206,7 @@ async def submit_review(
     """送审：草稿 / 驳回 → 待审核。"""
     svc = CatalogVersionService(db)
     try:
+        await _require_version_owned(db, tool_id, version_id)
         await svc.submit_review(version_id, body.comment if body else None)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -215,6 +228,7 @@ async def publish_version(
     """发布版本（首个发布必须设为默认）。"""
     svc = CatalogVersionService(db)
     try:
+        await _require_version_owned(db, tool_id, version_id)
         await svc.publish(
             version_id, set_default=body.set_default, comment=body.comment,
         )
@@ -258,7 +272,7 @@ async def disable_version(
 ):
     """停用版本（在途请求放行完成）。"""
     return await _transition(
-        db, version_id, "disable", body.comment if body else None,
+        db, tool_id, version_id, "disable", body.comment if body else None,
     )
 
 
@@ -274,7 +288,7 @@ async def enable_version(
 ):
     """重新启用版本。"""
     return await _transition(
-        db, version_id, "enable", body.comment if body else None,
+        db, tool_id, version_id, "enable", body.comment if body else None,
     )
 
 
@@ -290,7 +304,7 @@ async def withdraw_version(
 ):
     """撤回版本（不可直接恢复运行）。"""
     return await _transition(
-        db, version_id, "withdraw", body.comment if body else None,
+        db, tool_id, version_id, "withdraw", body.comment if body else None,
     )
 
 
@@ -306,7 +320,7 @@ async def archive_version(
 ):
     """归档版本（终态，不可恢复）。"""
     return await _transition(
-        db, version_id, "archive", body.comment if body else None,
+        db, tool_id, version_id, "archive", body.comment if body else None,
     )
 
 
@@ -342,11 +356,16 @@ async def _build_response(db: AsyncSession, version_id: str) -> ToolVersionRespo
 
 
 async def _transition(
-    db: AsyncSession, version_id: str, action: str, comment: str | None,
+    db: AsyncSession,
+    tool_id: str,
+    version_id: str,
+    action: str,
+    comment: str | None,
 ) -> ToolVersionResponse:
     """执行版本状态动作并统一错误映射。"""
     svc = CatalogVersionService(db)
     try:
+        await _require_version_owned(db, tool_id, version_id)
         await getattr(svc, action)(version_id, comment)
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

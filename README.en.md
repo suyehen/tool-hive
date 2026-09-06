@@ -7,12 +7,12 @@
 <p align="center">
   <a href="tool-hive/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/Docs-中文-red" alt="Chinese Docs"></a>
-  <a href="docs/一期功能/验收报告/一期验收报告.md"><img src="https://img.shields.io/badge/Phase%201-Passed-brightgreen" alt="Phase 1 Acceptance"></a>
+  <a href="docs/一期功能/验收报告/v1.0/一期验收报告.md"><img src="https://img.shields.io/badge/Phase%201-Passed-brightgreen" alt="Phase 1 Acceptance"></a>
 </p>
 
 ToolHive is a unified tool platform for agents, business systems, and other service callers. External capabilities are registered as governed tools. Before execution, ToolHive authenticates the caller, evaluates tool-call policy, validates arguments, and executes approved requests, so an LLM/agent decides *what to call* without touching target URLs, HTTP methods, or credentials.
 
-> Status: Phase 1 is complete and accepted (2026-09-02). See the [Phase 1 acceptance report](docs/一期功能/验收报告/一期验收报告.md).
+> Status: Phase 1 is complete and accepted (2026-09-02). See the [Phase 1 acceptance report](docs/一期功能/验收报告/v1.0/一期验收报告.md).
 
 ## Key Features
 
@@ -94,7 +94,7 @@ In production, Nginx serves `frontend/dist` under `/admin/**`. See [deploy/READM
 ## Documentation
 
 - [Overall functionality & architecture](docs/ToolHive总体功能与架构说明.md)
-- Phase 1: [goals](docs/一期功能/一期目标.md) · [frozen design](docs/一期功能/一期下半设计冻结.md) · [development notes](docs/一期功能/一期开发完成情况.md) · [acceptance report](docs/一期功能/验收报告/一期验收报告.md)
+- Phase 1: [goals](docs/一期功能/一期目标.md) · [frozen design](docs/一期功能/一期下半设计冻结.md) · [development notes](docs/一期功能/一期开发完成情况.md) · [acceptance report](docs/一期功能/验收报告/v1.0/一期验收报告.md)
 - Phase 2: [goals](docs/二期功能/二期目标.md)
 - Deployment: [deploy/README.md](deploy/README.md)
 

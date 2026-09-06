@@ -7,12 +7,12 @@
 <p align="center">
   <a href="tool-hive/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="README.en.md"><img src="https://img.shields.io/badge/Docs-English-blue" alt="English Docs"></a>
-  <a href="docs/一期功能/验收报告/一期验收报告.md"><img src="https://img.shields.io/badge/Phase%201-Passed-brightgreen" alt="Phase 1 Acceptance"></a>
+  <a href="docs/一期功能/验收报告/v1.0/一期验收报告.md"><img src="https://img.shields.io/badge/Phase%201-Passed-brightgreen" alt="Phase 1 Acceptance"></a>
 </p>
 
 ToolHive 是面向 Agent、业务系统及其他服务调用方的统一工具平台。平台把外部系统能力登记为受控工具，在调用前完成调用方认证、工具调用控制、参数校验与受控执行，让 LLM/Agent 只负责“决定调用什么”，不直接接触目标地址、HTTP 方法与凭据。
 
-> 状态：一期功能已完成并通过验收（2026-09-02），见 [一期验收报告](docs/一期功能/验收报告/一期验收报告.md)。
+> 状态：一期功能已完成并通过验收（2026-09-02），见 [一期验收报告](docs/一期功能/验收报告/v1.0/一期验收报告.md)。
 
 ## 主要能力
 
@@ -94,7 +94,7 @@ npm run build    # 产物输出到 frontend/dist/
 ## 文档索引
 
 - [总体功能与架构说明](docs/ToolHive总体功能与架构说明.md)
-- 一期： [一期目标](docs/一期功能/一期目标.md) · [设计冻结](docs/一期功能/一期下半设计冻结.md) · [开发完成情况](docs/一期功能/一期开发完成情况.md) · [验收报告](docs/一期功能/验收报告/一期验收报告.md)
+- 一期： [一期目标](docs/一期功能/一期目标.md) · [设计冻结](docs/一期功能/一期下半设计冻结.md) · [开发完成情况](docs/一期功能/一期开发完成情况.md) · [验收报告](docs/一期功能/验收报告/v1.0/一期验收报告.md)
 - 二期：[二期目标](docs/二期功能/二期目标.md)
 - 部署：[deploy/README.md](deploy/README.md)
 

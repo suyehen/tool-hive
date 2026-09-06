@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from toolhive.core.enums import CatalogObjectStatus
 from toolhive.models.catalog_provider import CatalogProvider
 from toolhive.runtime.execution.health import check_provider_health
@@ -37,7 +39,7 @@ async def test_health_builtin_skips() -> None:
 async def test_health_success() -> None:
     """解析与连接均成功时返回可达。"""
     client_mock = AsyncMock()
-    client_mock.get = AsyncMock()
+    client_mock.get = AsyncMock(return_value=httpx.Response(200, text="ok"))
     cm = AsyncMock()
     cm.__aenter__.return_value = client_mock
     cm.__aexit__.return_value = False
@@ -55,6 +57,30 @@ async def test_health_success() -> None:
     ):
         result = await check_provider_health(_provider())
     assert result["healthy"] is True
+
+
+async def test_health_http_error_status_unhealthy() -> None:
+    """目标返回 500/404 时健康检查必须判为不可达。"""
+    client_mock = AsyncMock()
+    client_mock.get = AsyncMock(return_value=httpx.Response(500, text="boom"))
+    cm = AsyncMock()
+    cm.__aenter__.return_value = client_mock
+    cm.__aexit__.return_value = False
+    factory = MagicMock(return_value=cm)
+    with (
+        patch(
+            "toolhive.runtime.execution.health.resolve_host",
+            return_value=[],
+        ),
+        patch(
+            "toolhive.runtime.execution.health.validate_resolved_addresses",
+            new=MagicMock(),
+        ),
+        patch("toolhive.runtime.execution.health.httpx.AsyncClient", factory),
+    ):
+        result = await check_provider_health(_provider())
+    assert result["healthy"] is False
+    assert "500" in result["detail"]
 
 
 async def test_health_dns_failure() -> None:

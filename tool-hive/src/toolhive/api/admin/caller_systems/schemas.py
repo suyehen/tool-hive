@@ -153,8 +153,8 @@ class RuntimePolicyResponse(BaseModel):
 
 class ToolScopeItemRequest(BaseModel):
     scope_type: str = Field(
-        default="tool", pattern="^(capability|tool)$",
-        description="范围类型：capability（能力包）| tool（工具）",
+        default="tool", pattern="^(capability|namespace|tool)$",
+        description="范围类型：capability（能力包）| namespace（命名空间）| tool（工具）",
     )
     scope_code: str = Field(min_length=1, max_length=256)
     status: str = Field(

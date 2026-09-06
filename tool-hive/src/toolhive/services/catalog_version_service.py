@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from toolhive.core.enums import (
     CatalogHistoryAction,
+    CatalogObjectStatus,
     ProviderType,
     ToolVersionStatus,
 )
@@ -27,6 +28,24 @@ from toolhive.services.catalog_common import validate_version
 from toolhive.services.catalog_events import emit_catalog_index_event
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_version_changed(
+    db: AsyncSession, version: CatalogToolVersion,
+) -> None:
+    """统一发布版本索引事件，始终携带 tool_id 供 Chroma 投递使用。"""
+    emit_catalog_index_event(
+        db,
+        event_type="catalog.version.changed",
+        object_type="tool_version",
+        object_id=version.id,
+        object_version=str(version.row_version),
+        payload={
+            "tool_id": version.tool_id,
+            "version": version.version,
+            "status": version.status,
+        },
+    )
 
 
 class CatalogVersionService:
@@ -151,6 +170,8 @@ class CatalogVersionService:
         tool = await self.db.get(CatalogTool, tool_id)
         if tool is None:
             raise NotFoundError(f"工具不存在: {tool_id}")
+        if tool.status == CatalogObjectStatus.ARCHIVED:
+            raise ConflictError("已归档的工具不可创建新版本")
         ver = validate_version(version)
         existing = await self.db.scalar(
             select(CatalogToolVersion).where(
@@ -181,14 +202,8 @@ class CatalogVersionService:
             object_id=new_version.id,
             after_summary={"tool_id": tool_id, "version": ver},
         )
-        emit_catalog_index_event(
-            self.db,
-            event_type="catalog.version.changed",
-            object_type="tool_version",
-            object_id=new_version.id,
-            object_version=str(new_version.row_version),
-            payload={"tool_id": tool_id, "version": ver, "status": new_version.status},
-        )
+        # 发布版本索引事件：创建草稿也需要同步工具文档元数据
+        _emit_version_changed(self.db, new_version)
         logger.info("catalog version created tool_id=%s version=%s", tool_id, ver)
         return new_version
 
@@ -211,6 +226,9 @@ class CatalogVersionService:
             ToolVersionStatus.REJECTED,
         ):
             raise ConflictError("只有草稿或驳回状态的版本可以编辑")
+        if expected_row_version is not None:
+            # 加锁刷新版本行后比对版本，防止并发覆盖
+            await self.db.refresh(version, with_for_update=True)
         if (
             expected_row_version is not None
             and version.row_version != expected_row_version
@@ -243,13 +261,8 @@ class CatalogVersionService:
             object_id=version_id,
             after_summary={"version": version.version, "status": version.status},
         )
-        emit_catalog_index_event(
-            self.db,
-            event_type="catalog.version.changed",
-            object_type="tool_version",
-            object_id=version_id,
-            object_version=str(version.row_version),
-        )
+        # 编辑版本后发布索引事件，刷新工具文档中的版本/状态信息
+        _emit_version_changed(self.db, version)
         return version
 
     # ═════════════════════════════════════════════════════════════
@@ -262,6 +275,9 @@ class CatalogVersionService:
     ) -> CatalogToolVersion:
         """送审：草稿 / 驳回 → 待审核；要求 Schema 与执行绑定齐全。"""
         version = await self.get_version(version_id)
+        tool = await self._get_tool(version.tool_id)
+        if tool.status == CatalogObjectStatus.ARCHIVED:
+            raise ConflictError("已归档工具下的版本不可送审")
         if version.status not in (
             ToolVersionStatus.DRAFT,
             ToolVersionStatus.REJECTED,
@@ -336,6 +352,8 @@ class CatalogVersionService:
         if version.status != ToolVersionStatus.APPROVED:
             raise ConflictError("只有已通过审核的版本可以发布")
         tool = await self._get_tool(version.tool_id)
+        if tool.status == CatalogObjectStatus.ARCHIVED:
+            raise ConflictError("已归档工具下的版本不可发布")
         if set_default:
             if tool.default_version_id != version.id:
                 tool.default_version_id = version.id
@@ -380,13 +398,8 @@ class CatalogVersionService:
             object_id=version_id,
             after_summary={"tool_id": tool_id, "version": version.version},
         )
-        emit_catalog_index_event(
-            self.db,
-            event_type="catalog.version.changed",
-            object_type="tool_version",
-            object_id=version_id,
-            object_version=str(version.row_version),
-        )
+        # 切换默认版本后发布索引事件，确保检索结果使用最新默认版本
+        _emit_version_changed(self.db, version)
         return version
 
     @transactional()
@@ -523,6 +536,18 @@ class CatalogVersionService:
                 )
             if not path_template.startswith("/"):
                 raise ValidationError("http 类型绑定路径必须以 / 开头")
+        timeout_seconds = binding.get("timeout_seconds")
+        if timeout_seconds is not None and (
+            not isinstance(timeout_seconds, int)
+            or not (1 <= timeout_seconds <= 300)
+        ):
+            raise ValidationError("timeout_seconds 必须在 1-300 之间")
+        retry_max = binding.get("retry_max")
+        if retry_max is not None and (
+            not isinstance(retry_max, int)
+            or not (0 <= retry_max <= 10)
+        ):
+            raise ValidationError("retry_max 必须在 0-10 之间")
         return provider, method, path_template
 
     async def _create_binding(
@@ -631,11 +656,5 @@ class CatalogVersionService:
             after_summary={"status": version.status},
             reason=comment,
         )
-        emit_catalog_index_event(
-            self.db,
-            event_type="catalog.version.changed",
-            object_type="tool_version",
-            object_id=version.id,
-            object_version=str(version.row_version),
-            payload={"status": version.status},
-        )
+        # 状态流转后发布索引事件，始终携带 tool_id 保证投递可执行
+        _emit_version_changed(self.db, version)

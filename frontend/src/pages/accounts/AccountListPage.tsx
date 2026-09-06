@@ -29,6 +29,8 @@ export default function AccountListPage() {
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [editOpen, setEditOpen] = useState(false);
@@ -45,22 +47,28 @@ export default function AccountListPage() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [department, setDepartment] = useState('');
 
-  const fetchAccounts = async (override?: {
+  const fetchAccounts = async (targetPage?: number, targetSize?: number, override?: {
     keyword?: string;
     status?: string;
     department?: string;
   }) => {
     // 未传 override 时使用当前筛选状态；传了则完全以 override 为准（重置场景）
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     const kw = override === undefined ? keyword : (override.keyword ?? '');
     const st = override === undefined ? statusFilter : override.status;
     const dept = override === undefined ? department : (override.department ?? '');
     setLoading(true);
     try {
-      const { items, total: t } = await listAccounts(0, 50, {
+      const { items, total: t } = await listAccounts(
+        (currentPage - 1) * currentSize,
+        currentSize,
+        {
         keyword: kw.trim() || undefined,
         status: st,
         department: dept.trim() || undefined,
-      });
+        },
+      );
       setAccounts(items);
       setTotal(t);
     } catch {
@@ -424,14 +432,14 @@ export default function AccountListPage() {
           allowClear
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          onPressEnter={() => fetchAccounts()}
+          onPressEnter={() => { setPage(1); fetchAccounts(1); }}
         />
         <Select
           placeholder="状态"
           style={{ width: 140 }}
           allowClear
           value={statusFilter}
-          onChange={setStatusFilter}
+          onChange={(v) => { setStatusFilter(v); setPage(1); }}
           options={Object.keys(statusLabel).map((s) => ({ label: statusLabel[s], value: s }))}
         />
         <Input
@@ -440,14 +448,15 @@ export default function AccountListPage() {
           allowClear
           value={department}
           onChange={(e) => setDepartment(e.target.value)}
-          onPressEnter={() => fetchAccounts()}
+          onPressEnter={() => { setPage(1); fetchAccounts(1); }}
         />
-        <Button type="primary" onClick={() => fetchAccounts()}>查询</Button>
+        <Button type="primary" onClick={() => { setPage(1); fetchAccounts(1); }}>查询</Button>
         <Button onClick={() => {
           setKeyword('');
           setStatusFilter(undefined);
           setDepartment('');
-          fetchAccounts({ keyword: '', status: undefined, department: '' });
+          setPage(1);
+          fetchAccounts(1, undefined, { keyword: '', status: undefined, department: '' });
         }}>
           重置
         </Button>
@@ -460,7 +469,26 @@ export default function AccountListPage() {
         </div>
       )}
 
-      <Table columns={columns} dataSource={accounts} rowKey="id" loading={loading} />
+      <Table
+        columns={columns}
+        dataSource={accounts}
+        rowKey="id"
+        loading={loading}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 50;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchAccounts(nextPage, nextSize);
+        }}
+      />
 
       <Modal
         title="创建账号"

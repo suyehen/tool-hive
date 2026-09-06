@@ -72,6 +72,28 @@ async def test_chroma_delivery_syncs_tool() -> None:
     retrieval_cls.return_value.sync_tool.assert_awaited_once_with("tool-1")
 
 
+async def test_chroma_delivery_resolves_missing_tool_id_from_version() -> None:
+    """版本事件缺少 tool_id 时按版本实体回补并完成投递。"""
+    delivery = ChromaIndexDelivery()
+    mock_factory = _FakeFactory()
+    mock_factory.session.scalar = AsyncMock(return_value="tool-1")
+    with (
+        patch(
+            "toolhive.infrastructure.database.async_session_factory",
+            mock_factory,
+        ),
+        patch(
+            "toolhive.runtime.retrieval.service.RetrievalService"
+        ) as retrieval_cls,
+    ):
+        retrieval_cls.return_value.sync_tool = AsyncMock()
+        await delivery.deliver(
+            _event("catalog.version.changed", object_id="ver-1")
+        )
+    mock_factory.session.scalar.assert_awaited_once()
+    retrieval_cls.return_value.sync_tool.assert_awaited_once_with("tool-1")
+
+
 async def test_chroma_delivery_retries_on_index_error() -> None:
     """索引错误转为可重试 DeliveryError。"""
     delivery = ChromaIndexDelivery()

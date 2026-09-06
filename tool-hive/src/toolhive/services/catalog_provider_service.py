@@ -142,6 +142,9 @@ class CatalogProviderService:
         provider = await self.get_provider(provider_id)
         if provider.status == CatalogObjectStatus.ARCHIVED:
             raise ConflictError("已归档的 Provider 不可修改")
+        if expected_row_version is not None:
+            # 加锁刷新 Provider 行后比对版本，防止并发覆盖
+            await self.db.refresh(provider, with_for_update=True)
         if (
             expected_row_version is not None
             and provider.row_version != expected_row_version

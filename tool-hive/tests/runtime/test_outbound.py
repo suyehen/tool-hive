@@ -18,6 +18,7 @@ from toolhive.runtime.errors import (
 )
 from toolhive.runtime.execution.outbound import (
     build_outbound_request,
+    pin_outbound_url,
     resolve_host,
     validate_resolved_addresses,
 )
@@ -191,3 +192,12 @@ async def test_validate_rejects_multicast() -> None:
         validate_resolved_addresses(
             [ipaddress.ip_address("224.0.0.1")], [],
         )
+
+
+def test_pin_outbound_url_keeps_host_header() -> None:
+    """固定 IP 后 URL 指向地址，同时保留原域名 Host 头。"""
+    url, headers = pin_outbound_url(
+        "https://api.example.com:8443/v1/calc", "93.184.216.34", "api.example.com",
+    )
+    assert url == "https://93.184.216.34:8443/v1/calc"
+    assert headers == {"Host": "api.example.com"}

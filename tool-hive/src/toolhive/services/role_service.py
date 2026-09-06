@@ -155,11 +155,11 @@ class RoleService:
         if role.is_super_admin:
             raise ValidationError("不能修改超级管理员角色")
         self._ensure_role_mutable(role)
-        if (
-            expected_row_version is not None
-            and role.row_version != expected_row_version
-        ):
-            raise ConflictError("数据已被他人修改，请刷新后重试")
+        if expected_row_version is not None:
+            # 加锁刷新角色行后比对版本，防止并发覆盖
+            await self.db.refresh(role, with_for_update=True)
+            if role.row_version != expected_row_version:
+                raise ConflictError("数据已被他人修改，请刷新后重试")
         if name and name == SUPER_ADMIN_ROLE_NAME:
             raise ValidationError("内置超级管理员角色名不可使用")
 

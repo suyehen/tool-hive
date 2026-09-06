@@ -75,6 +75,8 @@ def validate_http_target_config(config: dict | None) -> dict | None:
     allowed_domains = config.get("allowed_domains")
     if not isinstance(allowed_domains, list) or not allowed_domains:
         raise ValidationError("allowed_domains 不能为空")
+    if len(allowed_domains) != 1:
+        raise ValidationError("一期 http Provider 仅支持配置一个目标域名")
     protocols = config.get("protocols") or ["https"]
     if not isinstance(protocols, list) or any(p != "https" for p in protocols):
         raise ValidationError("一期仅允许 https 协议")
@@ -83,6 +85,8 @@ def validate_http_target_config(config: dict | None) -> dict | None:
         not isinstance(p, int) or not (1 <= p <= 65535) for p in allowed_ports
     ):
         raise ValidationError("allowed_ports 必须是 1-65535 的端口号列表")
+    if len(allowed_ports) > 1:
+        raise ValidationError("一期 http Provider 仅支持配置一个目标端口")
     path_prefix = config.get("path_prefix")
     if path_prefix is not None and not str(path_prefix).startswith("/"):
         raise ValidationError("path_prefix 必须以 / 开头")

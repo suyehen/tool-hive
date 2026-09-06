@@ -16,6 +16,9 @@ from toolhive.core.enums import (
 )
 from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
+from toolhive.models.catalog_capability_pack_system import (
+    CatalogCapabilityPackSystem,
+)
 from toolhive.models.catalog_capability_pack_tool import CatalogCapabilityPackTool
 from toolhive.models.catalog_execution_binding import CatalogExecutionBinding
 from toolhive.models.catalog_provider import CatalogProvider
@@ -230,6 +233,11 @@ class CallControlService:
         pack_codes = {
             s.scope_code for s in scopes if s.scope_type == ToolScopeType.CAPABILITY
         }
+        namespace_codes = {
+            s.scope_code
+            for s in scopes
+            if s.scope_type == ToolScopeType.NAMESPACE
+        }
         all_tools = list(
             (
                 await self.db.execute(
@@ -261,6 +269,38 @@ class CallControlService:
                 )
             ).all()
             allowed_ids.update(row[0] for row in rows)
+        if namespace_codes:
+            # 命名空间范围：命名空间下非归档工具均进入候选
+            namespace_rows = (
+                await self.db.execute(
+                    select(CatalogTool.id).where(
+                        CatalogTool.namespace.in_(tuple(namespace_codes)),
+                        CatalogTool.status != CatalogObjectStatus.ARCHIVED,
+                    )
+                )
+            ).all()
+            allowed_ids.update(row[0] for row in namespace_rows)
+        # 能力包页面维护的 pack-system 授权直接参与运行判定
+        pack_system_rows = (
+            await self.db.execute(
+                select(CatalogCapabilityPackTool.tool_id)
+                .join(
+                    CatalogCapabilityPack,
+                    CatalogCapabilityPack.id
+                    == CatalogCapabilityPackTool.pack_id,
+                )
+                .join(
+                    CatalogCapabilityPackSystem,
+                    CatalogCapabilityPackSystem.pack_id
+                    == CatalogCapabilityPack.id,
+                )
+                .where(
+                    CatalogCapabilityPackSystem.system_id == system_id,
+                    CatalogCapabilityPack.status == CatalogObjectStatus.ENABLED,
+                )
+            )
+        ).all()
+        allowed_ids.update(row[0] for row in pack_system_rows)
         # 仅默认版本（PUBLISHED）参与 Discover 默认可见性
         published_ids: set[str] = set()
         if allowed_ids:
@@ -289,7 +329,7 @@ class CallControlService:
         ]
 
     async def _tool_in_scope(self, system_id: str, tool: CatalogTool) -> bool:
-        """判断工具是否在调用系统的工具 / 能力包范围内。"""
+        """判断工具是否在调用系统的工具 / 能力包 / 命名空间 / pack-system 范围内。"""
         result = await self.db.execute(
             select(CallerToolScope).where(
                 CallerToolScope.system_id == system_id,
@@ -321,7 +361,30 @@ class CallControlService:
                 )
                 if linked is not None:
                     return True
-        return False
+            if (
+                scope.scope_type == ToolScopeType.NAMESPACE
+                and scope.scope_code == tool.namespace
+            ):
+                return True
+        # 能力包页面维护的调用系统授权同样可授予包内工具访问权
+        linked = await self.db.scalar(
+            select(CatalogCapabilityPackTool.id)
+            .join(
+                CatalogCapabilityPack,
+                CatalogCapabilityPack.id == CatalogCapabilityPackTool.pack_id,
+            )
+            .join(
+                CatalogCapabilityPackSystem,
+                CatalogCapabilityPackSystem.pack_id == CatalogCapabilityPack.id,
+            )
+            .where(
+                CatalogCapabilityPackSystem.system_id == system_id,
+                CatalogCapabilityPack.status == CatalogObjectStatus.ENABLED,
+                CatalogCapabilityPackTool.tool_id == tool.id,
+            )
+            .limit(1)
+        )
+        return linked is not None
 
     async def _select_published_version(
         self, tool: CatalogTool,

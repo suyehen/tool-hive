@@ -20,6 +20,7 @@ from toolhive.models.caller_ip_rule import CallerIPRule
 from toolhive.models.caller_public_key import CallerPublicKey
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_system import CallerSystem
+from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.services.caller_system_service import (
     CallerSystemService,
     build_caller_system_filters,
@@ -100,6 +101,53 @@ async def test_enable_conditions_pass_with_valid_credentials() -> None:
     svc.get_runtime_policy = AsyncMock(return_value=_policy())
     conditions = await svc._check_enable_conditions("sys_1")
     assert conditions == []
+
+
+def test_normalize_cidr_rejects_invalid_netmask() -> None:
+    """非法 netmask 必须转为业务校验错误而非未处理异常。"""
+    with pytest.raises(ValidationError):
+        CallerSystemService._normalize_cidr("1.2.3.4/999")
+
+
+async def test_replace_tool_scopes_trim_scope_code() -> None:
+    """保存工具范围时统一 trim 编码，保证运行侧精确匹配一致。"""
+    db = AsyncMock()
+    db.add = MagicMock()
+    svc = CallerSystemService(db)
+    svc.get_by_system_id = AsyncMock()
+    svc._validate_scope_references = AsyncMock()
+    svc.list_tool_scopes = AsyncMock(return_value=[])
+
+    result = await svc.replace_tool_scopes(
+        "sys_1",
+        [{
+            "scope_type": "tool",
+            "scope_code": " math.basic.calculator ",
+            "status": "active",
+        }],
+    )
+    assert isinstance(result[0], CallerToolScope)
+    assert result[0].scope_code == "math.basic.calculator"
+
+
+async def test_replace_tool_scopes_rejects_unknown_namespace() -> None:
+    """命名空间范围必须引用真实存在的非归档工具命名空间。"""
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        return_value=MagicMock(all=MagicMock(return_value=[]))
+    )
+    svc = CallerSystemService(db)
+    svc.get_by_system_id = AsyncMock()
+
+    with pytest.raises(ValidationError):
+        await svc.replace_tool_scopes(
+            "sys_1",
+            [{
+                "scope_type": "namespace",
+                "scope_code": "missing.ns",
+                "status": "active",
+            }],
+        )
 
 
 def _generate_rsa_public_key_pem(key_size: int = 2048) -> str:

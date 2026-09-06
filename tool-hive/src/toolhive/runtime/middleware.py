@@ -25,6 +25,9 @@ from toolhive.infrastructure.redis import get_redis
 from toolhive.models.caller_runtime_policy import CallerRuntimePolicy
 from toolhive.models.caller_tool_scope import CallerToolScope
 from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
+from toolhive.models.catalog_capability_pack_system import (
+    CatalogCapabilityPackSystem,
+)
 from toolhive.models.catalog_capability_pack_tool import CatalogCapabilityPackTool
 from toolhive.models.catalog_tool import CatalogTool
 from toolhive.models.catalog_tool_version import CatalogToolVersion
@@ -306,6 +309,36 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
                 if linked is not None:
                     allowed = True
                     break
+            if (
+                scope.scope_type == ToolScopeType.NAMESPACE
+                and scope.scope_code == tool.namespace
+            ):
+                allowed = True
+                break
+        if not allowed:
+            # 能力包页面维护的 pack-system 授权同样允许执行包内工具
+            linked = await session.scalar(
+                select(CatalogCapabilityPackTool.id)
+                .join(
+                    CatalogCapabilityPack,
+                    CatalogCapabilityPack.id
+                    == CatalogCapabilityPackTool.pack_id,
+                )
+                .join(
+                    CatalogCapabilityPackSystem,
+                    CatalogCapabilityPackSystem.pack_id
+                    == CatalogCapabilityPack.id,
+                )
+                .where(
+                    CatalogCapabilityPackSystem.system_id == system_id,
+                    CatalogCapabilityPack.status
+                    == CatalogObjectStatus.ENABLED,
+                    CatalogCapabilityPackTool.tool_id == tool.id,
+                )
+                .limit(1)
+            )
+            if linked is not None:
+                allowed = True
         if not allowed:
             raise RuntimeApiError(
                 RUNTIME_SCOPE_NOT_ALLOWED,

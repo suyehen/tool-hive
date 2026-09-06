@@ -92,6 +92,8 @@ export default function ToolsPage() {
   const [items, setItems] = useState<ToolItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<ToolItem | null>(null);
@@ -114,10 +116,15 @@ export default function ToolsPage() {
   const [versionForm] = Form.useForm<VersionFormValues>();
   const [publishForm] = Form.useForm<{ set_default: boolean; comment?: string }>();
 
-  const fetchItems = async () => {
+  const fetchItems = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const { items: list, total: t } = await listTools(0, 100);
+      const { items: list, total: t } = await listTools(
+        (currentPage - 1) * currentSize,
+        currentSize,
+      );
       setItems(list);
       setTotal(t);
     } catch {
@@ -489,14 +496,27 @@ export default function ToolsPage() {
             新建工具
           </Button>
         )}
-        <Button icon={<ReloadOutlined />} onClick={fetchItems}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => fetchItems()}>刷新</Button>
       </Space>
       <Table
         rowKey="id"
         loading={loading}
         columns={toolColumns}
         dataSource={items}
-        pagination={{ total, pageSize: 100, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchItems(nextPage, nextSize);
+        }}
       />
 
       {/* 工具创建 / 编辑 */}
@@ -625,7 +645,13 @@ export default function ToolsPage() {
             </Form.Item>
           </Space.Compact>
           <Form.Item name="parameter_mapping" label="参数映射（JSON）">
-            <Input.TextArea rows={3} placeholder='{"a":"input.a","b":"input.b"}' />
+            <Input.TextArea
+              rows={3}
+              placeholder='{"a":"$.a","b":"$.b"}'
+            />
+            <Typography.Text type="secondary">
+              `$.字段名` 表示引用调用参数，其余字符串按固定值发送
+            </Typography.Text>
           </Form.Item>
           <Space size="large">
             <Form.Item name="timeout_seconds" label="超时（秒）">

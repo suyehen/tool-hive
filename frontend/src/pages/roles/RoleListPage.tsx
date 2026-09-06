@@ -38,6 +38,8 @@ export default function RoleListPage() {
   const [roles, setRoles] = useState<RoleItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [editOpen, setEditOpen] = useState(false);
@@ -58,16 +60,26 @@ export default function RoleListPage() {
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
 
-  const fetchRoles = async (override?: { keyword?: string; status?: string }) => {
+  const fetchRoles = async (
+    targetPage?: number,
+    targetSize?: number,
+    override?: { keyword?: string; status?: string },
+  ) => {
     // 未传 override 时使用当前筛选状态；传了则完全以 override 为准（重置场景）
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     const kw = override === undefined ? keyword : (override.keyword ?? '');
     const st = override === undefined ? statusFilter : override.status;
     setLoading(true);
     try {
-      const { items, total: t } = await listRoles(0, 50, {
+      const { items, total: t } = await listRoles(
+        (currentPage - 1) * currentSize,
+        currentSize,
+        {
         keyword: kw.trim() || undefined,
         status: st,
-      });
+        },
+      );
       setRoles(items);
       setTotal(t);
     } catch {
@@ -388,27 +400,47 @@ export default function RoleListPage() {
           allowClear
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          onPressEnter={() => fetchRoles()}
+          onPressEnter={() => { setPage(1); fetchRoles(1); }}
         />
         <Select
           placeholder="状态"
           style={{ width: 140 }}
           allowClear
           value={statusFilter}
-          onChange={setStatusFilter}
+          onChange={(v) => { setStatusFilter(v); setPage(1); }}
           options={Object.keys(statusLabel).map((s) => ({ label: statusLabel[s], value: s }))}
         />
-        <Button type="primary" onClick={() => fetchRoles()}>查询</Button>
+        <Button type="primary" onClick={() => { setPage(1); fetchRoles(1); }}>查询</Button>
         <Button onClick={() => {
           setKeyword('');
           setStatusFilter(undefined);
-          fetchRoles({ keyword: '', status: undefined });
+          setPage(1);
+          fetchRoles(1, undefined, { keyword: '', status: undefined });
         }}>
           重置
         </Button>
       </Space>
 
-      <Table columns={columns} dataSource={roles} rowKey="id" loading={loading} />
+      <Table
+        columns={columns}
+        dataSource={roles}
+        rowKey="id"
+        loading={loading}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 50;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchRoles(nextPage, nextSize);
+        }}
+      />
 
       <Modal
         title="创建角色"

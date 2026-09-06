@@ -25,11 +25,18 @@ export default function IndexTasksPage() {
   const [items, setItems] = useState<IndexTaskItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
-  const fetchItems = async () => {
+  const fetchItems = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const { items: list, total: t } = await listIndexTasks(0, 100);
+      const { items: list, total: t } = await listIndexTasks(
+        (currentPage - 1) * currentSize,
+        currentSize,
+      );
       setItems(list);
       setTotal(t);
     } catch {
@@ -75,13 +82,26 @@ export default function IndexTasksPage() {
   return (
     <div>
       <Title level={4}>Catalog 索引任务</Title>
-      <Button icon={<ReloadOutlined />} style={{ marginBottom: 16 }} onClick={fetchItems}>刷新</Button>
+      <Button icon={<ReloadOutlined />} style={{ marginBottom: 16 }} onClick={() => fetchItems()}>刷新</Button>
       <Table
         rowKey="delivery_id"
         loading={loading}
         columns={columns}
         dataSource={items}
-        pagination={{ total, pageSize: 100, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchItems(nextPage, nextSize);
+        }}
       />
     </div>
   );

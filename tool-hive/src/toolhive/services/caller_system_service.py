@@ -158,11 +158,11 @@ class CallerSystemService:
     ) -> CallerSystem:
         """更新调用系统主记录（仅更新显式提供的字段）。"""
         system = await self.get_by_system_id(system_id)
-        if (
-            expected_row_version is not None
-            and system.row_version != expected_row_version
-        ):
-            raise ConflictError("数据已被他人修改，请刷新后重试")
+        if expected_row_version is not None:
+            # 加锁刷新调用系统行后比对版本，防止并发覆盖
+            await self.db.refresh(system, with_for_update=True)
+            if system.row_version != expected_row_version:
+                raise ConflictError("数据已被他人修改，请刷新后重试")
 
         def _dt(value):
             return value.isoformat() if value else None
@@ -304,11 +304,11 @@ class CallerSystemService:
             )
             self.db.add(policy)
         else:
-            if (
-                expected_row_version is not None
-                and policy.row_version != expected_row_version
-            ):
-                raise ConflictError("策略已被他人修改，请刷新后重试")
+            if expected_row_version is not None:
+                # 加锁刷新运行策略行后比对版本，防止并发覆盖
+                await self.db.refresh(policy, with_for_update=True)
+                if policy.row_version != expected_row_version:
+                    raise ConflictError("策略已被他人修改，请刷新后重试")
             policy.allowed_api_patterns = json.dumps(
                 allowed_api_patterns, ensure_ascii=False,
             )
@@ -366,8 +366,14 @@ class CallerSystemService:
         pack_codes = [
             s.scope_code for s in scopes if s.scope_type == ToolScopeType.CAPABILITY
         ]
+        namespace_codes = [
+            s.scope_code
+            for s in scopes
+            if s.scope_type == ToolScopeType.NAMESPACE
+        ]
         tool_by_code: dict[str, CatalogTool] = {}
         pack_by_code: dict[str, CatalogCapabilityPack] = {}
+        namespace_state: dict[str, tuple[bool, bool]] = {}
         if tool_codes:
             result = await self.db.execute(
                 select(CatalogTool).where(
@@ -387,13 +393,45 @@ class CallerSystemService:
                 )
             )
             pack_by_code = {p.pack_code: p for p in result.scalars().all()}
+        if namespace_codes:
+            result = await self.db.execute(
+                select(CatalogTool.namespace, CatalogTool.status).where(
+                    CatalogTool.namespace.in_(namespace_codes)
+                )
+            )
+            rows = result.all()
+            grouped: dict[str, set[str]] = {}
+            for namespace, status in rows:
+                grouped.setdefault(namespace, set()).add(status)
+            namespace_state = {
+                namespace: (
+                    True,
+                    all(
+                        s == CatalogObjectStatus.ARCHIVED
+                        for s in statuses
+                    ),
+                )
+                for namespace, statuses in grouped.items()
+            }
         rows = []
         for scope in scopes:
-            ref = (
-                tool_by_code.get(scope.scope_code)
-                if scope.scope_type == ToolScopeType.TOOL
-                else pack_by_code.get(scope.scope_code)
-            )
+            if scope.scope_type == ToolScopeType.TOOL:
+                ref = tool_by_code.get(scope.scope_code)
+                archived = bool(
+                    ref is not None
+                    and ref.status == CatalogObjectStatus.ARCHIVED
+                )
+            elif scope.scope_type == ToolScopeType.CAPABILITY:
+                ref = pack_by_code.get(scope.scope_code)
+                archived = bool(
+                    ref is not None
+                    and ref.status == CatalogObjectStatus.ARCHIVED
+                )
+            else:
+                exists, archived = namespace_state.get(
+                    scope.scope_code, (False, False)
+                )
+                ref = scope.scope_code if exists else None
             rows.append(
                 {
                     "id": scope.id,
@@ -404,10 +442,7 @@ class CallerSystemService:
                     "row_version": scope.row_version,
                     "created_at": scope.create_time,
                     "reference_exists": ref is not None,
-                    "reference_archived": bool(
-                        ref is not None
-                        and ref.status == CatalogObjectStatus.ARCHIVED
-                    ),
+                    "reference_archived": archived,
                 }
             )
         return rows
@@ -443,7 +478,7 @@ class CallerSystemService:
             scope = CallerToolScope(
                 system_id=system_id,
                 scope_type=item["scope_type"],
-                scope_code=item["scope_code"],
+                scope_code=item["scope_code"].strip(),
                 status=item["status"],
                 create_time=datetime.now(UTC),
                 create_by=get_current_operator_id(),
@@ -470,6 +505,11 @@ class CallerSystemService:
             item["scope_code"].strip()
             for item in items
             if item["scope_type"] == ToolScopeType.CAPABILITY
+        ]
+        namespace_codes = [
+            item["scope_code"].strip()
+            for item in items
+            if item["scope_type"] == ToolScopeType.NAMESPACE
         ]
         if tool_codes:
             result = await self.db.execute(
@@ -505,6 +545,21 @@ class CallerSystemService:
                 if pack.status == CatalogObjectStatus.ARCHIVED:
                     raise ValidationError(
                         f"工具范围引用了已归档的能力包: {code}"
+                    )
+        if namespace_codes:
+            result = await self.db.execute(
+                select(CatalogTool.namespace)
+                .where(
+                    CatalogTool.namespace.in_(namespace_codes),
+                    CatalogTool.status != CatalogObjectStatus.ARCHIVED,
+                )
+                .distinct()
+            )
+            namespaces = {row[0] for row in result.all()}
+            for code in namespace_codes:
+                if code not in namespaces:
+                    raise ValidationError(
+                        f"命名空间范围不存在可用（非归档）工具: {code}"
                     )
 
     # ═════════════════════════════════════════════════════════════
@@ -885,13 +940,13 @@ class CallerSystemService:
                 addr = ipaddress.IPv4Address(request_ip)
                 if addr in network:
                     return True
-            except ipaddress.AddressValueError:
+            except ValueError:
                 try:
                     network = ipaddress.IPv6Network(rule.ip_cidr, strict=False)
                     addr = ipaddress.IPv6Address(request_ip)
                     if addr in network:
                         return True
-                except ipaddress.AddressValueError:
+                except ValueError:
                     continue
         return False
 
@@ -940,12 +995,12 @@ class CallerSystemService:
         try:
             net = ipaddress.IPv4Network(ip_cidr, strict=False)
             return str(net)
-        except ipaddress.AddressValueError:
+        except ValueError:
             pass
         try:
             net = ipaddress.IPv6Network(ip_cidr, strict=False)
             return str(net)
-        except ipaddress.AddressValueError:
+        except ValueError:
             raise ValidationError(f"无效的 IP/CIDR 格式: {ip_cidr}")
 
     async def _get_key(self, key_id: str) -> CallerPublicKey:

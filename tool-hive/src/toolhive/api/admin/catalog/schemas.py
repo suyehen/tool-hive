@@ -14,8 +14,8 @@ from toolhive.core.time_utils import UTCDateTime
 class ProviderTargetSecurityConfig(BaseModel):
     """http 类型 Provider 的目标安全配置。"""
 
-    allowed_domains: list[str] = Field(min_length=1)
-    allowed_ports: list[int] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(min_length=1, max_length=1)
+    allowed_ports: list[int] = Field(default_factory=list, max_length=1)
     path_prefix: str | None = None
     protocols: list[str] = Field(default_factory=lambda: ["https"])
     dns_tls_verification: bool = True

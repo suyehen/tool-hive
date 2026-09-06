@@ -43,16 +43,23 @@ export default function ProvidersPage() {
   const [items, setItems] = useState<ProviderItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<ProviderItem | null>(null);
   const [form] = Form.useForm<ProviderFormValues>();
   const [providerType, setProviderType] = useState('http');
 
-  const fetchItems = async () => {
+  const fetchItems = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const { items: list, total: t } = await listProviders(0, 100);
+      const { items: list, total: t } = await listProviders(
+        (currentPage - 1) * currentSize,
+        currentSize,
+      );
       setItems(list);
       setTotal(t);
     } catch {
@@ -191,14 +198,27 @@ export default function ProvidersPage() {
         {hasOperation('provider:create') && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建 Provider</Button>
         )}
-        <Button icon={<ReloadOutlined />} onClick={fetchItems}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => fetchItems()}>刷新</Button>
       </Space>
       <Table
         rowKey="id"
         loading={loading}
         columns={columns}
         dataSource={items}
-        pagination={{ total, pageSize: 100, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          fetchItems(nextPage, nextSize);
+        }}
       />
       <Modal
         title="新建 Provider"
@@ -225,10 +245,10 @@ export default function ProvidersPage() {
           </Form.Item>
           {providerType === 'http' && (
             <>
-              <Form.Item name="allowed_domains" label="允许域名（逗号分隔）" rules={[{ required: true, message: '必填' }]}>
+              <Form.Item name="allowed_domains" label="目标域名（一期仅支持 1 个）" rules={[{ required: true, message: '必填' }]}>
                 <Input placeholder="api.example.com" />
               </Form.Item>
-              <Form.Item name="allowed_ports" label="允许端口（逗号分隔）">
+              <Form.Item name="allowed_ports" label="目标端口（一期仅支持 1 个，默认 443）">
                 <Input placeholder="443" />
               </Form.Item>
               <Form.Item name="path_prefix" label="路径前缀">
@@ -260,10 +280,10 @@ export default function ProvidersPage() {
           </Form.Item>
           {providerType === 'http' && (
             <>
-              <Form.Item name="allowed_domains" label="允许域名（逗号分隔）" rules={[{ required: true, message: '必填' }]}>
+              <Form.Item name="allowed_domains" label="目标域名（一期仅支持 1 个）" rules={[{ required: true, message: '必填' }]}>
                 <Input />
               </Form.Item>
-              <Form.Item name="allowed_ports" label="允许端口（逗号分隔）">
+              <Form.Item name="allowed_ports" label="目标端口（一期仅支持 1 个，默认 443）">
                 <Input />
               </Form.Item>
               <Form.Item name="path_prefix" label="路径前缀">

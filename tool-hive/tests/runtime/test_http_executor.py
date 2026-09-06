@@ -18,6 +18,7 @@ from toolhive.runtime.errors import (
     RuntimeApiError,
 )
 from toolhive.runtime.execution.http_executor import HttpExecutor
+from toolhive.runtime.execution.outbound import OutboundRequest
 
 
 def _provider() -> CatalogProvider:
@@ -120,25 +121,31 @@ async def test_http_target_5xx_rejected() -> None:
 
 async def test_http_non_json_response_rejected() -> None:
     """非 JSON 响应被拒绝。"""
-    executor = HttpExecutor(_redis(), _security())
+    redis = _redis()
+    redis.incr = AsyncMock(return_value=1)
+    redis.expire = AsyncMock()
+    executor = HttpExecutor(redis, _security())
     executor._send = AsyncMock(return_value=httpx.Response(200, text="not json"))
     with _bypass_dns():
         with pytest.raises(RuntimeApiError) as exc_info:
             await executor.execute(_binding(), _provider(), {})
     assert exc_info.value.code == RUNTIME_PROVIDER_ERROR
+    redis.incr.assert_awaited_once()
 
 
 async def test_http_response_size_limited() -> None:
     """响应体超过大小上限被拒绝。"""
-    executor = HttpExecutor(
-        _redis(), _security(provider_max_response_bytes=4),
-    )
+    redis = _redis()
+    redis.incr = AsyncMock(return_value=1)
+    redis.expire = AsyncMock()
+    executor = HttpExecutor(redis, _security(provider_max_response_bytes=4))
     executor._send = AsyncMock(
         return_value=httpx.Response(200, json={"data": "x" * 100}),
     )
     with _bypass_dns():
         with pytest.raises(RuntimeApiError):
             await executor.execute(_binding(), _provider(), {})
+    redis.incr.assert_awaited_once()
 
 
 async def test_http_request_body_size_limited() -> None:
@@ -228,3 +235,61 @@ async def test_record_failure_opens_circuit_after_threshold() -> None:
     for _ in range(3):
         await executor._record_failure("prov-1")
     redis.set.assert_awaited_once()
+
+
+async def test_send_streams_and_aborts_over_response_limit() -> None:
+    """流式读取累计超过响应上限时立即中止，不完整读入响应体。"""
+    class _Response:
+        status_code = 200
+        headers = []
+        request = None
+        history = []
+
+        async def aiter_bytes(self):
+            yield b"aaa"
+            yield b"bbb"
+
+    class _StreamCM:
+        def __init__(self, response) -> None:
+            self.response = response
+
+        async def __aenter__(self):
+            return self.response
+
+        async def __aexit__(self, *exc):
+            return None
+
+    class _ClientCM:
+        def __init__(self, client) -> None:
+            self.client = client
+
+        async def __aenter__(self):
+            return self.client
+
+        async def __aexit__(self, *exc):
+            return None
+
+    client = MagicMock()
+    client.stream = MagicMock(return_value=_StreamCM(_Response()))
+    factory = MagicMock(return_value=_ClientCM(client))
+    request = OutboundRequest(
+        url="https://api.example.com/calc",
+        method="GET",
+        headers={},
+        query_params={},
+        json_body=None,
+        timeout_seconds=5,
+        host="api.example.com",
+    )
+    executor = HttpExecutor(
+        _redis(), _security(provider_max_response_bytes=4),
+    )
+    with patch(
+        "toolhive.runtime.execution.http_executor.httpx.AsyncClient",
+        factory,
+    ):
+        with pytest.raises(RuntimeApiError):
+            await executor._send(request, "93.184.216.34")
+    call_kwargs = client.stream.call_args.kwargs
+    assert call_kwargs["extensions"] == {"sni_hostname": "api.example.com"}
+    assert call_kwargs["url"].startswith("https://93.184.216.34")

@@ -22,7 +22,7 @@ class CallerToolScope(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )
     scope_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default=ToolScopeType.TOOL,
-    )  # capability | tool
+    )  # capability | namespace | tool
     scope_code: Mapped[str] = mapped_column(
         String(256), nullable=False, index=True,
     )

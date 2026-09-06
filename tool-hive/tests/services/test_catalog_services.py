@@ -289,6 +289,70 @@ async def test_create_version_requires_binding_provider_valid() -> None:
         )
 
 
+async def test_create_version_rejects_archived_tool() -> None:
+    """归档工具禁止创建新版本。"""
+    tool = _tool()
+    tool.status = CatalogObjectStatus.ARCHIVED
+    db = AsyncMock()
+    db.get = AsyncMock(side_effect=_fake_get({CatalogTool: tool}))
+    svc = CatalogVersionService(db)
+
+    with pytest.raises(ConflictError):
+        await svc.create_version("tool-1", "2.0.0")
+
+
+async def test_submit_review_rejects_archived_tool_version() -> None:
+    """归档工具下的版本禁止送审。"""
+    tool = _tool()
+    tool.status = CatalogObjectStatus.ARCHIVED
+    version = _version()
+    db = AsyncMock()
+    db.get = AsyncMock(
+        side_effect=_fake_get({CatalogTool: tool, CatalogToolVersion: version})
+    )
+    db.scalar = AsyncMock(return_value=_binding())
+    svc = CatalogVersionService(db)
+
+    with pytest.raises(ConflictError):
+        await svc.submit_review("ver-1")
+
+
+async def test_create_version_rejects_invalid_binding_limits() -> None:
+    """执行绑定超时与重试参数必须落在 Service 层允许范围。"""
+    tool = _tool()
+    provider = _provider()
+    db = AsyncMock()
+    db.get = AsyncMock(
+        side_effect=_fake_get({CatalogTool: tool, CatalogProvider: provider})
+    )
+    db.scalar = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    svc = CatalogVersionService(db)
+
+    with pytest.raises(ValidationError):
+        await svc.create_version(
+            "tool-1",
+            "1.0.1",
+            binding={
+                "provider_id": "prov-1",
+                "method": "COMPUTE",
+                "path_template": "builtin://math/add",
+                "retry_max": -1,
+            },
+        )
+    with pytest.raises(ValidationError):
+        await svc.create_version(
+            "tool-1",
+            "1.0.2",
+            binding={
+                "provider_id": "prov-1",
+                "method": "COMPUTE",
+                "path_template": "builtin://math/add",
+                "timeout_seconds": 999,
+            },
+        )
+
+
 async def test_version_state_machine_full_flow() -> None:
     """完整状态机：草稿→送审→通过→发布→停用→启用→撤回→归档。"""
     tool = _tool()
@@ -395,6 +459,33 @@ async def test_version_events_emitted_on_create() -> None:
     assert any(isinstance(item, OutboxEvent) for item in added)
     assert any(isinstance(item, OutboxDelivery) for item in added)
     assert any(isinstance(item, CatalogExecutionBinding) for item in added)
+
+
+async def test_version_transition_event_payload_contains_tool_id() -> None:
+    """版本状态流转事件必须携带 tool_id，避免 Chroma 投递进入 DEAD。"""
+    tool = _tool()
+    version = _version()
+    binding = _binding()
+    db = AsyncMock()
+    db.get = AsyncMock(
+        side_effect=_fake_get({CatalogTool: tool, CatalogToolVersion: version})
+    )
+    db.scalar = AsyncMock(return_value=binding)
+    db.add = MagicMock()
+    svc = CatalogVersionService(db)
+    set_audit_actor("acc-1", "operator")
+
+    await svc.submit_review("ver-1")
+    await svc.approve("ver-1")
+    await svc.publish("ver-1", set_default=True)
+
+    events = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], OutboxEvent)
+    ]
+    assert events
+    assert all(event.payload.get("tool_id") == "tool-1" for event in events)
 
 
 async def test_history_and_review_records_written() -> None:

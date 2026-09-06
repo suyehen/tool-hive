@@ -89,7 +89,7 @@ async def test_tool_path_scope_allowed_by_tool_scope() -> None:
         system_id="sys_1", scope_type=ToolScopeType.TOOL,
         scope_code="math.basic.calculator", status=ToolScopeStatus.ACTIVE,
     )
-    session.scalar = AsyncMock(side_effect=[tool, 1])
+    session.scalar = AsyncMock(side_effect=[tool, 1, None])
     session.execute = AsyncMock(return_value=_execute_result([scope]))
     await mw._check_tool_path_scope(
         _request("/api/runtime/v1/tools/math.basic.calculator/execute"),
@@ -119,6 +119,44 @@ async def test_tool_path_scope_allowed_by_capability() -> None:
     )
 
 
+async def test_tool_path_scope_allowed_by_namespace() -> None:
+    """execute 路径命中命名空间范围时放行。"""
+    mw = _middleware()
+    session = AsyncMock()
+    tool = CatalogTool(
+        namespace="math.basic", tool_code="calculator", name="计算器",
+        status=CatalogObjectStatus.ENABLED, executable=True,
+    )
+    scope = CallerToolScope(
+        system_id="sys_1", scope_type=ToolScopeType.NAMESPACE,
+        scope_code="math.basic", status=ToolScopeStatus.ACTIVE,
+    )
+    session.scalar = AsyncMock(side_effect=[tool, 1])
+    session.execute = AsyncMock(return_value=_execute_result([scope]))
+    await mw._check_tool_path_scope(
+        _request("/api/runtime/v1/tools/math.basic.calculator/execute"),
+        session,
+        "sys_1",
+    )
+
+
+async def test_tool_path_scope_allowed_by_pack_system() -> None:
+    """execute 路径命中能力包页面 pack-system 授权时放行。"""
+    mw = _middleware()
+    session = AsyncMock()
+    tool = CatalogTool(
+        namespace="math.basic", tool_code="calculator", name="计算器",
+        status=CatalogObjectStatus.ENABLED, executable=True,
+    )
+    session.scalar = AsyncMock(side_effect=[tool, 1, "link-id"])
+    session.execute = AsyncMock(return_value=_execute_result([]))
+    await mw._check_tool_path_scope(
+        _request("/api/runtime/v1/tools/math.basic.calculator/execute"),
+        session,
+        "sys_1",
+    )
+
+
 async def test_tool_path_scope_denied_without_scope() -> None:
     """未授权工具返回 RUNTIME_SCOPE_NOT_ALLOWED。"""
     mw = _middleware()
@@ -127,7 +165,7 @@ async def test_tool_path_scope_denied_without_scope() -> None:
         namespace="math.basic", tool_code="calculator", name="计算器",
         status=CatalogObjectStatus.ENABLED, executable=True,
     )
-    session.scalar = AsyncMock(side_effect=[tool, 1])
+    session.scalar = AsyncMock(side_effect=[tool, 1, None])
     session.execute = AsyncMock(return_value=_execute_result([]))
     with pytest.raises(RuntimeApiError) as exc_info:
         await mw._check_tool_path_scope(

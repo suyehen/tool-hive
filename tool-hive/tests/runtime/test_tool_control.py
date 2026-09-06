@@ -111,7 +111,7 @@ async def test_resolve_tool_archived_or_hidden() -> None:
 async def test_resolve_tool_out_of_scope() -> None:
     """调用系统范围未授权时返回 RUNTIME_SCOPE_NOT_ALLOWED。"""
     db = AsyncMock()
-    db.scalar = AsyncMock(return_value=_tool())
+    db.scalar = AsyncMock(side_effect=[_tool(), None])
     db.execute = AsyncMock(return_value=_execute_result([]))
     svc = CallControlService(db)
     decision = await svc.resolve_tool("sys_1", "math.basic.calculator")
@@ -356,6 +356,7 @@ async def test_list_discoverable_tools_via_tool_scope() -> None:
         side_effect=[
             _execute_result([_scope()]),
             _execute_result([tool]),
+            _execute_result([]),
             MagicMock(all=MagicMock(return_value=[(tool.id,)])),
         ]
     )
@@ -373,6 +374,7 @@ async def test_list_discoverable_tools_filters_hidden_and_unpublished() -> None:
         side_effect=[
             _execute_result([_scope()]),
             _execute_result([visible, hidden]),
+            _execute_result([]),
             MagicMock(
                 all=MagicMock(return_value=[(visible.id,)]),
             ),
@@ -392,8 +394,57 @@ async def test_list_discoverable_excludes_tools_without_enabled_pack_grant() -> 
             _execute_result([_scope(ToolScopeType.CAPABILITY, "pack-1")]),
             _execute_result([tool]),
             MagicMock(all=MagicMock(return_value=[])),
+            _execute_result([]),
         ]
     )
     svc = CallControlService(db)
     tools = await svc.list_discoverable_tools("sys_1")
     assert tools == []
+
+
+async def test_resolve_tool_allowed_via_pack_system_grant() -> None:
+    """能力包页面维护的 pack-system 授权直接放行包内工具。"""
+    tool = _tool(executable=False)
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[tool, "link-id"])
+    db.execute = AsyncMock(return_value=_execute_result([]))
+    db.get = AsyncMock(return_value=_version())
+    svc = CallControlService(db)
+
+    decision = await svc.resolve_tool("sys_1", "math.basic.calculator")
+    assert decision.allowed
+
+
+async def test_list_discoverable_tools_via_namespace_scope() -> None:
+    """命名空间范围命中且工具已发布时进入可发现集合。"""
+    tool = _tool()
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _execute_result([_scope(ToolScopeType.NAMESPACE, "math.basic")]),
+            _execute_result([tool]),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
+            MagicMock(all=MagicMock(return_value=[])),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
+        ]
+    )
+    svc = CallControlService(db)
+    tools = await svc.list_discoverable_tools("sys_1")
+    assert [t.id for t in tools] == [tool.id]
+
+
+async def test_list_discoverable_tools_via_pack_system_grant() -> None:
+    """pack-system 授权命中的工具进入可发现集合，无需 CallerToolScope。"""
+    tool = _tool()
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            _execute_result([]),
+            _execute_result([tool]),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
+        ]
+    )
+    svc = CallControlService(db)
+    tools = await svc.list_discoverable_tools("sys_1")
+    assert [t.id for t in tools] == [tool.id]

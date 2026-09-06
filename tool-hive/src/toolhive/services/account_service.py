@@ -231,6 +231,8 @@ class AccountService:
         expected_row_version: int,
     ) -> ManagementAccount:
         """管理员编辑账号资料（姓名/邮箱/手机号/部门/备注），带乐观锁并写审计。"""
+        # 加锁刷新目标行，避免基于过期版本做非原子覆盖
+        await self.db.refresh(account, with_for_update=True)
         # 乐观锁：版本不一致说明已被他人修改，拒绝覆盖
         if account.row_version != expected_row_version:
             raise ConflictError("账号资料已被他人修改，请刷新后重试")
