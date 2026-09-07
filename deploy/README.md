@@ -76,6 +76,7 @@ TOOLHIVE_INIT_ADMIN_PASSWORD='<强密码>' \
 - 管理入口：公网 `443`，仅 `/api/admin/**` 反向代理到 `127.0.0.1:8100` 并写入 `X-ToolHive-Ingress: admin`；
 - 管理前端：由 Nginx 直接托管 `frontend/dist` 产物（复制到 `/var/www/toolhive/admin/`），`/assets/` 走静态文件、`/admin/` 与站点根路径按 SPA 回退到 `index.html`；仅 `/api/admin/**` 反向代理到应用；
 - 运行入口：内网 `8081`，仅转发 `/api/runtime/v1/**`，写入 `X-ToolHive-Ingress: runtime`；**默认只允许本机来源**（`allow 127.0.0.1; allow ::1; deny all;`），若调用系统分布在其他主机，按实际内网网段替换为 `allow 10.0.0.0/8;`、`allow 172.16.0.0/12;`、`allow 192.168.0.0/16;` 等，一期不允许公网访问运行入口；
+- MCP 入口：内网 `8082`，仅转发 `/mcp/`（公开端点为 `/mcp/`，带尾斜杠）；默认只允许本机来源，MCP 客户端分布在其他主机时按实际内网网段放开；客户端身份由 `Authorization: Bearer Token` 与应用层来源规则二次校验；
 - Header 清洗：清除客户端提交的 `Forwarded` / `X-Forwarded-For` / `X-Real-IP`，按实际 TCP 连接写入 `X-ToolHive-Client-IP: $remote_addr`；
 - 限流：管理入口全局 `10 r/s`（burst 20），`/api/admin/auth/**` 登录/验证码等接口 `5 r/s`（burst 8），运行入口内网基础限流 `50 r/s`（burst 100）；zone 定义位于示例配置顶部，需处于 Nginx `http` 上下文；
 - 应用只监听回环地址，生产必须由 Nginx 转发，不允许直连应用端口。
@@ -173,6 +174,35 @@ toolhive sign-request --method POST --path /api/runtime/v1/tools/math.basic.calc
 7. Trace 落库：`runtime_trace_log` 中按 `trace_id` 可查到 `runtime.auth` / `runtime.scope` / `runtime.retrieval` / `runtime.control` / `runtime.provider` / `runtime.execute` 等事件；管理端「工具测试」执行产生的 Trace 以 `system_id=management` 标注 `source=admin-test`。
 
 > 提示：`sign-request` 只生成命令不自动发起请求；时间戳与 Nonce 默认当前生成，重复执行同一命令会因时间窗/Nonce 变化失效，属预期行为。
+
+### 9.2 MCP 入口端到端验收（Bearer → 发现 → 执行 → Trace）
+
+前置：全新环境执行 `sql/init.sql` 建表（新表含 MCP 客户端/令牌/授权与 Trace 渠道列），再执行 `seed-tools` 接入首批低风险数学工具并启动服务。
+
+管理端准备：
+
+1. 「MCP 接入 → 客户端与授权」新建客户端；
+2. 签发 Token（明文只显示一次，保存到环境变量）；
+3. 添加来源 IP 规则 `127.0.0.1`（本机验收）或实际内网网段；
+4. 启用客户端（需 Token 与来源规则齐备）；
+5. 「授权范围」添加 `tool` 范围 `math.basic.calculator`。
+
+执行 verify（MCP 部分）：
+
+```bash
+TOOLHIVE_MCP_E2E=1 \
+TOOLHIVE_MCP_URL=http://127.0.0.1:8082/mcp/ \
+TOOLHIVE_MCP_TOKEN='<Token>' \
+TOOLHIVE_MCP_TOOL_CODE=math.basic.calculator \
+TOOLHIVE_MCP_TOOL_ARGS='{"a":1,"b":2,"operation":"add"}' \
+bash scripts/verify.sh
+```
+
+预期依次输出 `MCP initialize ok`、`tools/list count`、`tools/call` 结果与 `MCP E2E 通过`。
+
+验证 Trace：管理端「MCP 接入 → 调用记录」按客户端/时间可查到该 trace；也可用 `psql` 按 `channel='mcp'` 检查 `runtime_trace_log`。
+
+客户端兼容矩阵见 [兼容矩阵](../二期功能/01-MCP接入/兼容矩阵.md)，Inspector / Cursor / Claude Desktop 实测方法见该文档。
 
 ## 10. 基础失败恢复说明
 

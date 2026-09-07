@@ -23,6 +23,11 @@ from toolhive.models.management_audit_log import ManagementAuditLog
 from toolhive.models.management_operation import ManagementOperation
 from toolhive.models.management_role import ManagementRole
 from toolhive.models.management_role_operation import ManagementRoleOperation
+from toolhive.models.mcp_client import McpClient
+from toolhive.models.mcp_client_ip_rule import McpClientIpRule
+from toolhive.models.mcp_client_scope import McpClientScope
+from toolhive.models.mcp_client_token import McpClientToken
+from toolhive.models.mcp_server_config import McpServerConfig
 from toolhive.models.outbox_delivery import OutboxDelivery
 from toolhive.models.outbox_event import OutboxEvent
 from toolhive.models.password_history import PasswordHistory
@@ -32,6 +37,11 @@ from toolhive.models.runtime_trace_log import RuntimeTraceLog
 __all__ = [
     "ManagementAccountAuthState",
     "AccountRole",
+    "McpClient",
+    "McpClientIpRule",
+    "McpClientScope",
+    "McpClientToken",
+    "McpServerConfig",
     "ManagementRole",
     "CallerIPRule",
     "CallerPublicKey",

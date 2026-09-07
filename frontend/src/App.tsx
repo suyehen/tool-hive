@@ -15,6 +15,11 @@ const CapabilityPacksPage = lazy(() => import('./pages/catalog/CapabilityPacksPa
 const ToolsPage = lazy(() => import('./pages/catalog/ToolsPage'));
 const ReviewsPage = lazy(() => import('./pages/catalog/ReviewsPage'));
 const IndexTasksPage = lazy(() => import('./pages/catalog/IndexTasksPage'));
+const McpServerConfigPage = lazy(() => import('./pages/mcp/ServerConfigPage'));
+const McpClientsPage = lazy(() => import('./pages/mcp/ClientsPage'));
+const McpExposedToolsPage = lazy(() => import('./pages/mcp/ExposedToolsPage'));
+const McpCallRecordsPage = lazy(() => import('./pages/mcp/CallRecordsPage'));
+const McpTestDebugPage = lazy(() => import('./pages/mcp/TestDebugPage'));
 
 function PageFallback() {
   return (
@@ -48,6 +53,11 @@ export default function App() {
           <Route path="catalog/tools" element={<ToolsPage />} />
           <Route path="catalog/reviews" element={<ReviewsPage />} />
           <Route path="catalog/index-tasks" element={<IndexTasksPage />} />
+          <Route path="mcp/server-config" element={<McpServerConfigPage />} />
+          <Route path="mcp/clients" element={<McpClientsPage />} />
+          <Route path="mcp/exposed-tools" element={<McpExposedToolsPage />} />
+          <Route path="mcp/call-records" element={<McpCallRecordsPage />} />
+          <Route path="mcp/test-debug" element={<McpTestDebugPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

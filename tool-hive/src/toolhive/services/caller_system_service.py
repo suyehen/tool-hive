@@ -495,72 +495,12 @@ class CallerSystemService:
         return new_scopes
 
     async def _validate_scope_references(self, items: list[dict]) -> None:
-        """校验工具范围编码在 Catalog 中存在且未归档（批量查询避免 N+1）。"""
-        tool_codes = [
-            item["scope_code"].strip()
-            for item in items
-            if item["scope_type"] == ToolScopeType.TOOL
-        ]
-        pack_codes = [
-            item["scope_code"].strip()
-            for item in items
-            if item["scope_type"] == ToolScopeType.CAPABILITY
-        ]
-        namespace_codes = [
-            item["scope_code"].strip()
-            for item in items
-            if item["scope_type"] == ToolScopeType.NAMESPACE
-        ]
-        if tool_codes:
-            result = await self.db.execute(
-                select(CatalogTool).where(
-                    (CatalogTool.namespace + "." + CatalogTool.tool_code).in_(
-                        tool_codes
-                    )
-                )
-            )
-            tools = {
-                (t.namespace + "." + t.tool_code): t
-                for t in result.scalars().all()
-            }
-            for code in tool_codes:
-                tool = tools.get(code)
-                if tool is None:
-                    raise ValidationError(f"工具范围引用了不存在的工具: {code}")
-                if tool.status == CatalogObjectStatus.ARCHIVED:
-                    raise ValidationError(f"工具范围引用了已归档的工具: {code}")
-        if pack_codes:
-            result = await self.db.execute(
-                select(CatalogCapabilityPack).where(
-                    CatalogCapabilityPack.pack_code.in_(pack_codes)
-                )
-            )
-            packs = {p.pack_code: p for p in result.scalars().all()}
-            for code in pack_codes:
-                pack = packs.get(code)
-                if pack is None:
-                    raise ValidationError(
-                        f"工具范围引用了不存在的能力包: {code}"
-                    )
-                if pack.status == CatalogObjectStatus.ARCHIVED:
-                    raise ValidationError(
-                        f"工具范围引用了已归档的能力包: {code}"
-                    )
-        if namespace_codes:
-            result = await self.db.execute(
-                select(CatalogTool.namespace)
-                .where(
-                    CatalogTool.namespace.in_(namespace_codes),
-                    CatalogTool.status != CatalogObjectStatus.ARCHIVED,
-                )
-                .distinct()
-            )
-            namespaces = {row[0] for row in result.all()}
-            for code in namespace_codes:
-                if code not in namespaces:
-                    raise ValidationError(
-                        f"命名空间范围不存在可用（非归档）工具: {code}"
-                    )
+        """委托共享 Catalog 引用校验，保证调用系统与 MCP 口径一致。"""
+        from toolhive.services.catalog_scope_validator import (
+            CatalogScopeValidator,
+        )
+
+        await CatalogScopeValidator(self.db).validate_items(items)
 
     # ═════════════════════════════════════════════════════════════
     # 紧急禁用

@@ -101,6 +101,8 @@ class CatalogToolService:
         risk_level: str = RiskLevel.LOW,
         discoverable: bool = True,
         executable: bool = True,
+        http_enabled: bool = True,
+        mcp_enabled: bool = True,
         input_schema: dict[str, Any] | None = None,
         output_schema: dict[str, Any] | None = None,
     ) -> CatalogTool:
@@ -132,6 +134,8 @@ class CatalogToolService:
             risk_level=risk_level,
             discoverable=discoverable,
             executable=executable,
+            http_enabled=http_enabled,
+            mcp_enabled=mcp_enabled,
             input_schema=input_schema,
             output_schema=output_schema,
             status=CatalogObjectStatus.ENABLED,
@@ -171,6 +175,8 @@ class CatalogToolService:
         risk_level: str | None = None,
         discoverable: bool | None = None,
         executable: bool | None = None,
+        http_enabled: bool | None = None,
+        mcp_enabled: bool | None = None,
         input_schema: dict[str, Any] | None = None,
         output_schema: dict[str, Any] | None = None,
         expected_row_version: int | None = None,
@@ -202,6 +208,10 @@ class CatalogToolService:
             tool.discoverable = discoverable
         if executable is not None:
             tool.executable = executable
+        if http_enabled is not None:
+            tool.http_enabled = http_enabled
+        if mcp_enabled is not None:
+            tool.mcp_enabled = mcp_enabled
         if input_schema is not None:
             if not isinstance(input_schema, dict):
                 raise ValidationError("input_schema 必须是 JSON 对象")

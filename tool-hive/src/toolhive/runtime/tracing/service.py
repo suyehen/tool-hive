@@ -51,6 +51,8 @@ class TraceService:
         error_code: str | None = None,
         summary: dict[str, Any] | None = None,
         source_ip: str | None = None,
+        channel: str | None = None,
+        mcp_client_id: str | None = None,
     ) -> None:
         """写入一条运行 Trace 记录；失败只记录日志，不影响业务请求。"""
         try:
@@ -64,6 +66,8 @@ class TraceService:
                         error_code=error_code,
                         summary=summary,
                         source_ip=source_ip,
+                        channel=channel,
+                        mcp_client_id=mcp_client_id,
                     )
                 )
                 await session.commit()

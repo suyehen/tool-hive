@@ -105,6 +105,8 @@ class CreateToolRequest(BaseModel):
     risk_level: str = Field(default="low", pattern="^(low|medium|high)$")
     discoverable: bool = True
     executable: bool = True
+    http_enabled: bool = True
+    mcp_enabled: bool = True
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
 
@@ -115,6 +117,8 @@ class UpdateToolRequest(BaseModel):
     risk_level: str | None = Field(None, pattern="^(low|medium|high)$")
     discoverable: bool | None = None
     executable: bool | None = None
+    http_enabled: bool | None = None
+    mcp_enabled: bool | None = None
     input_schema: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
     row_version: int | None = Field(None, ge=0)
@@ -130,6 +134,8 @@ class ToolResponse(BaseModel):
     risk_level: str
     discoverable: bool
     executable: bool
+    http_enabled: bool
+    mcp_enabled: bool
     input_schema: dict[str, Any] | None
     output_schema: dict[str, Any] | None
     status: str

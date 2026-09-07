@@ -161,3 +161,19 @@ class ConfirmationStatus(StrEnum):
     PENDING = "pending"
     CONSUMED = "consumed"
     EXPIRED = "expired"
+
+
+class McpClientStatus(StrEnum):
+    """MCP 客户端生命周期状态。"""
+
+    DRAFT = "draft"
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    REVOKED = "revoked"
+
+
+class McpTokenStatus(StrEnum):
+    """MCP 客户端访问令牌状态。"""
+
+    ACTIVE = "active"
+    REVOKED = "revoked"

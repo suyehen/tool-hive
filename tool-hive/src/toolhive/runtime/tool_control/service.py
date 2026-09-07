@@ -11,7 +11,6 @@ from toolhive.core.enums import (
     CatalogObjectStatus,
     RiskLevel,
     ToolScopeStatus,
-    ToolScopeType,
     ToolVersionStatus,
 )
 from toolhive.models.caller_tool_scope import CallerToolScope
@@ -28,6 +27,10 @@ from toolhive.runtime.errors import (
     RUNTIME_SCOPE_NOT_ALLOWED,
     RUNTIME_TOOL_NOT_AVAILABLE,
     RUNTIME_TOOL_NOT_FOUND,
+)
+from toolhive.runtime.tool_control.scope_expansion import (
+    expand_scope_tool_ids,
+    scope_allows_tool,
 )
 
 _WRITE_METHODS = ("POST", "PUT", "DELETE")
@@ -132,6 +135,10 @@ class CallControlService:
             return self._denied(
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可发现", tool=tool,
             )
+        if tool.http_enabled is False:
+            return self._denied(
+                RUNTIME_TOOL_NOT_AVAILABLE, "工具不可用", tool=tool,
+            )
         if not await self._tool_in_scope(system_id, tool):
             return self._denied(
                 RUNTIME_SCOPE_NOT_ALLOWED,
@@ -227,17 +234,6 @@ class CallControlService:
             )
         )
         scopes = list(result.scalars().all())
-        tool_codes = {
-            s.scope_code for s in scopes if s.scope_type == ToolScopeType.TOOL
-        }
-        pack_codes = {
-            s.scope_code for s in scopes if s.scope_type == ToolScopeType.CAPABILITY
-        }
-        namespace_codes = {
-            s.scope_code
-            for s in scopes
-            if s.scope_type == ToolScopeType.NAMESPACE
-        }
         all_tools = list(
             (
                 await self.db.execute(
@@ -249,37 +245,7 @@ class CallControlService:
             .scalars()
             .all()
         )
-        allowed_ids = {
-            tool.id for tool in all_tools if tool.full_code in tool_codes
-        }
-        if pack_codes:
-            rows = (
-                await self.db.execute(
-                    select(CatalogCapabilityPackTool.tool_id)
-                    .join(
-                        CatalogCapabilityPack,
-                        CatalogCapabilityPack.id
-                        == CatalogCapabilityPackTool.pack_id,
-                    )
-                    .where(
-                        CatalogCapabilityPack.pack_code.in_(tuple(pack_codes)),
-                        CatalogCapabilityPack.status
-                        == CatalogObjectStatus.ENABLED,
-                    )
-                )
-            ).all()
-            allowed_ids.update(row[0] for row in rows)
-        if namespace_codes:
-            # 命名空间范围：命名空间下非归档工具均进入候选
-            namespace_rows = (
-                await self.db.execute(
-                    select(CatalogTool.id).where(
-                        CatalogTool.namespace.in_(tuple(namespace_codes)),
-                        CatalogTool.status != CatalogObjectStatus.ARCHIVED,
-                    )
-                )
-            ).all()
-            allowed_ids.update(row[0] for row in namespace_rows)
+        allowed_ids = await expand_scope_tool_ids(self.db, scopes)
         # 能力包页面维护的 pack-system 授权直接参与运行判定
         pack_system_rows = (
             await self.db.execute(
@@ -326,6 +292,7 @@ class CallControlService:
             and tool.id in published_ids
             and tool.status == CatalogObjectStatus.ENABLED
             and tool.discoverable
+            and tool.http_enabled is not False
         ]
 
     async def _tool_in_scope(self, system_id: str, tool: CatalogTool) -> bool:
@@ -337,35 +304,8 @@ class CallControlService:
             )
         )
         scopes = list(result.scalars().all())
-        for scope in scopes:
-            if (
-                scope.scope_type == ToolScopeType.TOOL
-                and scope.scope_code == tool.full_code
-            ):
-                return True
-            if scope.scope_type == ToolScopeType.CAPABILITY:
-                linked = await self.db.scalar(
-                    select(CatalogCapabilityPackTool.id)
-                    .join(
-                        CatalogCapabilityPack,
-                        CatalogCapabilityPack.id
-                        == CatalogCapabilityPackTool.pack_id,
-                    )
-                    .where(
-                        CatalogCapabilityPack.pack_code == scope.scope_code,
-                        CatalogCapabilityPack.status
-                        == CatalogObjectStatus.ENABLED,
-                        CatalogCapabilityPackTool.tool_id == tool.id,
-                    )
-                    .limit(1)
-                )
-                if linked is not None:
-                    return True
-            if (
-                scope.scope_type == ToolScopeType.NAMESPACE
-                and scope.scope_code == tool.namespace
-            ):
-                return True
+        if await scope_allows_tool(self.db, scopes, tool):
+            return True
         # 能力包页面维护的调用系统授权同样可授予包内工具访问权
         linked = await self.db.scalar(
             select(CatalogCapabilityPackTool.id)

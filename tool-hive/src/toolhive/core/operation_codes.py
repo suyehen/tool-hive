@@ -59,6 +59,17 @@ class OperationCode(StrEnum):
     SYSTEM_TASK_VIEW = "system_task:view"
     SYSTEM_TASK_RETRY = "system_task:retry"
 
+    # ── MCP 接入 ──
+    MCP_SERVER_VIEW = "mcp_server:view"
+    MCP_SERVER_CONFIG = "mcp_server:config"
+    MCP_CLIENT_VIEW = "mcp_client:view"
+    MCP_CLIENT_MANAGE = "mcp_client:manage"
+    MCP_CLIENT_ALLOW_ANY_IP = "mcp_client:allow_any_ip"
+    MCP_AUTH_VIEW = "mcp_auth:view"
+    MCP_AUTH_MANAGE = "mcp_auth:manage"
+    MCP_TRACE_VIEW = "mcp_trace:view"
+    MCP_TEST_RUN = "mcp_test:run"
+
 
 # 超管角色名（内置，不可删除/改名）
 SUPER_ADMIN_ROLE_NAME = "super_admin"
@@ -257,5 +268,60 @@ OPERATION_META: dict[str, dict[str, str | int | None]] = {
         "display_name": "重试系统任务",
         "description": "人工重投失败的投递任务",
         "sort_order": 20,
+    },
+    # ── MCP 接入 ──
+    "mcp_server:view": {
+        "category": "mcp",
+        "display_name": "查看 MCP 接入配置",
+        "description": "查看 MCP Server 接入配置与运行摘要",
+        "sort_order": 10,
+    },
+    "mcp_server:config": {
+        "category": "mcp",
+        "display_name": "配置 MCP 接入",
+        "description": "修改 MCP Server 接入配置",
+        "sort_order": 20,
+    },
+    "mcp_client:view": {
+        "category": "mcp",
+        "display_name": "查看 MCP 客户端",
+        "description": "查看 MCP 客户端列表与详情",
+        "sort_order": 30,
+    },
+    "mcp_client:manage": {
+        "category": "mcp",
+        "display_name": "管理 MCP 客户端",
+        "description": "创建/修改/启停 MCP 客户端与令牌、来源规则",
+        "sort_order": 40,
+    },
+    "mcp_client:allow_any_ip": {
+        "category": "mcp",
+        "display_name": "允许通配 IP 规则",
+        "description": "高风险：允许为 MCP 客户端配置通配（*）来源 IP 规则",
+        "sort_order": 50,
+    },
+    "mcp_auth:view": {
+        "category": "mcp",
+        "display_name": "查看 MCP 客户端授权",
+        "description": "查看 MCP 客户端工具/命名空间/能力包授权范围",
+        "sort_order": 60,
+    },
+    "mcp_auth:manage": {
+        "category": "mcp",
+        "display_name": "管理 MCP 客户端授权",
+        "description": "配置 MCP 客户端工具/命名空间/能力包授权范围",
+        "sort_order": 70,
+    },
+    "mcp_trace:view": {
+        "category": "mcp",
+        "display_name": "查看 MCP 调用记录",
+        "description": "查询 MCP 渠道调用记录与事件链详情",
+        "sort_order": 80,
+    },
+    "mcp_test:run": {
+        "category": "mcp",
+        "display_name": "运行 MCP 测试调试",
+        "description": "运行 MCP 协议级调试台",
+        "sort_order": 90,
     },
 }

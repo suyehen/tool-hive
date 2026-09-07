@@ -23,6 +23,12 @@ class RuntimeTraceLog(Base, UUIDPrimaryKeyMixin):
     system_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True,
     )
+    channel: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, index=True,
+    )  # http | mcp
+    mcp_client_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True,
+    )
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="success",

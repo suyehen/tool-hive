@@ -63,7 +63,11 @@ async def lifespan(app: FastAPI):
         from toolhive.services.outbox.worker import OutboxWorker
         outbox_worker = OutboxWorker(settings.outbox)
         await outbox_worker.start()
-    yield
+    # MCP 会话管理器：被挂载子应用的 lifespan 不会自动运行，宿主必须进入
+    from toolhive.mcp.server import get_server
+    mcp_server = get_server()
+    async with mcp_server.session_manager.run():
+        yield
     if outbox_worker is not None:
         await outbox_worker.stop()
     # 关闭时清理资源
@@ -76,6 +80,11 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+# MCP 鉴权中间件（先注册，使入口校验作为外层先解析来源 IP）
+from toolhive.mcp.middleware import McpAuthMiddleware  # noqa: E402
+
+app.add_middleware(McpAuthMiddleware)
 
 # 入口校验（A10）：可信代理范围、入口标识与来源 IP
 from toolhive.api.ingress import IngressMiddleware  # noqa: E402
@@ -91,6 +100,11 @@ app.mount("/api/admin", admin_app)
 from toolhive.api.runtime.router import runtime_app  # noqa: E402
 
 app.mount("/api/runtime", runtime_app)
+
+# 挂载 MCP 运行端点：/mcp（独立链路，与 /api/admin、/api/runtime 隔离）
+from toolhive.mcp.server import MCP_MOUNT_PATH, get_mcp_app  # noqa: E402
+
+app.mount(MCP_MOUNT_PATH, get_mcp_app())
 
 
 @app.get("/health")

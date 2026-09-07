@@ -605,6 +605,171 @@ COMMENT ON COLUMN caller_ip_rule.create_by IS '创建人 ID';
 COMMENT ON COLUMN caller_ip_rule.update_by IS '修改人 ID';
 
 -- ------------------------------------------------------------
+-- MCP Server 接入配置（单实例配置行）
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mcp_server_config (
+    id                VARCHAR(32) PRIMARY KEY,
+    server_name       VARCHAR(128) NOT NULL DEFAULT 'ToolHive',
+    description       TEXT,
+    enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+    endpoint_path     VARCHAR(64) NOT NULL DEFAULT '/mcp',
+    allowed_hosts     JSONB NOT NULL DEFAULT '["127.0.0.1", "localhost"]'::jsonb,
+    protocol_versions JSONB,
+    row_version       INTEGER NOT NULL DEFAULT 0,
+    create_time       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time       TIMESTAMPTZ,
+    create_by         VARCHAR(32),
+    update_by         VARCHAR(32)
+);
+
+INSERT INTO mcp_server_config (id, server_name)
+VALUES ('default', 'ToolHive')
+ON CONFLICT (id) DO NOTHING;
+
+COMMENT ON TABLE mcp_server_config IS 'MCP Server 接入配置（单实例配置行）';
+COMMENT ON COLUMN mcp_server_config.allowed_hosts IS '允许访问的 Host 白名单（传输安全）';
+COMMENT ON COLUMN mcp_server_config.protocol_versions IS '协议版本支持范围；NULL 表示跟随 SDK 能力全集';
+
+-- ------------------------------------------------------------
+-- MCP 客户端
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mcp_client (
+    id                 VARCHAR(32) PRIMARY KEY,
+    client_code        VARCHAR(64) NOT NULL,
+    name               VARCHAR(256) NOT NULL,
+    description        TEXT,
+    status             VARCHAR(20) NOT NULL DEFAULT 'draft',
+    deactivated_reason TEXT,
+    row_version        INTEGER NOT NULL DEFAULT 0,
+    create_time        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time        TIMESTAMPTZ,
+    create_by          VARCHAR(32),
+    update_by          VARCHAR(32),
+    CONSTRAINT uq_mcp_client_code UNIQUE (client_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_client_status ON mcp_client (status);
+
+COMMENT ON TABLE mcp_client IS 'MCP 客户端：MCP 运行端点的授权主体';
+COMMENT ON COLUMN mcp_client.client_code IS '客户端公开编码，唯一';
+COMMENT ON COLUMN mcp_client.status IS '状态：draft | enabled | disabled | revoked';
+
+-- ------------------------------------------------------------
+-- MCP 客户端令牌
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mcp_client_token (
+    id              VARCHAR(32) PRIMARY KEY,
+    client_id       VARCHAR(32) NOT NULL,
+    token_hash      VARCHAR(255) NOT NULL,
+    token_key       VARCHAR(64) NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    revoked_at      TIMESTAMPTZ,
+    revoked_reason  TEXT,
+    row_version     INTEGER NOT NULL DEFAULT 0,
+    create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time     TIMESTAMPTZ,
+    create_by       VARCHAR(32),
+    update_by       VARCHAR(32)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_mcp_client_token_client'
+    ) THEN
+        ALTER TABLE mcp_client_token
+            ADD CONSTRAINT fk_mcp_client_token_client
+            FOREIGN KEY (client_id) REFERENCES mcp_client(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_mcp_client_token_client_id
+    ON mcp_client_token (client_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_client_token_key
+    ON mcp_client_token (token_key);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_client_token_active
+    ON mcp_client_token (client_id) WHERE status = 'active';
+
+COMMENT ON TABLE mcp_client_token IS 'MCP 客户端访问令牌（仅存哈希）';
+COMMENT ON COLUMN mcp_client_token.token_hash IS '令牌单向哈希，不保存明文';
+COMMENT ON COLUMN mcp_client_token.token_key IS '令牌检索键（SHA-256），用于精确定位后做 argon2 比对';
+COMMENT ON COLUMN mcp_client_token.status IS '状态：active | revoked';
+
+-- ------------------------------------------------------------
+-- MCP 客户端来源 IP 规则
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mcp_client_ip_rule (
+    id          VARCHAR(32) PRIMARY KEY,
+    client_id   VARCHAR(32) NOT NULL,
+    ip_cidr     VARCHAR(64) NOT NULL,
+    description TEXT,
+    status      VARCHAR(20) NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time TIMESTAMPTZ,
+    create_by   VARCHAR(32),
+    update_by   VARCHAR(32)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_mcp_client_ip_rule_client'
+    ) THEN
+        ALTER TABLE mcp_client_ip_rule
+            ADD CONSTRAINT fk_mcp_client_ip_rule_client
+            FOREIGN KEY (client_id) REFERENCES mcp_client(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_mcp_client_ip_rule_client_id
+    ON mcp_client_ip_rule (client_id);
+
+COMMENT ON TABLE mcp_client_ip_rule IS 'MCP 客户端来源 IP 白名单规则';
+COMMENT ON COLUMN mcp_client_ip_rule.status IS '状态：active | disabled';
+
+-- ------------------------------------------------------------
+-- MCP 客户端授权范围
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mcp_client_scope (
+    id          VARCHAR(32) PRIMARY KEY,
+    client_id   VARCHAR(32) NOT NULL,
+    scope_type  VARCHAR(20) NOT NULL DEFAULT 'tool',
+    scope_code  VARCHAR(256) NOT NULL,
+    status      VARCHAR(20) NOT NULL DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 0,
+    create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    update_time TIMESTAMPTZ,
+    create_by   VARCHAR(32),
+    update_by   VARCHAR(32),
+    CONSTRAINT uq_mcp_client_scope UNIQUE (client_id, scope_type, scope_code)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_mcp_client_scope_client'
+    ) THEN
+        ALTER TABLE mcp_client_scope
+            ADD CONSTRAINT fk_mcp_client_scope_client
+            FOREIGN KEY (client_id) REFERENCES mcp_client(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_mcp_client_scope_client_id
+    ON mcp_client_scope (client_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_client_scope_code
+    ON mcp_client_scope (scope_code);
+
+COMMENT ON TABLE mcp_client_scope IS 'MCP 客户端可访问的工具/能力包/命名空间范围';
+COMMENT ON COLUMN mcp_client_scope.scope_type IS '范围类型：capability（能力包）| namespace（命名空间）| tool（工具）';
+COMMENT ON COLUMN mcp_client_scope.scope_code IS '工具/能力包/命名空间编码';
+COMMENT ON COLUMN mcp_client_scope.status IS '状态：active | disabled';
+
+-- ------------------------------------------------------------
 -- Outbox 事件
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS outbox_event (
@@ -749,6 +914,8 @@ CREATE TABLE IF NOT EXISTS catalog_tool (
     risk_level         VARCHAR(20) NOT NULL DEFAULT 'low',
     discoverable       BOOLEAN NOT NULL DEFAULT TRUE,
     executable         BOOLEAN NOT NULL DEFAULT TRUE,
+    http_enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    mcp_enabled        BOOLEAN NOT NULL DEFAULT TRUE,
     input_schema       JSONB,
     output_schema      JSONB,
     status             VARCHAR(20) NOT NULL DEFAULT 'enabled',
@@ -772,6 +939,8 @@ COMMENT ON COLUMN catalog_tool.tool_code IS '工具编码（命名空间内唯�
 COMMENT ON COLUMN catalog_tool.risk_level IS '风险等级：low | medium | high';
 COMMENT ON COLUMN catalog_tool.discoverable IS '是否可被发现';
 COMMENT ON COLUMN catalog_tool.executable IS '是否可被执行';
+COMMENT ON COLUMN catalog_tool.http_enabled IS 'HTTP 入口是否启用（默认开启）';
+COMMENT ON COLUMN catalog_tool.mcp_enabled IS 'MCP 入口是否启用（默认开启）';
 COMMENT ON COLUMN catalog_tool.input_schema IS '输入 JSON Schema';
 COMMENT ON COLUMN catalog_tool.output_schema IS '输出 JSON Schema';
 COMMENT ON COLUMN catalog_tool.status IS '状态：enabled | disabled | archived';
@@ -959,6 +1128,8 @@ CREATE TABLE IF NOT EXISTS runtime_trace_log (
     id          VARCHAR(32) PRIMARY KEY,
     trace_id    VARCHAR(64) NOT NULL,
     system_id   VARCHAR(64),
+    channel     VARCHAR(20),
+    mcp_client_id VARCHAR(32),
     action      VARCHAR(64) NOT NULL,
     status      VARCHAR(20) NOT NULL DEFAULT 'success',
     error_code  VARCHAR(64),
@@ -971,12 +1142,18 @@ CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_trace_id
     ON runtime_trace_log (trace_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_system_id
     ON runtime_trace_log (system_id);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_channel
+    ON runtime_trace_log (channel);
+CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_mcp_client_id
+    ON runtime_trace_log (mcp_client_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_trace_log_occurred_at
     ON runtime_trace_log (occurred_at);
 
 COMMENT ON TABLE runtime_trace_log IS '运行请求基础 Trace 记录（追加式）';
 COMMENT ON COLUMN runtime_trace_log.trace_id IS 'Trace ID，跨认证/授权/执行/Provider 关联';
 COMMENT ON COLUMN runtime_trace_log.system_id IS '调用系统标识';
+COMMENT ON COLUMN runtime_trace_log.channel IS '运行渠道：http | mcp；NULL 表示早期 HTTP 记录';
+COMMENT ON COLUMN runtime_trace_log.mcp_client_id IS 'MCP 客户端 ID（channel=mcp 时有效）';
 COMMENT ON COLUMN runtime_trace_log.action IS '事件动作：runtime.auth / runtime.scope / runtime.traffic / runtime.request';
 COMMENT ON COLUMN runtime_trace_log.status IS '结果：success | failure';
 COMMENT ON COLUMN runtime_trace_log.error_code IS '失败时的稳定业务错误码';

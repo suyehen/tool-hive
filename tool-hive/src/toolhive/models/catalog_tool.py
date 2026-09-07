@@ -35,6 +35,12 @@ class CatalogTool(Base, UUIDPrimaryKeyMixin, AuditMixin):
     )  # low | medium | high
     discoverable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    http_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True,
+    )
+    mcp_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True,
+    )
     input_schema: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True,
     )

@@ -17,7 +17,6 @@ from toolhive.config import RuntimeSecuritySettings
 from toolhive.core.enums import (
     CatalogObjectStatus,
     ToolScopeStatus,
-    ToolScopeType,
     ToolVersionStatus,
 )
 from toolhive.infrastructure import database
@@ -263,6 +262,10 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
             raise RuntimeApiError(
                 RUNTIME_TOOL_NOT_AVAILABLE, "工具不可执行", 403,
             )
+        if tool.http_enabled is False:
+            raise RuntimeApiError(
+                RUNTIME_TOOL_NOT_AVAILABLE, "工具不可用", 403,
+            )
         published = await session.scalar(
             select(func.count())
             .select_from(CatalogToolVersion)
@@ -282,39 +285,10 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
             )
         )
         scopes = list(result.scalars().all())
-        allowed = False
-        for scope in scopes:
-            if (
-                scope.scope_type == ToolScopeType.TOOL
-                and scope.scope_code == full_code
-            ):
-                allowed = True
-                break
-            if scope.scope_type == ToolScopeType.CAPABILITY:
-                linked = await session.scalar(
-                    select(CatalogCapabilityPackTool.id)
-                    .join(
-                        CatalogCapabilityPack,
-                        CatalogCapabilityPack.id
-                        == CatalogCapabilityPackTool.pack_id,
-                    )
-                    .where(
-                        CatalogCapabilityPack.pack_code == scope.scope_code,
-                        CatalogCapabilityPack.status
-                        == CatalogObjectStatus.ENABLED,
-                        CatalogCapabilityPackTool.tool_id == tool.id,
-                    )
-                    .limit(1)
-                )
-                if linked is not None:
-                    allowed = True
-                    break
-            if (
-                scope.scope_type == ToolScopeType.NAMESPACE
-                and scope.scope_code == tool.namespace
-            ):
-                allowed = True
-                break
+        from toolhive.runtime.tool_control.scope_expansion import (
+            scope_allows_tool,
+        )
+        allowed = await scope_allows_tool(session, scopes, tool)
         if not allowed:
             # 能力包页面维护的 pack-system 授权同样允许执行包内工具
             linked = await session.scalar(

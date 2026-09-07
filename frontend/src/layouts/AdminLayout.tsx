@@ -12,6 +12,8 @@ import {
   ToolOutlined,
   AuditOutlined,
   DatabaseOutlined,
+  ExperimentOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -47,6 +49,44 @@ export default function AdminLayout() {
         { key: '/catalog/capability-packs', icon: <DatabaseOutlined />, label: '能力包', operation: 'capability:view' },
         { key: '/catalog/reviews', icon: <AuditOutlined />, label: '审核', operation: 'tool:review' },
         { key: '/catalog/index-tasks', icon: <DatabaseOutlined />, label: '索引任务', operation: 'system_task:view' },
+      ],
+    },
+    {
+      key: '/mcp',
+      icon: <ApiOutlined />,
+      label: 'MCP 接入',
+      operation: 'mcp_server:view',
+      children: [
+        {
+          key: '/mcp/server-config',
+          icon: <ApiOutlined />,
+          label: '接入配置',
+          operation: 'mcp_server:view',
+        },
+        {
+          key: '/mcp/clients',
+          icon: <SafetyOutlined />,
+          label: '客户端与授权',
+          operation: 'mcp_client:view',
+        },
+        {
+          key: '/mcp/exposed-tools',
+          icon: <ToolOutlined />,
+          label: '暴露工具',
+          operation: 'mcp_client:view',
+        },
+        {
+          key: '/mcp/call-records',
+          icon: <FileSearchOutlined />,
+          label: '调用记录',
+          operation: 'mcp_trace:view',
+        },
+        {
+          key: '/mcp/test-debug',
+          icon: <ExperimentOutlined />,
+          label: '测试调试',
+          operation: 'mcp_test:run',
+        },
       ],
     },
   ];

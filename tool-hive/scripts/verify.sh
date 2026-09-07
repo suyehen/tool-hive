@@ -25,6 +25,14 @@ else
     exit 1
 fi
 
+echo "== MCP 运行入口配置 =="
+if [ -f "$NGINX_CONF" ] && grep -q "location /mcp/" "$NGINX_CONF"; then
+    echo "MCP 入口配置存在（$NGINX_CONF）"
+else
+    echo "MCP 入口配置缺失或未包含 /mcp/ 转发（$NGINX_CONF）" >&2
+    exit 1
+fi
+
 echo "验收通过：服务可访问，初始化状态接口正常，运行入口配置就绪。"
 
 # ── 可选完整 E2E：TOOLHIVE_E2E=1 时执行签名→发现→解析→执行链路 ──
@@ -96,4 +104,65 @@ if [ "${TOOLHIVE_E2E:-0}" = "1" ]; then
             exit 1
         fi
     fi
+fi
+
+# ── 可选 MCP E2E：TOOLHIVE_MCP_E2E=1 时执行 initialize→tools/list→tools/call ──
+if [ "${TOOLHIVE_MCP_E2E:-0}" = "1" ]; then
+    MCP_PYTHON="${TOOLHIVE_MCP_PYTHON:-./.venv/bin/python}"
+    MCP_URL="${TOOLHIVE_MCP_URL:-http://127.0.0.1:8082/mcp/}"
+    MCP_TOKEN="${TOOLHIVE_MCP_TOKEN:-}"
+    MCP_TOOL_CODE="${TOOLHIVE_MCP_TOOL_CODE:-math.basic.calculator}"
+    MCP_TOOL_ARGS="${TOOLHIVE_MCP_TOOL_ARGS:-}"
+    if [ -z "$MCP_TOKEN" ]; then
+        echo "MCP E2E 缺少必需环境变量: TOOLHIVE_MCP_TOKEN" >&2
+        exit 1
+    fi
+    echo "== MCP E2E（Bearer + Streamable HTTP） =="
+    MCP_URL="$MCP_URL" MCP_TOKEN="$MCP_TOKEN" \
+    MCP_TOOL_CODE="$MCP_TOOL_CODE" MCP_TOOL_ARGS="$MCP_TOOL_ARGS" \
+    "$MCP_PYTHON" - <<'PY'
+import asyncio
+import json
+import os
+
+import httpx2
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+
+async def main() -> None:
+    url = os.environ["MCP_URL"]
+    token = os.environ["MCP_TOKEN"]
+    tool_code = os.environ["MCP_TOOL_CODE"]
+    raw_args = os.environ.get("MCP_TOOL_ARGS", "") or "{}"
+    arguments = json.loads(raw_args)
+    async with httpx2.AsyncClient(
+        headers={"Authorization": f"Bearer {token}"}
+    ) as http_client:
+        async with streamable_http_client(
+            url, http_client=http_client,
+        ) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                init = await session.initialize()
+                print(f"MCP initialize ok: {init.server_info.name}")
+                tools = await session.list_tools()
+                names = [tool.name for tool in tools.tools]
+                print(f"MCP tools/list count={len(names)}")
+                if tool_code not in names:
+                    raise SystemExit(
+                        f"MCP E2E 工具不可发现: {tool_code}"
+                    )
+                result = await session.call_tool(tool_code, arguments)
+                text = " ".join(
+                    part.text for part in result.content if hasattr(part, "text")
+                )
+                print(f"MCP tools/call is_error={result.is_error}")
+                print(f"MCP tools/call text={text}")
+                if result.is_error:
+                    raise SystemExit("MCP E2E 工具调用返回错误")
+
+
+asyncio.run(main())
+PY
+    echo "MCP E2E 通过：认证、发现、执行均成功。"
 fi

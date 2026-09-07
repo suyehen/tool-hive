@@ -356,7 +356,8 @@ async def test_list_discoverable_tools_via_tool_scope() -> None:
         side_effect=[
             _execute_result([_scope()]),
             _execute_result([tool]),
-            _execute_result([]),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
+            MagicMock(all=MagicMock(return_value=[(tool.id,)])),
             MagicMock(all=MagicMock(return_value=[(tool.id,)])),
         ]
     )
@@ -374,7 +375,8 @@ async def test_list_discoverable_tools_filters_hidden_and_unpublished() -> None:
         side_effect=[
             _execute_result([_scope()]),
             _execute_result([visible, hidden]),
-            _execute_result([]),
+            MagicMock(all=MagicMock(return_value=[(visible.id,)])),
+            MagicMock(all=MagicMock(return_value=[(visible.id,)])),
             MagicMock(
                 all=MagicMock(return_value=[(visible.id,)]),
             ),
