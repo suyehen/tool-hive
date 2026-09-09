@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu, Button, theme, Dropdown, type MenuProps } from 'antd';
 import {
@@ -19,21 +19,56 @@ import { useAuth } from '../contexts/AuthContext';
 
 const { Header, Sider, Content } = Layout;
 
+type MenuEntry = {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  operation?: string;
+  children?: MenuEntry[];
+};
+
+function collectMenuLeafKeys(items: MenuEntry[]): string[] {
+  return items.flatMap((item) =>
+    item.children ? collectMenuLeafKeys(item.children) : [item.key],
+  );
+}
+
+function findMenuParentKey(
+  menuKey: string | undefined,
+  items: MenuEntry[],
+): string | undefined {
+  if (!menuKey) {
+    return undefined;
+  }
+  return items.find((item) =>
+    item.children?.some((child) => child.key === menuKey),
+  )?.key;
+}
+
+function resolveSelectedMenuKey(
+  pathname: string,
+  leafKeys: string[],
+): string | undefined {
+  // 首页路由为 /dashboard，菜单项 key 为 /
+  if (pathname === '/dashboard') {
+    return '/';
+  }
+  // 找到最长匹配的叶子菜单，支持 /catalog/tools/xxx 这类带参数的页面路径
+  return leafKeys
+    .filter((key) => pathname === key || pathname.startsWith(`${key}/`))
+    .sort((a, b) => b.length - a.length)[0];
+}
+
 export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
   const { session, operationItems, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
 
   // 菜单 → 后端操作码（前端仅控制展示，后端仍独立校验）
-  const menuPermission: Array<{
-    key: string;
-    icon: ReactNode;
-    label: string;
-    operation?: string;
-    children?: Array<{ key: string; icon: ReactNode; label: string; operation?: string }>;
-  }> = [
+  const menuPermission: MenuEntry[] = [
     { key: '/', icon: <DashboardOutlined />, label: '首页' },
     { key: '/accounts', icon: <UserOutlined />, label: '管理账号', operation: 'admin_account:view' },
     { key: '/roles', icon: <SafetyOutlined />, label: '后台角色', operation: 'role:view' },
@@ -91,6 +126,28 @@ export default function AdminLayout() {
     },
   ];
 
+  const menuLeafKeys = collectMenuLeafKeys(menuPermission);
+  const selectedKey = resolveSelectedMenuKey(location.pathname, menuLeafKeys);
+  const selectedMenuParentKey = findMenuParentKey(selectedKey, menuPermission);
+
+  // 路由变化时，自动展开当前菜单所属的父级菜单
+  useEffect(() => {
+    if (selectedMenuParentKey) {
+      setOpenKeys((keys) =>
+        keys.includes(selectedMenuParentKey) ? keys : [...keys, selectedMenuParentKey],
+      );
+    }
+  }, [selectedMenuParentKey]);
+
+  const handleOpenChange = (keys: string[]) => {
+    // 当前页面所属的父级菜单不允许被收起，保证高亮项始终可见
+    setOpenKeys(
+      selectedMenuParentKey
+        ? Array.from(new Set([...keys, selectedMenuParentKey]))
+        : keys,
+    );
+  };
+
   const menuItems: MenuProps['items'] = menuPermission
     .filter((item) => !item.operation || operationItems.includes(item.operation))
     .map(({ key, icon, label, children }) => {
@@ -122,8 +179,6 @@ export default function AdminLayout() {
     navigate('/login');
   };
 
-  const selectedKey = '/' + location.pathname.split('/')[1];
-
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
@@ -147,7 +202,9 @@ export default function AdminLayout() {
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[selectedKey]}
+          openKeys={collapsed ? undefined : openKeys}
+          onOpenChange={handleOpenChange}
+          selectedKeys={selectedKey ? [selectedKey] : []}
           items={menuItems}
           onClick={handleMenuClick}
           style={{ borderRight: 0 }}

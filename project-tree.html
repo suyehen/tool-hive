@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ToolHive 项目目录树</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f7f8fa;
+      color: #24292f;
+      font-family: "Microsoft YaHei", "PingFang SC", -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1180px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    p.tip { color: #57606a; font-size: 13px; margin: 0 0 16px; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .toolbar input {
+      flex: 1;
+      min-width: 240px;
+      padding: 7px 10px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .toolbar button {
+      border: 1px solid #d0d7de;
+      background: #ffffff;
+      border-radius: 6px;
+      padding: 7px 14px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .toolbar button:hover { background: #f3f4f6; }
+
+    .tree ul {
+      list-style: none;
+      margin: 2px 0 4px 18px;
+      padding-left: 14px;
+      border-left: 1px dashed #d8dee4;
+    }
+    .tree > ul {
+      margin-left: 0;
+      padding-left: 0;
+      border-left: none;
+    }
+    details { margin: 1px 0; }
+    details > summary {
+      cursor: pointer;
+      padding: 3px 6px;
+      border-radius: 6px;
+      user-select: none;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    details > summary:hover { background: #eef1f4; }
+    details > summary::marker { content: "▸ "; color: #57606a; font-size: 13px; }
+    details[open] > summary::marker { content: "▾ "; }
+    li.file {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    li.file:hover { background: #eef1f4; }
+    .icon { font-size: 13px; flex: none; }
+    .name {
+      font-family: Consolas, "Cascadia Code", Menlo, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      color: #0a66c2;
+    }
+    .desc {
+      color: #57606a;
+      font-size: 12px;
+    }
+    .no-result { color: #d1242f; padding: 12px; font-size: 14px; }
+
+    /* ===== 增强样式（覆盖上方基础样式） ===== */
+    body {
+      padding: 34px 20px;
+      background: radial-gradient(1100px 500px at 85% -10%, rgba(37, 99, 235, 0.16), transparent 60%),
+                  radial-gradient(900px 420px at -8% 15%, rgba(139, 92, 246, 0.13), transparent 55%),
+                  #edf2fa;
+      color: #1f2937;
+      font-size: 16px;
+    }
+    main { max-width: 1220px; }
+
+    .hero {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+      background: linear-gradient(135deg, #1e40af 0%, #4f46e5 55%, #7c3aed 100%);
+      color: #ffffff;
+      border-radius: 20px;
+      padding: 26px 30px;
+      margin-bottom: 20px;
+      box-shadow: 0 12px 28px rgba(30, 64, 175, 0.22);
+    }
+    .hero h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: 0.5px;
+    }
+    .hero .tip {
+      margin: 10px 0 0;
+      color: #dbeafe;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .hero .tip code {
+      background: rgba(255, 255, 255, 0.16);
+      padding: 2px 7px;
+      border-radius: 5px;
+      color: #ffffff;
+    }
+    .hero-badge {
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      padding: 9px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+      white-space: nowrap;
+      color: #f3f4ff;
+    }
+
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 18px;
+      padding: 18px 20px 14px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+    }
+    .toolbar {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 14px;
+      align-items: center;
+    }
+    .toolbar input {
+      padding: 10px 14px;
+      font-size: 16px;
+      border-color: #cbd5e1;
+      border-radius: 9px;
+      outline-color: #2563eb;
+    }
+    .toolbar button {
+      padding: 9px 16px;
+      font-size: 15px;
+      border-radius: 9px;
+      border-color: #cbd5e1;
+      color: #334155;
+    }
+    .toolbar button.primary {
+      background: #2563eb;
+      border-color: #2563eb;
+      color: #ffffff;
+    }
+    .toolbar button.primary:hover { background: #1d4ed8; }
+
+    .tree {
+      font-size: 15px;
+      padding: 2px 4px 8px;
+    }
+    .tree details > summary {
+      padding: 8px 10px;
+      border-radius: 9px;
+      line-height: 1.5;
+    }
+    .tree details > summary:hover { background: #eff6ff; }
+    .tree li.file {
+      padding: 6px 10px;
+      border-radius: 9px;
+      line-height: 1.5;
+    }
+    .tree li.file:hover { background: #f5f8ff; }
+    .tree .name {
+      font-size: 16px;
+      color: #1d4ed8;
+    }
+    .tree li.file .name { color: #0f172a; }
+    .tree .desc {
+      font-size: 14px;
+      color: #64748b;
+    }
+    .tree .icon { font-size: 15px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <div>
+        <h1>📦 ToolHive 项目目录树</h1>
+        <p class="tip">
+          来源：<code>F:\pycharm_workspace\toolhive</code> · 点击目录可展开/收起，搜索框支持按名称或功能过滤。
+        </p>
+      </div>
+      <div class="hero-badge">FastAPI · React · PostgreSQL · Redis · MCP</div>
+    </header>
+    <section class="card">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索目录 / 文件名 / 模块功能，例如 mcp、catalog、runtime">
+        <button id="expandAll" class="primary" type="button">全部展开</button>
+        <button id="collapseAll" type="button">全部收起</button>
+      </div>
+      <div id="tree" class="tree"></div>
+    </section>
+  </main>
+
+  <script>
+    const rootData = [
+      { name: "README.md", desc: "项目定位、快速开始、文档索引" },
+      { name: "README.en.md", desc: "英文版说明" },
+
+      {
+        name: "frontend/", desc: "React + TypeScript + Vite + Ant Design 管理前端",
+        children: [
+          { name: "package.json", desc: "依赖与 dev/build 脚本" },
+          { name: "vite.config.ts", desc: "开发代理 /api → 127.0.0.1:8100" },
+          { name: "dist/", desc: "生产构建产物（Nginx 托管）" },
+          {
+            name: "src/", desc: "前端源码",
+            children: [
+              { name: "main.tsx", desc: "React 挂载入口" },
+              { name: "App.tsx", desc: "全部前端路由定义" },
+              {
+                name: "api/", desc: "API 客户端封装",
+                children: [
+                  { name: "client.ts", desc: "axios 实例（会话 / CSRF 头）" },
+                  { name: "auth.ts / accounts.ts / roles.ts", desc: "认证、账号、角色 API" },
+                  { name: "caller-systems.ts / catalog.ts", desc: "调用系统与工具目录 API" },
+                  { name: "mcp.ts", desc: "MCP 接入五页面 API" }
+                ]
+              },
+              { name: "contexts/AuthContext.tsx", desc: "登录态、当前账号、操作项" },
+              { name: "components/ProtectedRoute.tsx", desc: "未登录跳转登录页" },
+              { name: "layouts/AdminLayout.tsx", desc: "侧边栏菜单、权限过滤、整体布局" },
+              {
+                name: "pages/", desc: "管理页面",
+                children: [
+                  { name: "LoginPage.tsx", desc: "账号 + 密码 + 图形验证码登录" },
+                  { name: "DashboardPage.tsx", desc: "首页（账号 / 操作项摘要）" },
+                  { name: "ChangePasswordPage.tsx", desc: "修改密码" },
+                  { name: "accounts/AccountListPage.tsx", desc: "管理账号" },
+                  { name: "roles/RoleListPage.tsx", desc: "后台角色 / 操作项分配" },
+                  { name: "caller-systems/CallerSystemListPage.tsx", desc: "调用系统" },
+                  {
+                    name: "catalog/", desc: "工具目录页面",
+                    children: [
+                      { name: "ProvidersPage.tsx", desc: "Provider 管理" },
+                      { name: "CapabilityPacksPage.tsx", desc: "能力包" },
+                      { name: "ToolsPage.tsx", desc: "工具 + 版本 + 发布 + 测试" },
+                      { name: "ReviewsPage.tsx", desc: "工具审核" },
+                      { name: "IndexTasksPage.tsx", desc: "索引任务（Outbox）" }
+                    ]
+                  },
+                  {
+                    name: "mcp/", desc: "MCP 接入页面",
+                    children: [
+                      { name: "ServerConfigPage.tsx", desc: "MCP 接入配置" },
+                      { name: "ClientsPage.tsx", desc: "客户端 / Token / IP / 授权" },
+                      { name: "ExposedToolsPage.tsx", desc: "暴露工具（只读）" },
+                      { name: "CallRecordsPage.tsx", desc: "MCP 调用记录" },
+                      { name: "TestDebugPage.tsx", desc: "协议级测试调试" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+
+      {
+        name: "tool-hive/", desc: "Python 3.11 + FastAPI 后端",
+        children: [
+          { name: "pyproject.toml", desc: "依赖声明与 toolhive CLI 入口" },
+          { name: "alembic/versions/", desc: "0001 基线建表、0002 外键对齐" },
+          { name: "sql/create_database.sql", desc: "创建数据库用户与库" },
+          { name: "sql/init.sql", desc: "建表 + 种子数据（开发期事实基线）" },
+          {
+            name: "scripts/", desc: "安装 / 启动 / 基础验收脚本",
+            children: [
+              { name: "install.sh / start.sh", desc: "环境安装与应用启动" },
+              { name: "verify.sh", desc: "HTTP + MCP 端到端验收" }
+            ]
+          },
+          {
+            name: "tests/", desc: "自动化测试",
+            children: [
+              { name: "api/ models/ runtime/ services/ mcp/", desc: "按后端模块划分的测试" },
+              { name: "fixtures/", desc: "测试数据与签名向量" },
+              { name: "conftest.py", desc: "pytest 公共夹具" }
+            ]
+          },
+          {
+            name: "src/toolhive/", desc: "后端主包",
+            children: [
+              { name: "main.py", desc: "应用入口：挂载 /api/admin、/api/runtime、/mcp" },
+              { name: "config.py", desc: "配置加载与生产配置校验" },
+              { name: "cli.py", desc: "init-admin / seed-tools / sign-request / rebuild-chroma" },
+
+              {
+                name: "core/", desc: "公共基础层",
+                children: [
+                  { name: "operation_codes.py", desc: "管理操作码唯一目录" },
+                  { name: "enums.py", desc: "状态机与类型枚举" },
+                  { name: "exceptions.py / constants.py", desc: "统一异常与常量" },
+                  { name: "network.py / logging.py", desc: "网络工具与日志" },
+                  { name: "snowflake.py / time_utils.py", desc: "ID 生成与时间处理" }
+                ]
+              },
+
+              {
+                name: "infrastructure/", desc: "基础设施层",
+                children: [
+                  { name: "database.py", desc: "PostgreSQL async session" },
+                  { name: "redis.py", desc: "Redis 客户端" },
+                  { name: "transactions.py", desc: "事务封装" },
+                  { name: "vector_index.py", desc: "Chroma 向量索引" }
+                ]
+              },
+
+              {
+                name: "api/", desc: "HTTP 接口层",
+                children: [
+                  { name: "ingress.py", desc: "可信代理 / 入口标识 / 来源 IP 中间件" },
+                  { name: "deps.py", desc: "运行侧安全配置依赖" },
+                  {
+                    name: "admin/", desc: "管理入口 /api/admin/**",
+                    children: [
+                      { name: "router.py", desc: "聚合挂载全部管理子路由" },
+                      { name: "middleware.py", desc: "Session + CSRF 中间件" },
+                      { name: "deps.py", desc: "require_operation 操作码鉴权" },
+                      { name: "bootstrap.py", desc: "初始化状态查询" },
+                      { name: "auth/", desc: "验证码 / 登录 / 登出 / 会话 / 改密" },
+                      { name: "accounts/", desc: "管理账号 CRUD 与生命周期" },
+                      { name: "roles/", desc: "后台角色 + 管理操作项" },
+                      { name: "caller_systems/", desc: "调用系统 / 公钥 / IP / 策略 / 范围" },
+                      {
+                        name: "catalog/", desc: "Catalog 管理 API",
+                        children: [
+                          { name: "providers.py", desc: "Provider 管理" },
+                          { name: "capability_packs.py", desc: "能力包与工具/系统关联" },
+                          { name: "tools.py", desc: "工具定义 + 工具测试" },
+                          { name: "versions.py", desc: "版本 / 绑定 / 审核 / 发布状态机" },
+                          { name: "reviews.py", desc: "待审核队列" },
+                          { name: "index_tasks.py", desc: "Chroma 索引投递任务" }
+                        ]
+                      },
+                      { name: "system_tasks/", desc: "Outbox 投递任务查询 / 重试" },
+                      { name: "mcp/", desc: "MCP 管理 API（五页面对应）" }
+                    ]
+                  },
+                  {
+                    name: "runtime/", desc: "HTTP 运行入口 /api/runtime/v1/**",
+                    children: [
+                      { name: "router.py", desc: "运行子应用 + 统一错误处理" },
+                      { name: "v1/tools.py", desc: "resolve / discover / execute" },
+                      { name: "v1/confirmations.py", desc: "高风险执行确认令牌" }
+                    ]
+                  }
+                ]
+              },
+
+              {
+                name: "mcp/", desc: "MCP 运行入口 /mcp/**",
+                children: [
+                  { name: "server.py", desc: "官方 SDK v2 Streamable HTTP 挂载" },
+                  { name: "middleware.py", desc: "宿主侧 Bearer Token 认证" },
+                  { name: "auth.py", desc: "Token 哈希比对 / 状态 / IP 规则" },
+                  { name: "console.py", desc: "协议级测试调试会话" }
+                ]
+              },
+
+              {
+                name: "runtime/", desc: "运行侧领域逻辑",
+                children: [
+                  { name: "authentication/", desc: "请求签名认证 + RSA/Ed25519 验签器" },
+                  { name: "context/", desc: "ToolContext 业务上下文契约" },
+                  { name: "control/traffic.py", desc: "QPS / 并发 / 配额 / 熔断" },
+                  { name: "confirmations/", desc: "一次性确认令牌" },
+                  {
+                    name: "execution/", desc: "Provider 受控执行",
+                    children: [
+                      { name: "gateway.py", desc: "ProviderGateway 统一出站边界" },
+                      { name: "http_executor.py", desc: "HTTP Provider 执行器" },
+                      { name: "outbound.py", desc: "固定映射出站请求构建 + SSRF 防护" },
+                      { name: "idempotency.py", desc: "写操作幂等" },
+                      { name: "health.py", desc: "Provider 健康检查" }
+                    ]
+                  },
+                  {
+                    name: "retrieval/", desc: "工具召回",
+                    children: [
+                      { name: "embedding.py", desc: "Embedding（腾讯云 TokenHub）" },
+                      { name: "keyword.py", desc: "关键词降级检索" },
+                      { name: "service.py", desc: "向量优先 + 权限过滤 + 索引同步" }
+                    ]
+                  },
+                  {
+                    name: "tool_control/", desc: "工具调用控制",
+                    children: [
+                      { name: "service.py", desc: "HTTP 调用决策链" },
+                      { name: "scope_expansion.py", desc: "HTTP / MCP 共用授权范围展开" }
+                    ]
+                  },
+                  { name: "tracing/service.py", desc: "Trace 事件落库" },
+                  { name: "validation/json_schema.py", desc: "JSON Schema 参数校验" },
+                  { name: "mcp_tools/", desc: "MCP tools/list 与 tools/call 执行" }
+                ]
+              },
+
+              {
+                name: "services/", desc: "业务服务层",
+                children: [
+                  { name: "security/", desc: "captcha / csrf / password / session / rate_limit" },
+                  { name: "account_service.py / auth_service.py / role_service.py", desc: "账号、登录、角色" },
+                  { name: "audit_service.py", desc: "基础管理审计" },
+                  { name: "caller_system_service.py", desc: "调用系统业务逻辑" },
+                  { name: "catalog_*.py", desc: "工具/版本/Provider/能力包/测试等服务" },
+                  { name: "mcp_*.py", desc: "MCP 客户端/授权/暴露工具/调用记录查询" },
+                  { name: "outbox/", desc: "Outbox 事件、投递与后台 Worker" }
+                ]
+              },
+
+              {
+                name: "models/", desc: "SQLAlchemy ORM（按表前缀归类）",
+                children: [
+                  { name: "management_*.py / account_role.py / password_history.py", desc: "管理账号、角色、操作项、审计" },
+                  { name: "caller_*.py", desc: "调用系统、公钥、IP 规则、运行策略、工具范围" },
+                  { name: "catalog_*.py", desc: "Provider、工具、版本、绑定、审核、发布、能力包" },
+                  { name: "mcp_*.py", desc: "MCP Server、客户端、Token、IP、授权" },
+                  { name: "runtime_*.py", desc: "确认令牌与运行 Trace" },
+                  { name: "outbox_*.py", desc: "事件与投递记录" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+
+      {
+        name: "deploy/", desc: "部署与网关",
+        children: [
+          { name: "README.md", desc: "部署、初始化与验收说明" },
+          { name: "nginx/toolhive.conf", desc: "管理 / 运行 / MCP 三个 Nginx 入口" }
+        ]
+      },
+
+      {
+        name: "docs/", desc: "需求与设计文档",
+        children: [
+          { name: "ToolHive总体功能与架构说明.md", desc: "总体功能与目标架构" },
+          { name: "一期功能/", desc: "一期目标、设计冻结、开发完成情况、验收报告" },
+          {
+            name: "二期功能/", desc: "二期功能批次",
+            children: [
+              { name: "01-MCP接入/", desc: "需求、设计冻结、开发计划、兼容矩阵（已开发落地）" },
+              { name: "02-工具召回/", desc: "待确认问题清单（尚未立项开发）" }
+            ]
+          },
+          { name: "待后续实现功能/", desc: "后续候选功能登记" }
+        ]
+      }
+    ];
+
+    function esc(value) {
+      return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function renderItems(items) {
+      const ul = document.createElement("ul");
+      items.forEach((item) => {
+        const li = document.createElement("li");
+        const hasChildren = item.children && item.children.length > 0;
+
+        if (hasChildren) {
+          const details = document.createElement("details");
+          details.open = true;
+          const summary = document.createElement("summary");
+          summary.innerHTML =
+            '<span class="icon">📁</span>' +
+            '<span class="name">' + esc(item.name) + "</span>" +
+            (item.desc ? '<span class="desc">' + esc(item.desc) + "</span>" : "");
+          details.appendChild(summary);
+          details.appendChild(renderItems(item.children));
+          li.appendChild(details);
+        } else {
+          li.className = "file";
+          li.innerHTML =
+            '<span class="icon">📄</span>' +
+            '<span class="name">' + esc(item.name) + "</span>" +
+            (item.desc ? '<span class="desc">' + esc(item.desc) + "</span>" : "");
+        }
+        ul.appendChild(li);
+      });
+      return ul;
+    }
+
+    function matches(node, query) {
+      const text = ((node.name || "") + " " + (node.desc || "")).toLowerCase();
+      return text.includes(query);
+    }
+
+    function filterNodes(nodes, query) {
+      if (!query) return nodes;
+      const out = [];
+      nodes.forEach((node) => {
+        const hit = matches(node, query);
+        if (node.children && node.children.length) {
+          const children = filterNodes(node.children, query);
+          if (hit) {
+            out.push(node);
+          } else if (children.length) {
+            out.push({ name: node.name, desc: node.desc, children });
+          }
+        } else if (hit) {
+          out.push(node);
+        }
+      });
+      return out;
+    }
+
+    const treeEl = document.getElementById("tree");
+    const searchEl = document.getElementById("search");
+
+    function refresh() {
+      treeEl.innerHTML = "";
+      const data = filterNodes(rootData, searchEl.value.trim().toLowerCase());
+      if (!data.length) {
+        const div = document.createElement("div");
+        div.className = "no-result";
+        div.textContent = "没有匹配的目录或文件";
+        treeEl.appendChild(div);
+        return;
+      }
+      treeEl.appendChild(renderItems(data));
+    }
+
+    searchEl.addEventListener("input", refresh);
+    document.getElementById("expandAll").addEventListener("click", () => {
+      treeEl.querySelectorAll("details").forEach((d) => { d.open = true; });
+    });
+    document.getElementById("collapseAll").addEventListener("click", () => {
+      treeEl.querySelectorAll("details").forEach((d) => { d.open = false; });
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
