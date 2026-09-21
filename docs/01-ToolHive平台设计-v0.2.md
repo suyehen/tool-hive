@@ -124,7 +124,7 @@
 | `Tool` | 逻辑工具 | `id, code, source_ref, name, description, domain, system, tags[], risk, **executable**, **discoverable**, review_required, input_schema, output_schema, status, owner` |
 | `ToolVersion` | 不可变版本快照 | `id, tool_id, version, 上述定义字段快照, status, published_at` |
 | `Channel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
-| `Binding` | 执行绑定 | `id, version_id, provider_id, method, path_template, param_mapping, timeout_s, retry_max` |
+| `Binding` | 执行绑定 | `id, version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp`/`local` 类型为空**，见 §4.3）；`timeout_s, retry_max`（可空，取默认值） |
 | `Grant` | 主体 × 范围 × 配额 | `id, principal_id, scope_type(domain\|system\|tag\|tool), scope_value, quota, constraints, status` |
 | `Invocation` | 每次调用记录 | `id, trace_id, principal_id, tool_id, version_id, protocol, outcome, duration_ms, request_digest, result_digest, error_code` |
 | `AuditLog` | 治理事件（谁改了什么） | `id, actor_id, action, object_type, object_id, before/after_summary` |
@@ -142,9 +142,20 @@
 >
 > | 字段 | 含义 | M0 取值 |
 > |---|---|---|
-> | `executable` | 是否允许执行。**为 false 时检索结果也会把它过滤掉**（见 §16.2） | 导入的**写操作工具**一律 `false`（D14） |
+> | `executable` | 是否允许执行。**为 false 时检索结果也会把它过滤掉**（见 §16.2） | 判定条件与内核确认判定对齐：**写方法或 `risk=high`**（D14） |
 > | `discoverable` | 是否出现在检索结果里（用于"可执行但不该被搜到"的内部工具） | 默认 `true` |
 > | `review_required` | 该工具的版本是否必须走审批 | **M0 恒为 `true`**（M1 起支持按来源信任策略，§4.3） |
+
+> **`Tool.status` 的取值集合**（统一在此列举一次，避免各节各写一个）：
+>
+> | 取值 | 含义 | 可否调用 |
+> |---|---|---|
+> | `enabled` | 正常 | ✅ |
+> | `disabled` | 人工停用 | ❌ |
+> | `stale` | **上游已消失**（§5.5 重导比对产生） | ✅ **仍可调用**，但管理侧标红提醒，等待人工决定废弃或归档 |
+> | `archived` | 终态 | ❌，且不可修改 |
+>
+> 注意与 `ToolVersion.status`（§4.3）区分：`deprecated` / `retired` 属于**版本级**状态，不在本表。
 
 ### 4.2 三个关键设计选择
 
@@ -458,7 +469,7 @@ Authorization: Bearer {DASHSCOPE_API_KEY}
 
 #### 延迟影响（重要，改变了检索的画像）
 
-这是一次**跨网络的远程调用**，p95 通常在 **150–400ms**，远高于本地 cross-encoder 的 60ms 预算。
+这是一次**跨网络的远程调用**，p95 通常在 **150–400ms**，比本地部署的 cross-encoder **高一个量级**（延迟表见 §18 A.4）。
 因此**启用精排会显著改变检索延迟**，必须按 §6.7 的两套 SLO 分别考核。
 
 可选缓解：把送排候选数从 100 降到 **20–30**（远程调用的耗时与文档数正相关）。
@@ -523,8 +534,19 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 - **旧版本保留期**：切换后**至少保留 7 天**用于回滚；只有在新版本稳定运行且没有未完成的重嵌任务时，
   才由后台任务清理旧版本数据，**不自动删除**
 - **一致性约束**：在线查询 embedding **必须用与 active 版本相同的模型**，否则向量空间不一致。
-  因此 `active_index_version` 与 `embedding.model` 在配置上**绑成一组**——改一个必须改另一个，
-  启动时校验两者匹配，不匹配则**拒绝启动**
+  **但校验方式不能是"两个配置项必须相等"**——那会卡死重建流程：
+  重建新索引本来就需要新模型，而 `active_index_version` 仍指向旧模型，两者必然不等。
+
+  正确做法是**基于索引版本元数据校验**：
+
+  | 环节 | 模型来源 |
+  |---|---|
+  | 重建任务 | 命令参数或独立配置：`toolhive rebuild-index --model <新模型> --index-version v2` |
+  | 索引版本元数据 | 重建时把**模型名与维度一起写入** `index_meta`（§6.4 已要求写维度，模型同理） |
+  | 在线查询 | 使用 `embedding.model` |
+  | **启动校验** | `active_index_version` **元数据里的模型** == 在线 `embedding.model`，不匹配则**拒绝启动** |
+
+  这样约束语义不变（在线查询与索引必须同模型），**但不再阻碍重建**。
 
 ### 6.6 降级策略
 
@@ -589,13 +611,13 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 执行内核：
   1. 解析工具与版本（code/channel → ToolVersion；不可调用 → TH_TOOL_NOT_FOUND）
   2. 授权判定（无权限 → TH_TOOL_NOT_FOUND，与"不存在"不可区分）
-  3. QPS 限流 + 熔断 + 时间窗 / IP 约束   ← 保护平台自身，幂等命中也要计
+  3. QPS 限流 + 时间窗 / IP 约束   ← 保护平台自身与授权约束，幂等命中也要校验
   4. 幂等查询（按请求指纹）
-       · 命中已完成结果且指纹一致 → 直接返回（不碰确认令牌、不计日配额与并发）
+       · 命中已完成结果且指纹一致 → 直接返回（不碰确认令牌、不计配额与并发、不判熔断）
        · 键已被不同参数占用       → TH_IDEMPOTENCY_KEY_REUSED
   5. 输入 schema 校验
   6. 确认令牌校验（高风险或写操作；原子消费）
-  7. 日配额 + 并发占用   ← 只在"确定要真正执行"之后才扣
+  7. 日配额 + 并发占用 + 熔断判定   ← 只在"确定要真正打上游"之后才扣 / 才拒
   8. 幂等认领（Redis SET NX + 绑定请求指纹；并发后到者得 TH_IDEMPOTENCY_IN_PROGRESS）
   9. 凭据注入（从 Credential 解密 → 注入 header/query/mTLS）
  10. 出站执行（Provider 适配器，SSRF 防护 + 整体 deadline）
@@ -604,18 +626,33 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
  13. 返回统一结果
 ```
 
-> **配额为什么分成两处（第 3 步与第 7 步）**
+> **这些机制为什么分布在不同位置**——按"这项资源是否真的被消耗"来分：
 >
-> 原设计把配额整体排在幂等查询之前，导致**因网络抖动重试一个已成功的请求也会重复扣配额**。
-> 修正为按"这项资源是否真的被消耗"来区分：
->
-> | 机制 | 位置 | 幂等命中时是否计 | 理由 |
+> | 机制 | 位置 | 幂等命中时 | 理由 |
 > |---|---|---|---|
-> | **QPS 限流** | 第 3 步（幂等查询之前） | ✅ **计** | 它保护平台自身不被高频打；缓存命中也是一次请求 |
-> | **日配额** | 第 7 步（真正执行前） | ❌ **不计** | 它对应**上游成本**；缓存命中不产生上游调用 |
+> | **QPS 限流** | 第 3 步（幂等查询之前） | ✅ **计** | 它保护**平台自身**不被高频打；缓存命中也是一次请求 |
+> | **时间窗 / IP 约束** | 第 3 步 | ✅ **校验** | 属**授权约束**，缓存命中同样要过 |
+> | **熔断** | 第 7 步（与配额同组） | ❌ **不判定** | 它保护的是**上游**；缓存命中根本没打上游 |
+> | **日配额** | 第 7 步 | ❌ **不计** | 对应**上游成本**；缓存命中不产生上游调用 |
 > | **并发占用** | 第 7 步 | ❌ **不计** | 缓存命中极快，不占用上游资源 |
 >
-> 这样"重试已成功的请求"既不会双扣配额，也不会被除 QPS 外的机制惩罚。
+> ⚠️ **熔断必须在幂等查询之后**：熔断与日配额/并发同类（都在回答"是否真的会打上游"）。
+> 若把它放在第 3 步，Provider 熔断打开时，一个重试"已成功请求"的调用方会收到
+> `TH_CIRCUIT_OPEN`（"目标服务暂时不可用"）——但**结果早就算出来了**，
+> 这个错误纯属误导，会让 Agent 做无意义的退避。
+
+> **第 7 步扣减的资源必须能归还**（否则"请求从未执行却消耗了配额"）
+>
+> 第 7 步之后仍可能失败，归还规则如下：
+>
+> | 失败点 | 日配额 | 并发槽 |
+> |---|---|---|
+> | 第 8 步幂等认领失败（并发后到者） | **归还** | **归还** |
+> | 第 9 步凭据解密失败 | **归还** | **归还** |
+> | 第 10 步及之后（出站失败 / 超时 / 输出校验失败） | **不归还**（上游成本已发生） | **必须在 `finally` 无条件释放** |
+>
+> 顺序本身不改：若把"幂等认领"提到第 7 步之前，会把幂等键卡在 `processing` 状态直到 TTL，
+> 反而制造更多"重复请求处理中"的误判。
 
 > **为什么"幂等查询"必须排在"确认令牌校验"之前**
 >
@@ -636,6 +673,9 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 > **幂等键必须绑定请求指纹**：`K` 与 `(工具, 参数哈希)` 绑定。
 > 同一 `K` 配**不同**参数到达时，返回 `TH_IDEMPOTENCY_KEY_REUSED`（`retryable: false`），
 > **而不是返回旧结果**——否则调用方会拿到与本次请求不符的结果，比报错更危险。
+>
+> **保留期**：`idempotency_ttl` 默认 **24h**（§7.2）。也就是说**调用方最迟 24 小时内重试仍能拿回原结果**，
+> 超过则视为新请求重新执行。
 
 ### 7.2 横切关注点（只实现一次）
 
@@ -644,6 +684,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | 配额 | **Redis + Lua 原子计数**（令牌桶/滑动窗口），第一天就是分布式的 |
 | 并发 | Redis 信号量（不是进程内） |
 | 幂等 | **两段式**：先查缓存（重试拿回原结果）→ 再 `SET NX` 认领（防并发）；键与请求指纹绑定，详见 §7.1 |
+| 幂等保留期 | `idempotency_ttl` 默认 **24h**。到期后 key 与缓存结果一并清除，**跨天重试会重新执行**。它与日配额窗口**互不相干**：配额按自然日计，幂等按 24h 滑窗计 |
 | 确认 | 一次性令牌，条件 UPDATE 原子消费 |
 | 超时 | 一个**整体 deadline** 从入口贯穿到出站，所有阶段共享 |
 | 重试 | 仅幂等方法 + 抖动退避 + 受 deadline 约束 |
@@ -736,12 +777,15 @@ MCP 的 `tools/call` **不返回 HTTP 状态码**，它用 `isError` + `content`
 | 场景 | REST | MCP |
 |---|---|---|
 | 成功 | 2xx + 结果体 | `isError: false` + `content` + `structuredContent` |
-| 业务错误（上表全部） | 对应 HTTP 状态码 + 统一错误体 | `isError: true`；`content[0].text` 放 `message`；**`structuredContent`（或 `_meta`）携带 `{code, retryable, trace_id, retry_after_ms}`** |
+| 业务错误（上表全部） | 对应 HTTP 状态码 + 统一错误体 | `isError: true`；`content[0].text` 放 `message`；**错误码等结构化字段一律放 `_meta`**：`_meta: {"code", "retryable", "trace_id", "retry_after_ms"}` |
 | 认证失败 | 401 | **传输层 HTTP 401**（MCP 规范要求认证在传输层，不进 `tools/call`） |
 
 > ⚠️ **关键**：MCP 侧调用方**无法依赖 HTTP 状态码判断可重试性**。
-> 因此 `code` / `retryable` **必须放进 `structuredContent`（或 `_meta`）**，
-> 不能只把错误信息拼成一段文本——那样调用方只能做字符串匹配，等于没有错误模型。
+> 因此 `code` / `retryable` **必须放进 `_meta`**，不能只把错误信息拼成一段文本——那样调用方只能做字符串匹配，等于没有错误模型。
+>
+> **为什么用 `_meta` 而不是 `structuredContent`**：MCP 语义里 `structuredContent` 是"**成功结果且符合该工具 `outputSchema`**"的载体。
+> 在 `isError: true` 时往里塞错误码，会与 `outputSchema` 的契约冲突（错误结构本来就不满足成功 schema）。
+> `_meta` 才是协议留给扩展元数据的正式位置。
 
 ---
 
@@ -840,10 +884,14 @@ WHERE domain = $1 AND tool_id = ANY($2)
 按 Principal 在 Redis 做短 TTL 缓存：
 
 ```
-key:   visible:{principal_id}:{scope_hash}:{visible_ver}
+key:   visible:{principal_id}:{visible_ver}
 value: tool_id 集合（压缩存储）
 ttl:   60s
 ```
+
+> **key 里为什么不能带 `scope`**：可见集合只依赖 **Principal + Grant**，与请求的 `scope` 无关
+> ——`scope` 是在可见集合**之上**再收窄（§6.2 步骤 2）。把 `scope` 放进 key 会让 key 数量
+> 随请求组合膨胀、命中率骤降。**scope 在查询时叠加即可**（`WHERE tool_id = ANY(...) AND domain = $1`）。
 
 **失效方式（两条并用）**——只靠 TTL 会导致"授权已收回但调用方仍可见"：
 
@@ -945,7 +993,7 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 | **审计**（治理事实） | `AuditLog`：谁改了什么、谁调用了什么、结果哈希 |
 | **凭据使用审计** | 每次解密凭据出站时记一条：`credential_id` + `principal_id` + `tool_id` + `trace_id`（**不记凭据值**）——§10.1 提到的"访问审计"落在这里 |
 | **Trace**（技术链路） | **不引入 OpenTelemetry**：`trace_id` 在入口生成，贯穿 `retrieve → authorize → execute → upstream`，写入结构化日志与 `Invocation` 记录；排查时按 `trace_id` 串日志 |
-| **指标** | **不引入 Prometheus**：关键计数（QPS、错误率、配额拒绝、熔断次数、**检索降级率**）写入日志；另提供管理侧统计接口，从事件表聚合出用量报表 |
+| **指标** | **不引入 Prometheus**：关键计数（QPS、错误率、配额拒绝、熔断次数、**检索降级率**）写入日志；另提供 **CLI 子命令 `toolhive stats --since <时间>`** 从事件表聚合用量报表（**M0 管理面只有 CLI**，与 §16.2 一致；M1 有管理 API 后再考虑暴露为接口） |
 | **延迟分位** | 不接 Prometheus 的代价是**无法从原始日志直接算 p95**。补救：日志里写**预聚合的延迟直方图桶**（固定边界，如 10/25/50/100/200/500/1000/2000ms），日志解析即可算分位——成本几乎为零 |
 | **日志** | 结构化 JSON，每条带 `trace_id` |
 | **健康检查** | liveness / readiness 分离；readiness 检查 PostgreSQL、Redis、检索索引 |
@@ -977,7 +1025,11 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 | 手机号 `1[3-9]\d{9}` | `<PHONE>` |
 | 身份证（18 位，含末位 X） | `<ID_CARD>` |
 | 邮箱 | `<EMAIL>` |
-| 银行卡（16–19 位连续数字） | `<BANK_CARD>` |
+| 银行卡（**仅在带"卡号/card/银行卡"等前缀上下文时才匹配**） | `<BANK_CARD>` |
+
+> ⚠️ **裸 16–19 位数字不脱敏**：订单号、流水号、时间戳拼接串都会命中这个模式，
+> 误伤后不仅无意义，还会把评测语料打坏（脱敏后的 query 无法用于判断"这条查询该匹配哪个工具"）。
+> 宁可少脱敏，也不要过度脱敏——**脱敏规则的副作用是降低评测能力**。
 
 - **截断长度**默认 512 字符（与 §6.1 的 `query` 上限一致），可配置
 - **脱敏默认开启**；关闭必须显式配置，不能是默认行为
@@ -1182,7 +1234,7 @@ def test_core_is_framework_free():
 | **调用方认证** | **API Key**（每 Principal 一把，可轮换） | 签名的请求认证（RSA/Ed25519）留到 M1，作为可插拔 authenticator（Q2） |
 | **MCP 客户端 / MCP 服务端** | **两者都不做**（区分见 §5.1） | 均为 M1，且**彼此独立**（Q3） |
 | **确认令牌端点** | **不做**，内核只保留判定并对高风险/写操作直接拒绝 | M0 工具以读为主，链路 fail-safe（Q4） |
-| **写操作工具的导入** | **照常建档，但标 `executable=false`**，并在导入报告中显式列出"因 M0 未实现确认令牌而未启用"；**不跳过导入** | 避免"导入即不可用却无任何提示"；标记不可用可让管理员看到后决定是否补齐确认流程。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
+| **需确认工具的导入** | **照常建档，但标 `executable=false`**；判定条件**与内核第 6 步的确认判定完全对齐**：`method ∈ {POST,PUT,PATCH,DELETE}` **或** `risk == high`（**只读但高风险的工具同样处理**）。导入报告显式说明原因；**不跳过导入** | 否则会出现"搜得到、调得动、必被拒"的坏体验：`risk=high` 的 GET 工具不会被标不可用，但执行时第 6 步要求确认而 M0 无确认端点。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
 | **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5） |
 | **元数据富化** | **只做规则富化** | LLM 描述补全改为"评测触发的可选项"，见 §5.4 |
 | **精排（rerank）** | **供应商已定（DashScope `qwen3.7-text-rerank`）**；管线保留该阶段，但**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**不计入基线延迟 SLO**，见 §6.7 |
@@ -1263,7 +1315,7 @@ def test_core_is_framework_free():
 | D7 | embedding 服务 | 使用现成的境内服务（OpenAI 兼容 `/v1/embeddings`） | §6.4 §12 |
 | D8 | M0 范围与实现细节 | **以 §16.2 的「M0 范围决策」表为唯一口径**（此处不再重复枚举，避免两处不同步） | §16.2 |
 | D9 | **明确排除的外部依赖** | **KMS、Vault、OpenTelemetry、Prometheus 一律不接**；Redis 与 PostgreSQL(+pgvector) 使用**已有现成实例**。**将来若接入统一监控体系，`trace_id` 与结构化日志可直接被采集，不需要改业务代码**（故 R11 的"未定"不影响现在开工） | §12 |
-| D10 | **错误模型** | 统一错误体 `{code, message, trace_id, retryable, retry_after_ms}` + `TH_*` 错误码枚举（17 个）；**由内核统一产出，两个前端只做协议翻译** | §7.4 |
+| D10 | **错误模型** | 统一错误体 `{code, message, trace_id, retryable, retry_after_ms}` + **19 个 `TH_*` 错误码**（见 §7.4 表）；**由内核统一产出，两个前端只做协议翻译** | §7.4 |
 | D11 | **配额语义** | 每个命中的 grant **各自独立计数，任一超限即拒绝**；增加 grant 只增加约束、不增加额度 | §9.1 |
 | D12 | **Channel 悬空** | **拒绝**废弃被 Channel 指向的版本（**不做自动回退**）；无 stable 通道的工具视为不可调用 | §4.3 |
 | D13 | **数据留存** | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation` | §11.1 |
@@ -1284,7 +1336,7 @@ def test_core_is_framework_free():
 | R4 | 向量/关键词融合权重是否按域调参 | M2 | 评测驱动 |
 | R5 | 描述补全（引入 LLM 富化） | **评测触发，可能永不引入** | 见 §5.4 |
 | R6 | 审计与 Invocation 的保留周期 | M0 不删除；M1 由合规确定 | |
-| R7 | KEK 轮换的运维流程 | M1 | **不接 KMS**，靠多 KEK 并存 + 后台重包装，见 §10.1 |
+| R7 | KEK 轮换的**实现** | M1（**流程已在 §10.1 设计定**） | 不接 KMS，靠多 KEK 并存 + 后台重包装 |
 | R8 | 中文分词 / BM25 升级 | 评测触发，可能永不引入 | M0 用 `pg_trgm` 绕开，见 §6.2 |
 | R9 | **reranker 接入与启用** | **供应商已定（DashScope）**，M1 交付适配器 | 管线保留精排阶段但**默认关闭**（走 no-op，等价于 RRF 顺序）；接口 + 配置项 + no-op 实现先就位，**代码留 TODO**；是否开启由评测 A/B 决定，见 §6.2 |
 | R9b | **rerank 服务的限流 / SLA / 计费** | M1 接入时实测 | 与 embedding 同类，属"事实探测"而非决策项 |
@@ -1349,9 +1401,9 @@ cross-encoder 必须对每个候选各算一次前向，候选数量直接决定
 > 缓解手段：缩小候选到 30~50、换 MiniLM 级小模型、把 `max_length` 从 512 降到 128（工具描述只有一句话）、
 > 或独立部署走 GPU。
 
-### A.5 不用模型的排序信号（M0 可用）
+### A.5 不用模型的排序信号
 
-粗排之后、精排之前，还可以叠加这些**确定性、零成本**的信号：
+粗排之后、精排之前，还可以叠加这些**确定性、零成本**的信号（**注：其中"调用成功率/频次"依赖数据积累，属 R10/M2**）：
 
 | 信号 | 说明 |
 |---|---|
