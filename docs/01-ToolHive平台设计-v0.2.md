@@ -88,9 +88,9 @@
 └──────────────────────────┬──────────────────────────────────┘
                            │ 统一内部契约 ToolInvocation
 ┌──────────────────────────▼──────────────────────────────────┐
-│  执行内核（唯一实现）                                          │
-│  版本解析 → 授权判定 → 配额/并发/熔断 → 确认 → 幂等             │
-│  → 参数校验 → 凭据注入 → 出站执行 → 输出校验 → 审计/Trace       │
+│  执行内核（唯一实现）——**下列仅为能力枚举，实际阶段顺序以 §7.1 为准** │
+│  版本解析 · 授权判定 · 幂等（查询/认领）· 参数校验 · 确认令牌        │
+│  · 配额与并发 · 熔断 · 凭据注入 · 出站执行 · 输出校验 · 审计与 Trace │
 ├──────────────────────────────────────────────────────────────┤
 │  工具检索                                                     │
 │  权限过滤 → 关键词(pg_trgm) ∥ 向量 → RRF → 精排(可选) → top-k       │
@@ -124,7 +124,7 @@
 | `Tool` | 逻辑工具 | `id, code, source_ref, name, description, domain, system, tags[], risk, **executable**, **discoverable**, review_required, input_schema, output_schema, status, owner` |
 | `ToolVersion` | 不可变版本快照 | `id, tool_id, version, 上述定义字段快照, status, published_at` |
 | `Channel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
-| `Binding` | 执行绑定 | `id, version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp`/`local` 类型为空**，见 §4.3）；`timeout_s, retry_max`（可空，取默认值） |
+| `Binding` | 执行绑定 | `id, version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp` 类型全为空**；**`local` 仅 `method="COMPUTE"`**；`http` 三者必填，见 §4.3）；`timeout_s, retry_max`（可空，取默认值） |
 | `Grant` | 主体 × 范围 × 配额 | `id, principal_id, scope_type(domain\|system\|tag\|tool), scope_value, quota, constraints, status` |
 | `Invocation` | 每次调用记录 | `id, trace_id, principal_id, tool_id, version_id, protocol, outcome, duration_ms, request_digest, result_digest, error_code` |
 | `AuditLog` | 治理事件（谁改了什么） | `id, actor_id, action, object_type, object_id, before/after_summary` |
@@ -647,9 +647,15 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 >
 > | 失败点 | 日配额 | 并发槽 |
 > |---|---|---|
-> | 第 8 步幂等认领失败（并发后到者） | **归还** | **归还** |
-> | 第 9 步凭据解密失败 | **归还** | **归还** |
-> | 第 10 步及之后（出站失败 / 超时 / 输出校验失败） | **不归还**（上游成本已发生） | **必须在 `finally` 无条件释放** |
+> | 第 8 步 幂等认领失败（并发后到者） | **归还** | **归还** |
+> | 第 9 步 凭据解密失败 | **归还** | **归还** |
+> | 第 10 步 **出站前**校验失败（域名白名单 / SSRF 地址校验） | **归还** | **归还** |
+> | 第 10 步 **实际出站**失败 / 超时 | 不归还（上游成本已发生） | **`finally` 无条件释放** |
+> | 第 11 步 输出 schema 校验失败 | 不归还（上游成本已发生） | **`finally` 无条件释放** |
+>
+> **一句话原则：只有"真的打到了上游"才不归还日配额。**
+> 出站前的域名白名单与 SSRF 地址校验属于**平台侧拦截**，根本没产生上游调用，因此必须归还。
+> `mcp` 类型同理——那里的"上游"指上游 MCP Server。
 >
 > 顺序本身不改：若把"幂等认领"提到第 7 步之前，会把幂等键卡在 `processing` 状态直到 TTL，
 > 反而制造更多"重复请求处理中"的误判。
@@ -684,7 +690,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | 配额 | **Redis + Lua 原子计数**（令牌桶/滑动窗口），第一天就是分布式的 |
 | 并发 | Redis 信号量（不是进程内） |
 | 幂等 | **两段式**：先查缓存（重试拿回原结果）→ 再 `SET NX` 认领（防并发）；键与请求指纹绑定，详见 §7.1 |
-| 幂等保留期 | `idempotency_ttl` 默认 **24h**。到期后 key 与缓存结果一并清除，**跨天重试会重新执行**。它与日配额窗口**互不相干**：配额按自然日计，幂等按 24h 滑窗计 |
+| 幂等保留期 | `idempotency_ttl` 默认 **24h**。**到期后（而非"跨自然日"）** key 与缓存结果一并清除，**此时**重试才会重新执行并消耗当日配额。24h 窗口内的跨天重试（如 23:00 成功、次日 01:00 重试）**仍命中缓存**。它与日配额窗口互不相干：配额按自然日计，幂等按 24h 滑窗计 |
 | 确认 | 一次性令牌，条件 UPDATE 原子消费 |
 | 超时 | 一个**整体 deadline** 从入口贯穿到出站，所有阶段共享 |
 | 重试 | 仅幂等方法 + 抖动退避 + 受 deadline 约束 |
@@ -1064,7 +1070,7 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 | **KMS** | KEK 由环境变量注入；轮换走运维流程（§10.1） |
 | **Vault / 外部凭据保管** | 凭据密文入库；`credential.external_ref` 字段仅作预留，不接任何外部服务 |
 | **OpenTelemetry** | `trace_id` + 结构化日志串链路（§11） |
-| **Prometheus** | 关键计数写日志 + 管理侧从 `Invocation` 聚合的统计接口（§11） |
+| **Prometheus** | 关键计数写日志 + **管理侧 CLI 聚合（M0）/ 接口（M1）**（§11） |
 
 > Redis 与 PostgreSQL(+pgvector) 属于**已有现成实例**，不算新增依赖。
 
@@ -1240,7 +1246,7 @@ def test_core_is_framework_free():
 | **精排（rerank）** | **供应商已定（DashScope `qwen3.7-text-rerank`）**；管线保留该阶段，但**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**不计入基线延迟 SLO**，见 §6.7 |
 | **多租户** | **不做**，`tenant_id` 字段预留 | — |
 | **KEK** | **环境变量注入，不接 KMS** | 轮换走运维流程，见 §10.1 |
-| **可观测性** | **不接 OpenTelemetry、不接 Prometheus** | 用 `trace_id` + 结构化日志；统计走管理侧聚合接口，见 §11 |
+| **可观测性** | **不接 OpenTelemetry、不接 Prometheus** | 用 `trace_id` + 结构化日志；统计走**管理侧 CLI 聚合（M0）/ 接口（M1）**，见 §11 |
 | **外部凭据保管** | **不接 Vault**，`external_ref` 仅作字段预留 | 凭据密文入库，见 §10.1 |
 | **审批权限** | 管理面是 CLI，**能执行 CLI 的人即可审**；M0 的审批**只留痕、不做权限分离**（导入者可自审自批） | M1 引入角色与职责分离（Q7） |
 | **按来源免审策略** | **不做**，M0 `review_required` 恒为 true | M1（Q8） |
@@ -1319,7 +1325,7 @@ def test_core_is_framework_free():
 | D11 | **配额语义** | 每个命中的 grant **各自独立计数，任一超限即拒绝**；增加 grant 只增加约束、不增加额度 | §9.1 |
 | D12 | **Channel 悬空** | **拒绝**废弃被 Channel 指向的版本（**不做自动回退**）；无 stable 通道的工具视为不可调用 | §4.3 |
 | D13 | **数据留存** | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation` | §11.1 |
-| D14 | **写操作工具在 M0** | 照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 |
+| D14 | **需确认的工具在 M0** | 判定条件**与内核确认判定对齐**（写方法 **或** `risk == high`），照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 §4.1 |
 | D15 | **rerank 供应商** | **DashScope `qwen3.7-text-rerank`**（境内、判别式）；管线保留精排阶段，**默认关闭**，由评测决定开启；远程调用 p95 150–400ms 需并入延迟 SLO | §6.2 §6.7 §12 |
 
 **这些决策已足够冻结 M0 的表结构与接口，可以直接开工。**
