@@ -344,6 +344,9 @@ M0 **只实现** `draft → pending_review → published / rejected`，加上工
 
 纯代码实现，无模型依赖。
 
+> **注意：富化不生成 `one_liner`**。检索响应里的 `description_snippet` 是**查询时对 `description` 截断**产生的
+> （§6.1），不是存储字段——避免为 1w 个工具维护一个没人写的字段。
+
 #### ② 描述补全（**可选，由评测触发**；若启用则只在离线批处理）
 
 **触发条件**：评测集证明"检索失败的主要原因是被索引的文本太差"，才引入这一步。用 LLM 从路径、参数、响应结构推断人类可读的描述（把 `getT2UsingGET` 补成"根据客户 ID 查询客户档案"）。
@@ -392,16 +395,31 @@ POST /v1/tools/search
     {
       "code": "aftersale.ticket.list",
       "name": "查询工单列表",
-      "one_liner": "按客户查询售后工单",
-      "matched_reason": "命中『投诉』『客户』",
+      "description_snippet": "按客户查询售后工单",   // description 截断（默认 80 字符）
+      "matched_reason": ["投诉", "客户"],           // 关键词路命中的 token，最多 3 个
       "score": 0.87
     }
   ],
-  "total_candidates": 187,          // scope 过滤后的候选总量
+  "total_candidates": 187,          // 权限过滤 + scope 收窄后的候选总数
   "degraded": false,                // 向量不可用时降级为关键词
   "trace_id": "..."
 }
 ```
+
+**候选条目的字段来自哪里**（此前未定义，实现者只能自己编——现予明确）：
+
+| 字段 | 来源 |
+|---|---|
+| `code` / `name` | `Tool` 表字段 |
+| `description_snippet` | **查询时对 `Tool.description` 截断**（默认 80 字符，长度可配）。**不新增 `one_liner` 字段**——理由：1w 工具下没人维护它，规则富化（§5.4 ①）也无从生成；截断是确定性且零成本的。若将来启用 §5.4 ② 的描述补全，snippet 质量会**自动提升，仍不需要新字段** |
+| `matched_reason` | **关键词路（`pg_trgm`）命中的 token 列表**，最多 3 个；纯关键词路未命中时为空数组。**它是解释性字段，不参与排序** |
+| `score` | RRF 融合分（未启用精排时即最终分） |
+
+> `total_candidates` = **经过权限过滤与 scope 收窄后的候选总数**（不是全平台工具数），
+> 供调用方判断"要不要放宽 scope 或调大 k"。
+
+> **`description_snippet` 用数组/字符串的选择**：`matched_reason` 定为**数组**而非"命中『x』『y』"这类字符串，
+> 因为**平台不该编码展示格式**——拼成人话是调用方（或上层 Agent）的事。
 
 ```
 GET /v1/catalog/taxonomy
@@ -423,7 +441,7 @@ query + scope
   → [2] scope 缩小：按 domain/system/tags 进一步收窄
   → [3] 粗排（召回）：关键词相似度 ∥ 向量相似度 → RRF 融合 → top-100
   → [4] 精排：reranker 重排 top-100 → top-k（**供应商已定，默认关闭**，见下）
-  → [5] 轻量返回：只带 name/one_liner/score，不带完整 schema
+  → [5] 轻量返回：只带 code/name/description_snippet/score（约 30 token），不带完整 schema
 ```
 
 **必须是"先过滤再排序"**，不能"先取 top-100 再丢掉无权限的"——后者在窄权限调用方那里会返回个位数甚至空结果。
@@ -641,7 +659,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
        · 命中已完成结果且指纹一致 → 直接返回（不碰确认令牌、不计配额与并发、不判熔断）
        · 键已被不同参数占用       → TH_IDEMPOTENCY_KEY_REUSED
   5. 输入 schema 校验
-  6. 确认令牌校验（高风险或写操作；原子消费）
+  6. 确认判定（高风险或写操作）   ← **M0 仅判定并拒绝**；令牌发放与消费属 M1（§16.2）
   7. 日配额 + 并发占用 + 熔断判定   ← 只在"确定要真正打上游"之后才扣 / 才拒
   8. 幂等认领（Redis SET NX + 绑定请求指纹；并发后到者得 TH_IDEMPOTENCY_IN_PROGRESS）
   9. 凭据注入（从 Credential 解密 → 注入 header/query/mTLS）
@@ -716,7 +734,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | 并发 | Redis 信号量（不是进程内） |
 | 幂等 | **两段式**：先查缓存（重试拿回原结果）→ 再 `SET NX` 认领（防并发）；键与请求指纹绑定，详见 §7.1 |
 | 幂等保留期 | `idempotency_ttl` 默认 **24h**。**到期后（而非"跨自然日"）** key 与缓存结果一并清除，**此时**重试才会重新执行并消耗当日配额。24h 窗口内的跨天重试（如 23:00 成功、次日 01:00 重试）**仍命中缓存**。它与日配额窗口互不相干：配额按自然日计，幂等按 24h 滑窗计 |
-| 确认 | 一次性令牌，条件 UPDATE 原子消费 |
+| 确认 | **M1**：一次性令牌，条件 UPDATE 原子消费。**M0 只做判定**——命中高风险/写操作即返回 `TH_CONFIRMATION_REQUIRED`（§16.2） |
 | 超时 | 一个**整体 deadline** 从入口贯穿到出站，所有阶段共享 |
 | 重试 | 仅幂等方法 + 抖动退避 + 受 deadline 约束 |
 | 熔断 | 按 Provider 维度 |
@@ -752,7 +770,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | 机制 | 类别 | Redis 不可用时 | 理由 |
 |---|---|---|---|
 | **幂等** | **正确性依赖** | **fail-closed** → `TH_DEPENDENCY_UNAVAILABLE` (503) | fail-open 会导致**重复执行写操作**，后果最严重 |
-| **确认令牌** | **正确性依赖** | **fail-closed** → `TH_DEPENDENCY_UNAVAILABLE` (503) | fail-open 等于一次性令牌可重放 |
+| **确认令牌**（M1） | **正确性依赖** | **fail-closed** → `TH_DEPENDENCY_UNAVAILABLE` (503) | fail-open 等于一次性令牌可重放 |
 | **QPS 限流** | **防滥用**（成本 / 容量控制） | **fail-open + 立即告警** | 它是"防滥用"而非"安全边界"；Redis 抖动通常短暂，因它全平台停服代价更大 |
 | **日配额** | **防滥用** | **fail-open + 立即告警** | 同上；配额超支可事后追责，全平台停服不可接受 |
 | **并发信号量** | **防滥用** | **fail-open + 立即告警** | 同上 |
@@ -809,11 +827,11 @@ class InvocationRequest:
 | code | HTTP | retryable | 触发条件 | 面向调用方的 message |
 |---|---|---|---|---|
 | `TH_AUTH_INVALID` | 401 | ❌ | 凭证缺失/无效/过期/吊销 | 认证失败 |
-| `TH_AUTH_FORBIDDEN` | 403 | ❌ | 凭证有效但无权访问该接口（管理面） | 无权访问 |
+| `TH_AUTH_FORBIDDEN` | 403 | ❌ | 凭证有效，但**在当前来源 IP / 时间窗下不被允许**（§9.1 的 `constraints`），或无权访问管理接口 | 不允许从当前来源访问 |
 | `TH_PARAMETER_INVALID` | 400 | ❌ | 参数不符合 `input_schema` | 字段级具体错误 |
 | `TH_TOOL_NOT_FOUND` | 404 | ❌ | **任何"不可调用"状态**：工具不存在 / 无权 / 已停用(`disabled`) / 无已发布版本 / 指定的版本或通道不可用 —— **全部返回完全一致**（§9.3） | 工具不可用 |
-| `TH_CONFIRMATION_REQUIRED` | 409 | ❌ | 高风险/写操作工具未带确认令牌 | 该工具需要确认 |
-| `TH_CONFIRMATION_INVALID` | 400 | ❌ | 令牌无效/过期/已消费/与目标不匹配 | 确认令牌无效 |
+| `TH_CONFIRMATION_REQUIRED` | 409 | ❌ | 高风险/写操作工具未带确认令牌（**M0 恒返回此码**，因为 M0 无令牌机制） | 该工具需要确认 |
+| `TH_CONFIRMATION_INVALID` | 400 | ❌ | 令牌无效/过期/已消费/与目标不匹配（**M1** 才有令牌，故 M0 不会出现此码） | 确认令牌无效 |
 | `TH_IDEMPOTENCY_IN_PROGRESS` | 409 | ✅ | 同幂等键的请求**仍在处理中** | 重复请求处理中，请稍后重试 |
 | `TH_IDEMPOTENCY_KEY_REUSED` | 409 | ❌ | 同一幂等键配了**不同参数**（请求指纹不符） | 幂等键已用于其他请求，请更换 key |
 | `TH_RATE_LIMITED` | 429 | ✅ | 超 QPS 限额 | 请求过于频繁 |
@@ -909,6 +927,16 @@ Principal ──< Grant >── 范围(domain | system | tag | tool)
                          + 配额(qps, daily, concurrency)
                          + 约束(ip_cidrs, time_window, require_confirmation)
 ```
+
+> **约束（`constraints`）的求值时机**（此前只定义了字段、没定义在哪一层生效）：
+>
+> | 字段 | 求值时机 | 失败时 |
+> |---|---|---|
+> | `ip_cidrs` / `time_window` | **每次请求**（流水线第 3 步），**幂等命中时同样要校验** | `TH_AUTH_FORBIDDEN` (403) —— 身份已认证且对工具有授权，只是**当前来源 / 时间不允许** |
+> | `require_confirmation` | 第 6 步的确认判定（§7.1） | `TH_CONFIRMATION_REQUIRED` (409) |
+>
+> ⚠️ **约束不参与可见集合缓存**：IP 与时间随请求变化，把它们塞进缓存 key 会让缓存完全失去意义
+> （§9.2 的 key 只含 `principal_id` + `visible_ver`）。约束在**检索过滤与授权判定时叠加**即可。
 
 - 层级继承：`domain` grant 自动覆盖其下所有 `system` 与 `tool`
 - 多 grant 对**可见性**取并集（能看见的范围 = 各 grant 范围的并集）
@@ -1237,7 +1265,7 @@ def test_core_is_framework_free():
 | 单元测试 | 内核、策略、映射、导入器 |
 | 集成测试 | testcontainers（PostgreSQL + Redis） |
 | **契约测试** | OpenAPI 快照（M0）；**MCP schema 快照为 M1**（M0 无 MCP 前端）。防止无意破坏调用方 |
-| **E2E** | 导入工具 → 发布 → 检索 → 通过 MCP 调用 → 通过 REST 调用 → 断言配额与审计 |
+| **E2E** | 导入工具 → 送审 → 通过 → 发布 → 检索 → **通过 REST 调用** → 断言配额与审计（**M0 无 MCP，E2E 只走 REST**） |
 | **检索评测** | 标注集上跑 `recall@k` / MRR / nDCG，**CI 门禁** |
 | 架构断言 | §14.1 的五条 |
 
@@ -1307,7 +1335,7 @@ def test_core_is_framework_free():
 | **管理面形态** | **只用 CLI**，不做管理 HTTP API、不做管理前端 | 省掉会话/CSRF/验证码/操作码一整套（C3）；代价是 M0 只能命令行操作 |
 | **调用方认证** | **API Key**（每 Principal 一把，可轮换） | 签名的请求认证（RSA/Ed25519）留到 M1，作为可插拔 authenticator（Q2） |
 | **MCP 客户端 / MCP 服务端** | **两者都不做**（区分见 §5.1） | 均为 M1，且**彼此独立**（Q3） |
-| **确认令牌端点** | **不做**，内核只保留判定并对高风险/写操作直接拒绝 | M0 工具以读为主，链路 fail-safe（Q4） |
+| **确认令牌端点** | **不做**。内核**只保留判定**（命中高风险/写操作即返回 `TH_CONFIRMATION_REQUIRED`），**不实现令牌发放、存储与消费**——那整套属 M1 | M0 工具以读为主，链路 fail-safe（Q4）。注意：由于 G6 已把这类工具标为 `executable=false`（第 2 步即拒），第 6 步在 M0 **正常路径下不可达**，保留它只是纵深防御 |
 | **需确认工具的导入** | **照常建档，但标 `executable=false`**；判定条件**与内核第 6 步的确认判定完全对齐**：`method ∈ {POST,PUT,PATCH,DELETE}` **或** `risk == high`（**只读但高风险的工具同样处理**）。导入报告显式说明原因；**不跳过导入** | 否则会出现"搜得到、调得动、必被拒"的坏体验：`risk=high` 的 GET 工具不会被标不可用，但执行时第 6 步要求确认而 M0 无确认端点。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
 | **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5） |
 | **元数据富化** | **只做规则富化** | LLM 描述补全改为"评测触发的可选项"，见 §5.4 |
@@ -1339,7 +1367,20 @@ def test_core_is_framework_free():
 | 11 | 架构断言 + CI 流水线（含契约快照与 E2E） |
 | 12 | 可观测基础：`trace_id` 贯穿 + 结构化日志（**不接 OTel / Prometheus**） |
 
-**M0 验收**：工具数 ≥ 100 时，用 CLI 完成"导入 → 送审 → 通过 → 发布 → 授权"，然后调用方说一句话即可命中正确工具并执行成功，全程审计可查。
+**M0 验收脚本**（工具数 ≥ 100 时执行；`L1` 的 E2E 按此实现，**步骤以本节为唯一口径**）：
+
+| # | 动作 | 预期 |
+|---|---|---|
+| 1 | `toolhive import openapi --provider <code> --file <path>` | 输出新增 / 变更 / 消失三类计数 |
+| 2 | `toolhive review list --status pending_review` | 列出刚导入的草稿 |
+| 3 | `toolhive review approve --version <id>` | 状态转为 `published` |
+| 4 | `toolhive publish --tool <code> --channel stable` | `stable` 通道指向该版本 |
+| 5 | `toolhive grant create --principal <id> --scope domain --value <domain>` | 授权生效 |
+| 6 | `POST /v1/tools/search {"query": "..."}` | 命中正确工具，且 `degraded=false` |
+| 7 | `POST /v1/tools/{code}/execute` | 返回结果 + `trace_id` |
+| 8 | 查 `Invocation` 与 `AuditLog` | 记录齐全，**且不含明文参数与结果**（§11.1） |
+| 9 | **用同一幂等键重试第 7 步** | **返回与首次完全相同的结果**（§7.1 硬规则 1） |
+| 10 | 把该 grant 的 QPS 调到 1 后连续请求 | 第二次返回 `TH_RATE_LIMITED` |
 
 ### 16.3 M1：放量到 1k
 
@@ -1350,6 +1391,7 @@ def test_core_is_framework_free():
 - **凭据轮换与类型扩展**：多 KEK 轮换、`oauth2_client` / `mTLS` 类型（**M0 已有最小注入**，见 §16.2「凭据范围」）
 - 描述补全（LLM 富化）：**仅当评测证明"描述质量是瓶颈"时才引入**，见 §5.4
 - 精排（**DashScope rerank 适配器**）：**供应商已定，但默认关闭**；仅当评测显示"recall@5 低但 recall@30 高"（排序问题）时开启，见 §6.2；同时评测集扩到 500 条
+- **确认令牌机制**：`POST /v1/confirmations` 端点、令牌发放与原子消费、写操作/高风险工具随之启用（**M0 只有判定，见 §16.2**）
 - 管理前端（目录、授权、配额、审计）
 
 ### 16.4 M2：放量到 1w
