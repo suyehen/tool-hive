@@ -18,8 +18,8 @@
 
 | # | 你要做的事 | 怎么用 ToolHive |
 |---|---|---|
-| 1 | **知道有哪些工具能选** | 调 `POST /v1/tools/search`（自然语言 → 候选列表），或用 MCP 的 `search_tools` 元工具 |
-| 2 | **把选中的工具跑起来** | 调 `POST /v1/tools/{code}/execute` 传参数，或用 MCP 的 `call_tool` |
+| 1 | **知道有哪些工具能选** | 调 `POST /v1/tools/search`（自然语言 → 候选列表）；MCP 的 `search_tools` 元工具为 **M1** 提供 |
+| 2 | **把选中的工具跑起来** | 调 `POST /v1/tools/{code}/execute` 传参数；MCP 的 `call_tool` 为 **M1** 提供 |
 | 3 | **不用管的事** | 目标地址、HTTP 方法、上游凭据、限流、重试、熔断、超时、审计——**全部由 ToolHive 负责** |
 
 **ToolHive 不做的事：不替你决定调哪个工具。** 选哪个永远是你的决定；平台只决定"你能不能调"和"怎么调"。
@@ -51,7 +51,7 @@
 
 | # | 教训 | 约束 |
 |---|---|---|
-| C1 | 上一版有**两套并行编排**（REST 一份、MCP 一份），导致 MCP 通道没有配额/幂等 | **协议前端必须是薄适配器，执行逻辑只能有一份** |
+| C1 | 上一版有**两套并行编排**（REST 一份、MCP 一份），导致 MCP 通道没有配额/幂等 | **协议前端必须是薄适配器，执行逻辑与错误语义只能有一份** |
 | C2 | 接一个工具要十几步手工填写，没有导入 | **接入自动化是核心产品循环** |
 | C3 | 治理重量远超价值（39 个操作码 / 118 个管理接口 / 31 张表服务于 1 个占位工具） | **治理能力可配置，默认轻** |
 | C4 | 不代持凭据 → 真实工具接不进来 | **凭据保管与注入是必选项** |
@@ -93,7 +93,7 @@
 │  → 参数校验 → 凭据注入 → 出站执行 → 输出校验 → 审计/Trace       │
 ├──────────────────────────────────────────────────────────────┤
 │  工具检索                                                     │
-│  权限过滤 → 关键词(pg_trgm) ∥ 向量 → RRF → 精排(M1) → top-k       │
+│  权限过滤 → 关键词(pg_trgm) ∥ 向量 → RRF → 精排(可选) → top-k       │
 ├──────────────────────────────────────────────────────────────┤
 │  接入管线：导入器(OpenAPI/MCP) → 元数据规范化 → 富化 → 索引     │
 └──────────────────────────┬──────────────────────────────────┘
@@ -121,7 +121,7 @@
 | `Principal` | 调用主体（**统一**人与机器） | `id, type(user\|service\|agent), tenant_id, name, status` |
 | `Credential` | 上游凭据（加密存储，只写不读） | `id, name, kind, ciphertext, kek_id, rotated_at` |
 | `Provider` | 上游连接定义 | `id, code, type(http\|mcp\|local), base_url, auth_ref, tls_config, limits, status` |
-| `Tool` | 逻辑工具 | `id, code, source_ref, name, description, domain, system, tags[], risk, review_required, input_schema, output_schema, status, owner` |
+| `Tool` | 逻辑工具 | `id, code, source_ref, name, description, domain, system, tags[], risk, **executable**, **discoverable**, review_required, input_schema, output_schema, status, owner` |
 | `ToolVersion` | 不可变版本快照 | `id, tool_id, version, 上述定义字段快照, status, published_at` |
 | `Channel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
 | `Binding` | 执行绑定 | `id, version_id, provider_id, method, path_template, param_mapping, timeout_s, retry_max` |
@@ -129,6 +129,22 @@
 | `Invocation` | 每次调用记录 | `id, trace_id, principal_id, tool_id, version_id, protocol, outcome, duration_ms, request_digest, result_digest, error_code` |
 | `AuditLog` | 治理事件（谁改了什么） | `id, actor_id, action, object_type, object_id, before/after_summary` |
 | `OutboxEvent` | 索引/通知的异步投递 | 沿用上一版的 outbox 模式 |
+
+> **关于 `entity` / `action`**：命名规范是四段（§5.3），但实体与动作**由 `code` 字符串承载，不作为独立字段**。
+> 需要在授权或检索时按实体/动作过滤时，由富化阶段把它们写入 `tags`（如 `entity:customer`、`action:query`），
+> 从而通过 `scope={tags:[...]}`（§6.1）与 tag 授权（§9.1）实现——避免为每个工具维护更多字段。
+
+> **关于 `tenant_id`**：M0/M1 **不参与任何过滤**，只是预留。
+> 未来启用多租户时，语义固定为：**所有查询强制带 tenant 过滤，`Grant`、检索索引、配额计数均按 tenant 隔离**。
+> 提前写下这条，是为了避免将来"字段在但语义没定义"导致返工。
+
+> **三个状态位在 M0 的取值**（此前 `executable` / `discoverable` 只出现在文字里、不在模型中，已补为字段）：
+>
+> | 字段 | 含义 | M0 取值 |
+> |---|---|---|
+> | `executable` | 是否允许执行。**为 false 时检索结果也会把它过滤掉**（见 §16.2） | 导入的**写操作工具**一律 `false`（D14） |
+> | `discoverable` | 是否出现在检索结果里（用于"可执行但不该被搜到"的内部工具） | 默认 `true` |
+> | `review_required` | 该工具的版本是否必须走审批 | **M0 恒为 `true`**（M1 起支持按来源信任策略，§4.3） |
 
 ### 4.2 三个关键设计选择
 
@@ -152,6 +168,12 @@ tool_id=crm.customer.query
 
 调用方可指定 `channel=stable`（默认）或钉死具体版本。上一版用 `default_version_id` 唯一约束表达默认版本，想做灰度只能绕。
 
+> **通道不作为授权维度**（澄清）：任何对该工具有 Grant 的调用方都可以指定 `channel=beta` 或钉死具体版本。
+> 这**不构成权限绕过**——因为能挂到通道上的版本**必须状态为 `published`**（§4.3），已经过完整审核。
+> **灰度是运维手段，不是权限边界。**
+> 若将来确实需要按通道限制（例如 beta 只对内部系统开放），在 `Grant.constraints` 里启用预留字段
+> `allowed_channels` 即可（M0/M1 不实现，但语义先定死）。
+
 **③ 用 `tags[]` + `domain/system` 做分组，不引入"能力包"实体。**
 
 授权按 `domain` / `system` / `tag` 层级继承，1w 规模下**不可能逐个工具授权**。
@@ -170,12 +192,48 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 |---|---|
 | 审批粒度 | **按 ToolVersion**（一个版本一次审核），不是按流程实例 |
 | 审核记录 | 一张 `ReviewRecord` 表：`version_id, reviewer_id, decision, comment, created_at` |
-| 送审前置条件 | 必须有 `input_schema`、`output_schema` 与执行绑定 |
+| 送审前置条件 | 必须有 `input_schema`、`output_schema` 与**执行绑定**（按 Provider 类型分支，见下方修正说明） |
 | 发布前置条件 | 状态必须是 `pending_review` 且已被通过 |
 | 首次发布 | 必须设置 `stable` 通道指向该版本 |
 | 免审通道 | `Tool.review_required` 字段保留：置 false 时导入后可直接发布（M1 起支持"按来源信任策略"自动设置） |
 
 **为什么保留这个开关**：1w 工具规模下不可能逐个审核（见 §16.1）。M0 阶段工具量小、逐个审可行；放量后必须能按来源免审，否则审批会成为瓶颈。因此字段从 M0 就在，只是 M0 默认 `true`。
+
+> ⚠️ **关于执行绑定（一处规则矛盾，已修正）**
+>
+> 此前 §5.2 写"MCP 类型不需要 binding"，与本节"送审必须有执行绑定"**自相矛盾**。
+> 推论是致命的：**MCP 导入的工具永远无法送审 → 无法发布 → 无 stable 通道 → 不可调用**，
+> 把 §16.3 里 M1 最重要的一条路径（MCP 客户端接入）自己堵死了。
+>
+> **修正口径**：**每种 Provider 类型都必须有一条 `Binding`**，它是"这个版本通过哪个 Provider 出去"的**唯一表达**。
+>
+> | Provider 类型 | Binding 必须包含 |
+> |---|---|
+> | `http` | `provider_id` + `method` + `path_template` + `param_mapping` |
+> | `mcp` | **只填 `provider_id`**，映射字段留空 |
+> | `local` | `provider_id` + `method="COMPUTE"`（无出站） |
+>
+> 送审校验**按类型分支**：`http` 校验映射完整性；`mcp` / `local` 只校验 `provider_id` 存在且 Provider 处于启用状态。
+
+#### M0 实现的状态范围
+
+M0 **只实现** `draft → pending_review → published / rejected`，加上工具级启停 `disabled`；
+`deprecated` / `retired` 的**枚举值保留，但不提供迁移接口**，完整生命周期属于 M1。
+（本节为权威口径，与 §16.2 交付物保持一致。）
+
+#### Channel 与版本状态的交互规则
+
+| 场景 | 规则 |
+|---|---|
+| 废弃 / 归档一个**被 Channel 指向**的版本 | **拒绝**，返回 `TH_CHANNEL_REFERENCES_VERSION`；必须先把通道切到别的版本 |
+| 删除版本 | **不允许**。`ToolVersion` 是不可变快照，正常流程不删除（历史调用记录要能回溯） |
+| Channel 指向的版本被上游标记 `stale` | **允许**，但在通道上打告警标记，管理侧可见（避免上游变更导致静默失效） |
+| 创建 / 切换 Channel | 必须校验目标版本存在**且状态为 `published`** |
+| 工具**没有 stable 通道** | 该工具视为**不可调用**，调用方得到 `TH_TOOL_NOT_FOUND`（与"未发布"同义，遵守 §9.3 不可区分原则） |
+| 首次发布 | **必须同时把 `stable` 指向该版本**，否则工具发布后不可调用 |
+
+> 选"拒绝废弃"而不是"自动回退到上一个 published 版本"：**自动回退会让生产流量静默切到另一个版本**，
+> 这比报错更危险——调用方拿到的结果会悄悄变化。宁可让运维显式切换。
 
 ---
 
@@ -190,6 +248,20 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 | OpenAPI 导入 | OpenAPI 3.x / Swagger 2.0 文档（URL 或文件） | `operationId`（缺失时用 `method+path` 哈希） | 一个 `operation` → 一个 Tool |
 | MCP 导入 | 一个 MCP Server 地址 | `server_code + tool.name` | 一个 `tools/list` 条目 → 一个 Tool |
 
+> ⚠️ **本文档提到两处 MCP，是两套完全不同的技术栈，不要混为一谈：**
+>
+> | | **MCP 客户端** | **MCP 服务端** |
+> |---|---|---|
+> | 做什么 | 连**上游** MCP Server，拉 `tools/list`、发 `tools/call` | 把 **ToolHive 自己**暴露为 MCP Server |
+> | 出现在 | §5.1 MCP 导入；§13.1 ③ 类工具（Provider `type=mcp`） | §8.1 MCP 前端 |
+> | 技术要点 | 会话管理、重连、上游超时、上游认证 | transport、transport security、Host 校验、工具暴露策略 |
+> | 交付阶段 | M1（MCP 导入器） | M1（MCP 前端），**两者独立交付、无依赖关系** |
+>
+> **M0 两者都不做。**
+
+> **已知边界**：MCP 的稳定标识含 `tool.name`，上游改名会被识别为"新增 + 消失"。
+> 缓解手段（M1 改进项）：用 `description + inputSchema` 的哈希做辅助匹配，命中则视为同一工具的重命名而非新增。
+
 ### 5.2 字段映射（两路归一到同一个规范化层）
 
 | 目标字段 | 来自 OpenAPI | 来自 MCP | 缺失时的处理 |
@@ -202,7 +274,7 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 | `domain` / `system` | **通常没有** | **通常没有** | **靠推断或导入时配置** |
 | `tags` | `tags` | 无 | 推断 + 人工补 |
 | `risk` | 按 method 推断（GET=low，写=high） | 同上 | 人工可改 |
-| `binding` | method + path + 参数落点 | 由 MCP 协议承担（不需 binding） | — |
+| `binding` | method + path + 参数落点 | **只填 `provider_id`（映射字段留空）** | **两者都必须有 Binding**，见 §4.3 的修正说明 |
 
 > **注意最后几行**：业务域、系统、标签在这两种来源里**通常都不存在**，而它们是检索精度的基础。这就是富化管线存在的理由。
 
@@ -215,6 +287,7 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 
 - 由导入配置提供 `domain` / `system`，`entity` / `action` 从 operationId 或路径推断
 - 冲突时**不覆盖**，生成 `xxx.2` 并要求人工确认
+  （**`source_ref` 是去重主键**；`code` 冲突只影响展示名，**不影响重导匹配与历史关联**）
 - 规范由 CI 断言（见 §14.1）
 
 ### 5.4 元数据富化管线
@@ -276,8 +349,7 @@ POST /v1/tools/search
     "system": "ticket",
     "tags": ["read"]
   },
-  "k": 30,
-  "cursor": null                    // 翻页（可选）
+  "k": 30                           // 1..50，上限 50
 }
 → {
   "items": [
@@ -303,6 +375,10 @@ GET /v1/catalog/taxonomy
 
 **`taxonomy` 接口的意义**：调用方（通常是 Agent）不知道这 1w 个工具是怎么分域的。给它一个"缩小范围的抓手"，就能把检索从 1w 缩到几百——**这是 1w 量级下提升精度最有效的杠杆**。
 
+> **不支持翻页**（澄清）：混合检索 + 可选精排的排序**本身不稳定**（同一 query 两次可能顺序微变），
+> 深翻页的 `cursor` 语义无法定义。因此检索**只返回 top-k**；需要更多候选就调大 `k`（上限 50）。
+> 在"挑候选工具"这个场景里，深度翻页本来也没有意义。
+
 ### 6.2 检索流水线
 
 ```
@@ -310,7 +386,7 @@ query + scope
   → [1] 权限过滤：得到该调用方可见的工具集合（1w → 可能 200）
   → [2] scope 缩小：按 domain/system/tags 进一步收窄
   → [3] 粗排（召回）：关键词相似度 ∥ 向量相似度 → RRF 融合 → top-100
-  → [4] 精排：cross-encoder 重排 top-100 → top-k（M1）
+  → [4] 精排：reranker 重排 top-100 → top-k（**供应商已定，默认关闭**，见下）
   → [5] 轻量返回：只带 name/one_liner/score，不带完整 schema
 ```
 
@@ -340,7 +416,7 @@ PostgreSQL 的全文检索（FTS/BM25）依赖**分词**，而中文分词需要
 
 > 因此 **M0 不引入任何分词方案**——这是一个被绕开的问题，不是被解决的问题。
 
-#### 精排（M1）：cross-encoder，**不是 LLM**
+#### 精排（可选，默认关）：reranker，**不是 LLM**
 
 精排用的是 **cross-encoder**（判别式编码器模型，通常 100M~600M 参数），**它只输出一个相关性分数，不生成任何文本**。
 
@@ -382,7 +458,8 @@ PostgreSQL 的全文检索（FTS/BM25）依赖**分词**，而中文分词需要
 | 30 | ~15ms | ~90ms | ~300ms |
 
 > ⚠️ **"CPU + 100 候选 + base 模型"这个组合大概率超出 §6.7 的 p95 ≤ 200ms 预算**，选型时必须实测。可选手段：缩小候选到 30~50、换 MiniLM 级小模型、把 `max_length` 从 512 降到 128（工具描述只有一句话）、独立部署走 GPU、或按 §6.6 降级。
-> 另：**先查现有模型服务商是否提供 rerank 接口**，有的话不必自己部署。
+> ⚠️ **不要把"精排"当成必选项**：它是**远程调用**，会带来 150–400ms 延迟与按次计费。因此设计上是
+> **接口就位、默认关闭、由评测决定开启**（诊断规则见上表）。
 
 **不用模型的排序信号**（M0 可用，确定性、零成本）：
 
@@ -404,15 +481,49 @@ PostgreSQL 的全文检索（FTS/BM25）依赖**分词**，而中文分词需要
 | recall@30 也低 | **召回问题**：正确工具根本没进来 | ❌ 精排无用，改元数据 / embedding / 多路召回 |
 | 两者都高 | 已经够好 | 不做，省成本 |
 
-**当前状态与实现要求**
+**供应商已确定：DashScope `qwen3.7-text-rerank`**
 
-- **reranker 供应商尚未确定**，因此它**不阻塞任何阶段**
-- **管线中保留"精排"这一阶段**（接口就位、可插拔），但**默认实现就是"无精排"**：直接采用 RRF 的排序结果。这是**设计内行为，不置 `degraded` 标记**（`degraded` 只表示"发生了故障降级"）
-- 目的：供应商确定后只需补一个适配器即可接入，**不改动管线、接口与调用方**
+```
+POST {RERANK_ENDPOINT}     # 形如 https://<workspace>.cn-beijing.maas.aliyuncs.com
+                           #        /api/v1/services/rerank/text-rerank/text-rerank
+Authorization: Bearer {DASHSCOPE_API_KEY}
+{
+  "model": "qwen3.7-text-rerank",
+  "input": {
+    "query": "查一下这个客户的投诉记录",
+    "documents": ["域.系统.工具名.描述", "..."]     // ← 粗排返回的候选文本
+  },
+  "parameters": { "top_n": 30, "return_documents": false }
+}
+```
+
+- 一次调用 = **1 个 query + N 个候选文档**，返回按相关性排序的结果（含候选下标与相关性分数）
+- **`top_n` 直接设为要返回的 `k`**；`return_documents=false` 减少回传体积
+- ⚠️ **响应字段名以真实调用为准**：首次接入时确认（预期形如 `output.results[].index` / `relevance_score`），
+  适配器要做字段容错，**不要把猜测的字段名写死**
+- **这是"平台自身的出站"**（与 §6.4 的 embedding 同类）：域名固定，**不走 Provider 的 SSRF 白名单**，
+  但需要独立的超时、重试、熔断与降级；密钥由环境变量注入，**不落代码库、不落日志**
+- **数据暴露**：请求包含用户的 `query` 原文与工具元数据。这与 embedding 的既有情况相同（§6.4 已如此），
+  **未新增暴露类别**，但属于已接受的边界，合规评审时需一并说明
+
+#### 延迟影响（重要，改变了检索的画像）
+
+这是一次**跨网络的远程调用**，p95 通常在 **150–400ms**，远高于本地 cross-encoder 的 60ms 预算。
+因此**启用精排会显著改变检索延迟**，必须按 §6.7 的两套 SLO 分别考核。
+
+可选缓解：把送排候选数从 100 降到 **20–30**（远程调用的耗时与文档数正相关）。
+
+#### 启用策略
+
+- **默认关闭**（`retrieval.rerank.enabled = false`）。理由**不再是"没有供应商"，而是延迟与成本**
+- 管线的精排阶段保留；未启用时**等价于 no-op**，直接采用 RRF 顺序。
+  这是**设计内行为，不置 `degraded` 标记**（`degraded` 只表示"发生了故障降级"）
+- **由评测决定是否开启**：只有诊断出"**排序问题**"（recall@5 低、recall@30 高）时才开；
+  开启前后各跑一次评测集做 A/B，用数据说话
 - ⚠️ **TODO（实现时必须在代码中保留标记）**：
-  - `retrieval/rerank/` 提供统一的 `Reranker` 接口 + 一个 no-op 实现
-  - 配置项预留 `retrieval.rerank.enabled`（默认 `false`）与 `retrieval.rerank.endpoint`
-  - 代码与文档中标注 **"reranker 供应商待定，当前走降级路径"**
+  - `retrieval/rerank/` 提供统一 `Reranker` 接口 + **no-op 实现（默认）** + **DashScope 适配器**
+  - 配置项：`retrieval.rerank.enabled`（默认 `false`）、`endpoint`、`model`、`api_key`、`timeout_ms`、`max_candidates`
+  - 降级路径按 §6.6：精排超时/失败 → 返回 RRF 顺序并置 `degraded=true`
 
 ### 6.3 上下文预算控制
 
@@ -456,15 +567,21 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 1w 工具换一次 embedding 模型 = 全量重嵌。因此：
 
 - 向量表带 `index_version`，支持**双版本共存**
-- 新版本索引后台重建完成后再切流
-- 配置项 `retrieval.active_index_version`
+- **检索用哪个版本由 `retrieval.active_index_version` 唯一决定**（不是"自动选最新"）——
+  显式配置才能让切换成为可回滚的一步操作
+- **切换流程**：新版本后台重建 → 在评测集上跑一遍指标 → 改 `active_index_version` → 观察 → 才算完成
+- **旧版本保留期**：切换后**至少保留 7 天**用于回滚；只有在新版本稳定运行且没有未完成的重嵌任务时，
+  才由后台任务清理旧版本数据，**不自动删除**
+- **一致性约束**：在线查询 embedding **必须用与 active 版本相同的模型**，否则向量空间不一致。
+  因此 `active_index_version` 与 `embedding.model` 在配置上**绑成一组**——改一个必须改另一个，
+  启动时校验两者匹配，不匹配则**拒绝启动**
 
 ### 6.6 降级策略
 
 | 故障 | 行为 |
 |---|---|
 | 向量服务不可用 | 退回纯关键词检索，`degraded=true` |
-| 精排服务不可用 | 直接返回粗排结果，`degraded=true` |
+| 精排服务不可用 | 直接返回粗排结果，`degraded=true`（**仅当精排已启用时**；未启用属设计内行为，见 §6.2） |
 | 两者都不可用 | 返回空并明确报错，**不返回未经排序的全量列表** |
 
 ### 6.7 指标：平台对"找得到"负责
@@ -479,9 +596,34 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | `recall@5` | ≥ 0.70 | |
 | `MRR@10` | ≥ 0.60 | |
 | `nDCG@10` | ≥ 0.65 | |
-| p95 延迟 | ≤ 200ms | 含精排 |
+| p95 延迟（未降级路径） | ≤ 200ms | 见下方预算分解 |
 
 **评测集是 M0 交付物，不是后期优化项**（见 §14.4）。
+
+#### 延迟预算分解：把"预算"与"超时阈值"分开
+
+原先把 embedding 的**超时阈值**（800ms）与检索的**p95 预算**（200ms）写在一起，口径不清。正确写法：
+
+| 阶段 | p95 预算 | 超时阈值 | 说明 |
+|---|---|---|---|
+| 权限 + scope 预过滤 | 20ms | 500ms | 普通 SQL（§9.2） |
+| 在线 embedding | 60ms | **800ms** | **800ms 是容错上限，不是预算** |
+| 关键词检索（`pg_trgm`） | 20ms | 200ms | |
+| 向量检索 | 30ms | 200ms | |
+| RRF 融合 | 5ms | — | 内存计算 |
+| **合计（基线，不含精排）** | **≈135ms** | | 满足 ≤ 200ms，余下 ~65ms 应对抖动 |
+| 精排（启用时） | **+150~400ms** | 500ms | **远程调用，不计入基线预算**，单列场景见下 |
+
+**三套 SLO（按是否启用精排、是否降级区分）**
+
+| 场景 | p95 SLO | 说明 |
+|---|---|---|
+| **基线**（未启用精排、未降级） | **≤ 200ms** | 上表预算 |
+| **启用精排** | **≤ 600ms** | 增加一次远程 rerank 调用（p95 150–400ms，见 §6.2） |
+| **降级**（embedding 或精排失败） | **≤ 1s** | `degraded=true`；embedding 超时上限 800ms |
+
+- `≤ 200ms` **只统计"未降级且未启用精排"的请求**
+- **降级率**与**精排启用率**都是要监控的指标（前者衡量 embedding 可用性，后者用于成本核算）
 
 ---
 
@@ -495,18 +637,55 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 前端：翻译协议 → ToolInvocation ─────────────────────────────────────┘
                                                                      ↓
 执行内核：
-  1. 解析工具与版本（code/channel → ToolVersion；不存在 → 404）
-  2. 授权判定（无权限 → 404，与"不存在"不可区分）
-  3. 策略：配额 / 并发 / 熔断 / 时间窗 / IP 约束
-  4. 确认令牌校验（高风险或写操作）
-  5. 幂等认领（Redis SET NX + 结果缓存）
-  6. 输入 schema 校验
-  7. 凭据注入（从 Credential 解密 → 注入 header/query/mTLS）
-  8. 出站执行（Provider 适配器，SSRF 防护 + 整体 deadline）
-  9. 输出 schema 校验
- 10. 记录 Invocation + 写审计
- 11. 返回统一结果
+  1. 解析工具与版本（code/channel → ToolVersion；不可调用 → TH_TOOL_NOT_FOUND）
+  2. 授权判定（无权限 → TH_TOOL_NOT_FOUND，与"不存在"不可区分）
+  3. QPS 限流 + 熔断 + 时间窗 / IP 约束   ← 保护平台自身，幂等命中也要计
+  4. 幂等查询（按请求指纹）
+       · 命中已完成结果且指纹一致 → 直接返回（不碰确认令牌、不计日配额与并发）
+       · 键已被不同参数占用       → TH_IDEMPOTENCY_KEY_REUSED
+  5. 输入 schema 校验
+  6. 确认令牌校验（高风险或写操作；原子消费）
+  7. 日配额 + 并发占用   ← 只在"确定要真正执行"之后才扣
+  8. 幂等认领（Redis SET NX + 绑定请求指纹；并发后到者得 TH_IDEMPOTENCY_IN_PROGRESS）
+  9. 凭据注入（从 Credential 解密 → 注入 header/query/mTLS）
+ 10. 出站执行（Provider 适配器，SSRF 防护 + 整体 deadline）
+ 11. 输出 schema 校验
+ 12. 记录 Invocation + 写审计
+ 13. 返回统一结果
 ```
+
+> **配额为什么分成两处（第 3 步与第 7 步）**
+>
+> 原设计把配额整体排在幂等查询之前，导致**因网络抖动重试一个已成功的请求也会重复扣配额**。
+> 修正为按"这项资源是否真的被消耗"来区分：
+>
+> | 机制 | 位置 | 幂等命中时是否计 | 理由 |
+> |---|---|---|---|
+> | **QPS 限流** | 第 3 步（幂等查询之前） | ✅ **计** | 它保护平台自身不被高频打；缓存命中也是一次请求 |
+> | **日配额** | 第 7 步（真正执行前） | ❌ **不计** | 它对应**上游成本**；缓存命中不产生上游调用 |
+> | **并发占用** | 第 7 步 | ❌ **不计** | 缓存命中极快，不占用上游资源 |
+>
+> 这样"重试已成功的请求"既不会双扣配额，也不会被除 QPS 外的机制惩罚。
+
+> **为什么"幂等查询"必须排在"确认令牌校验"之前**
+>
+> 调用方带确认令牌 `T` + 幂等键 `K` 首次执行成功（`T` 已被原子消费），随后响应丢失。
+> 调用方用同样的 `T` + `K` 重试：
+>
+> - **原顺序**（先校验令牌）：发现 `T` 已消费 → 直接拒绝 → **永远到不了幂等缓存**，幂等形同虚设
+> - **新顺序**：先查幂等缓存 → 命中 → 直接返回首次结果，**根本不碰 `T`**
+>
+> **"查"与"认领"分离**，三种机制各司其职：
+>
+> | 机制 | 防什么 |
+> |---|---|
+> | 幂等查询（第 4 步） | 让重试能拿回原结果 |
+> | 确认令牌原子消费（第 6 步） | 防令牌重放 |
+> | 幂等认领（第 7 步） | 防并发重复执行 |
+
+> **幂等键必须绑定请求指纹**：`K` 与 `(工具, 参数哈希)` 绑定。
+> 同一 `K` 配**不同**参数到达时，返回 `TH_IDEMPOTENCY_KEY_REUSED`（`retryable: false`），
+> **而不是返回旧结果**——否则调用方会拿到与本次请求不符的结果，比报错更危险。
 
 ### 7.2 横切关注点（只实现一次）
 
@@ -514,7 +693,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 |---|---|
 | 配额 | **Redis + Lua 原子计数**（令牌桶/滑动窗口），第一天就是分布式的 |
 | 并发 | Redis 信号量（不是进程内） |
-| 幂等 | `SET NX` 认领 + **缓存结果**（重试要能拿回同一个结果，不只是拒绝重复） |
+| 幂等 | **两段式**：先查缓存（重试拿回原结果）→ 再 `SET NX` 认领（防并发）；键与请求指纹绑定，详见 §7.1 |
 | 确认 | 一次性令牌，条件 UPDATE 原子消费 |
 | 超时 | 一个**整体 deadline** 从入口贯穿到出站，所有阶段共享 |
 | 重试 | 仅幂等方法 + 抖动退避 + 受 deadline 约束 |
@@ -539,6 +718,81 @@ class InvocationRequest:
     context: dict                # user_id/tenant_id 等业务身份透传
 ```
 
+### 7.4 错误模型（唯一权威表）
+
+调用方要能自愈，就必须能区分：**参数错（改参数重试）/ 无权（换工具）/ 限流（退避重试）/
+上游故障（稍后重试）/ 需要确认（走确认流程）**。
+
+因此错误语义由**内核统一产出**，两个前端只做协议翻译；**不得各自实现一套**（否则 C1 复发）。
+
+#### 统一错误体
+
+```jsonc
+{
+  "code": "TH_RATE_LIMITED",   // 稳定标识，调用方据此分支
+  "message": "请求过于频繁",     // 人类可读，可展示给用户
+  "trace_id": "...",            // 排查用，务必记录
+  "retryable": true,            // 用同一请求重试是否可能成功
+  "retry_after_ms": 850         // 可选：建议的退避时间
+}
+```
+
+**`retryable` 语义**：`true` = 在幂等安全的前提下，用**同样的请求**重试可能成功；
+`false` = 重试无用，必须改请求或改流程。
+
+#### 错误码枚举
+
+| code | HTTP | retryable | 触发条件 | 面向调用方的 message |
+|---|---|---|---|---|
+| `TH_AUTH_INVALID` | 401 | ❌ | 凭证缺失/无效/过期/吊销 | 认证失败 |
+| `TH_AUTH_FORBIDDEN` | 403 | ❌ | 凭证有效但无权访问该接口（管理面） | 无权访问 |
+| `TH_PARAMETER_INVALID` | 400 | ❌ | 参数不符合 `input_schema` | 字段级具体错误 |
+| `TH_TOOL_NOT_FOUND` | 404 | ❌ | **任何"不可调用"状态**：工具不存在 / 无权 / 已停用(`disabled`) / 无已发布版本 / 指定的版本或通道不可用 —— **全部返回完全一致**（§9.3） | 工具不可用 |
+| `TH_CONFIRMATION_REQUIRED` | 409 | ❌ | 高风险/写操作工具未带确认令牌 | 该工具需要确认 |
+| `TH_CONFIRMATION_INVALID` | 400 | ❌ | 令牌无效/过期/已消费/与目标不匹配 | 确认令牌无效 |
+| `TH_IDEMPOTENCY_IN_PROGRESS` | 409 | ✅ | 同幂等键的请求**仍在处理中** | 重复请求处理中，请稍后重试 |
+| `TH_IDEMPOTENCY_KEY_REUSED` | 409 | ❌ | 同一幂等键配了**不同参数**（请求指纹不符） | 幂等键已用于其他请求，请更换 key |
+| `TH_RATE_LIMITED` | 429 | ✅ | 超 QPS 限额 | 请求过于频繁 |
+| `TH_CONCURRENCY_LIMITED` | 429 | ✅ | 超并发限额 | 并发超限 |
+| `TH_QUOTA_EXCEEDED` | 429 | ❌ | 超日配额（当日重试无意义） | 已达调用配额 |
+| `TH_CIRCUIT_OPEN` | 503 | ✅ | Provider 熔断打开 | 目标服务暂时不可用 |
+| `TH_DEADLINE_EXCEEDED` | 504 | ✅ | 请求整体 deadline 用尽 | 请求处理超时 |
+| `TH_UPSTREAM_TIMEOUT` | 504 | ✅ | 出站超时 | 目标服务响应超时 |
+| `TH_UPSTREAM_ERROR` | 502 | ✅ | 上游 5xx / 连接失败 / 响应不合 schema | 目标服务调用失败 |
+| `TH_UPSTREAM_REJECTED` | 502 | ❌ | 上游 4xx（含平台凭据失效）——重试无用 | 目标服务拒绝了请求 |
+| `TH_CHANNEL_REFERENCES_VERSION` | 409 | ❌ | 试图废弃一个被 Channel 指向的版本（§4.3） | 该版本仍被引用 |
+| `TH_RETRIEVAL_UNAVAILABLE` | 503 | ✅ | 检索不可用（关键词与向量**同时**失败，见 §6.6） | 检索服务暂时不可用 |
+| `TH_INTERNAL_ERROR` | 500 | ✅ | 未预期异常 | 内部错误 |
+
+> **为什么把上游错误拆成两个码**：`UPSTREAM_ERROR`（5xx 抖动）值得重试，
+> `UPSTREAM_REJECTED`（4xx / 凭据失效）重试无用。合并成一个码会让调用方要么盲目重试、要么放弃可恢复的故障。
+> **平台内部知道这个区别，就必须把它传给调用方。**
+
+> **为什么把幂等冲突拆成两个码**：两者可重试性完全相反。
+> "仍在处理中"稍后重试会成功；"键已被别的参数占用"**重试永远不会成功**，必须换 key。
+> 若合并并标 `retryable: true`，一个守规范的 Agent 会**永久重试一个不可能成功的请求**。
+
+#### 三条硬规则
+
+1. **幂等命中已完成的结果 → 返回 200 与原结果**，不是 409。409 仅用于"仍在处理中"。
+2. **内部原因不得外泄**：SSRF 拦截、DNS 校验失败、Provider 配置错误等一律映射为 `TH_UPSTREAM_ERROR`，
+   详细原因只进日志——**不返回 `SSRF_BLOCKED` 之类的内部码**，否则等于给攻击者做探测反馈。
+3. **`trace_id` 必须在所有错误响应中返回**（§11 的排查完全依赖它）。
+
+#### REST ↔ MCP 映射
+
+MCP 的 `tools/call` **不返回 HTTP 状态码**，它用 `isError` + `content` + `structuredContent` 表达工具级错误：
+
+| 场景 | REST | MCP |
+|---|---|---|
+| 成功 | 2xx + 结果体 | `isError: false` + `content` + `structuredContent` |
+| 业务错误（上表全部） | 对应 HTTP 状态码 + 统一错误体 | `isError: true`；`content[0].text` 放 `message`；**`structuredContent`（或 `_meta`）携带 `{code, retryable, trace_id, retry_after_ms}`** |
+| 认证失败 | 401 | **传输层 HTTP 401**（MCP 规范要求认证在传输层，不进 `tools/call`） |
+
+> ⚠️ **关键**：MCP 侧调用方**无法依赖 HTTP 状态码判断可重试性**。
+> 因此 `code` / `retryable` **必须放进 `structuredContent`（或 `_meta`）**，
+> 不能只把错误信息拼成一段文本——那样调用方只能做字符串匹配，等于没有错误模型。
+
 ---
 
 ## 8. 协议前端与接口面
@@ -549,12 +803,17 @@ MCP 客户端会在会话开始拉全量 `tools/list`，**1w 个工具会直接�
 
 | 要求 | 做法 |
 |---|---|
-| 不暴露全量列表 | `tools/list` 只返回**策展子集**（按客户端配置，如某业务线的 30 个） |
+| 不暴露全量列表 | `tools/list` 返回**该 Principal 的可见工具集合**（**复用 §9.1 的 Grant 判定，不引入新实体**）；超过 `N`（建议 50）则截断，并在响应里引导客户端改用 `search_tools` |
 | 提供搜索元工具 | 注册一个 `search_tools(query, scope?, k?)` 工具 |
 | 按需取详情 | 提供 `get_tool(code)` 返回完整 schema |
 | 执行 | `call_tool(code, arguments)` |
 
 > 注意：**不要把"帮我选并执行"做成一个 MCP 元工具**，否则职责边界塌陷（见 §15.3）。
+
+> **认证方式（M1 前必须定下。默认方案）**：MCP 前端沿用**与 REST 相同的 Principal + API Key 体系**
+> ——客户端以 `Authorization: Bearer <api-key>` 携带密钥，认证在**传输层**完成（§7.4 的映射表）。
+> 这样**不需要引入 OAuth 授权服务器**，符合"不引入外部依赖"的决策。
+> 将来若要面向第三方开放，再单独评估 OAuth。
 
 ### 8.2 接口清单
 
@@ -584,16 +843,70 @@ Principal ──< Grant >── 范围(domain | system | tag | tool)
 ```
 
 - 层级继承：`domain` grant 自动覆盖其下所有 `system` 与 `tool`
-- 多 grant 取**并集**；配额按主体聚合
+- 多 grant 对**可见性**取并集（能看见的范围 = 各 grant 范围的并集）
 - 默认拒绝（无 grant 即不可见、不可调）
 
-### 9.2 与检索的耦合
+#### 配额语义（此前未定义，现明确）
 
-**授权必须先于排序**（§6.2 步骤 1）。1w 规模下建议按 `domain` 做索引分区，使每次检索在几百条内完成。
+一次调用会命中**所有**匹配的 grant（domain / system / tag / tool）。规则：
+
+> **每个命中的 grant 各自独立计数，任一超限即拒绝。
+> 配额是"每个授权范围各自的限额"，不是主体总额。**
+
+- Redis key：`quota:{principal_id}:{scope_type}:{scope_value}:{window}`
+- `qps` / `daily` / `concurrency` 三者语义一致，都按 grant 独立计数
+- grant 未配置 quota ⇒ 该项**不限额**
+- 因此**增加一个 grant 只会增加约束，不会增加额度**（避免"多授一个范围就多一份 QPS"的意外放大）
+
+推论：若确实需要"主体级总额度"，那是另一个概念，应加在 `Principal` 上（M2 再评估），**不要与 grant 配额混用同一套 key**。
+
+### 9.2 与检索的耦合（含 pgvector 的性能陷阱）
+
+**授权必须先于排序**（§6.2 步骤 1），不能"先取 top-100 再丢掉无权限的"。
+
+落到 pgvector 有个具体陷阱：**带 `WHERE` 过滤的 HNSW 索引查询，PostgreSQL 可能放弃索引改走顺序扫描，
+或者为凑够 `LIMIT` 反复迭代导致召回率下降**（与过滤率、`hnsw.ef_search` 强相关）。
+
+**M0 的写法（必须照做）**——不在向量检索里带权限过滤，而是分两步：
+
+```
+1. 先按权限 + scope 查出可见工具的 tool_id 集合（普通 B-tree 查询，很快）
+2. 再做向量检索：WHERE tool_id = ANY($1)
+   · 窄权限调用方：集合小，过滤后索引照常可用
+   · 宽权限调用方：集合接近全量，此时"过滤"本身不构成瓶颈
+```
+
+**M2 的优化（必做，不是"建议"）**——按 `domain` 对向量表**分区**，并确保查询条件包含分区键以触发 partition pruning：
+
+```sql
+-- 分区键 domain 必须出现在 WHERE 中，否则不会剪枝
+WHERE domain = $1 AND tool_id = ANY($2)
+```
+
+> 1w 量级下全表扫描也能接受（1024 维 × 1w ≈ 40MB），但 M2 必须完成分区，
+> 并把 `hnsw.ef_search` 的调参纳入检索评测的对比项。
+
+**可见集合必须缓存**：`domain` grant 展开后可能有几千个 `tool_id`，每次检索都重算并不可取。
+按 Principal 在 Redis 做短 TTL 缓存：
+
+```
+key:   visible:{principal_id}:{scope_hash}:{visible_ver}
+value: tool_id 集合（压缩存储）
+ttl:   60s
+```
+
+**失效方式（两条并用）**——只靠 TTL 会导致"授权已收回但调用方仍可见"：
+
+1. **主动失效**：`Grant` / `Tool` / `Provider` 状态变更时执行 `INCR visible_ver:{principal_id}`；
+   读取时把版本号拼进 key，版本一变旧 key 自然失效
+2. **TTL 兜底**：即使漏了主动失效，最迟 60 秒后生效
+
+> **授权变更的生效延迟上限 = TTL（60s）**，这个数字必须在授权管理界面明示，避免"已撤销却还能调"的误解。
 
 ### 9.3 不可区分原则
 
-"工具不存在" 与 "工具无权访问" **必须返回完全相同的响应**（沿用上一版做法：均为 404 + 相同的错误体）。否则可以靠错误码探测平台里有哪些工具。
+"工具不存在" 与 "工具无权访问" **必须返回完全相同的响应**——都是 `TH_TOOL_NOT_FOUND` + 相同的错误体（§7.4）。
+否则可以靠错误码探测平台里有哪些工具。
 
 ---
 
@@ -626,7 +939,17 @@ kind: static_header | api_key | basic | oauth2_client | mtls
 
 `kek_id` 字段记录"这条密文由哪把 KEK 包装"，**它的存在是为了支持轮换**。
 
-**做法**：KEK 由单个 32 字节环境变量注入；每条凭据使用独立随机 DEK + AES-256-GCM。
+**做法**：每条凭据使用独立随机 DEK + AES-256-GCM。KEK 通过**两个环境变量**注入——必须是**多把并存**，否则上面的轮换流程无法进行：
+
+```
+TOOLHIVE_KEKS='{"k1":"<32 字节 base64>","k2":"<32 字节 base64>"}'   # 多把 KEK，可增可减
+TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入用哪把
+```
+
+- **解密时按密文上的 `kek_id` 找对应 KEK**，不依赖 `ACTIVE_KEK_ID`
+- 轮换第 2 步只改 `ACTIVE_KEK_ID`；第 3 步重包装全部完成后，才从 `TOOLHIVE_KEKS` 删掉旧 KEK
+- **启动自检**：若存在密文引用了 `TOOLHIVE_KEKS` 里没有的 `kek_id`，
+  **拒绝启动**（而不是等到某次调用才发现凭证解不开）
 
 **不接 KMS**，因此 KEK 轮换走运维流程：
 
@@ -638,6 +961,19 @@ kind: static_header | api_key | basic | oauth2_client | mtls
 ```
 
 第 3 步是普通的后台任务，不需要外部服务；`kek_id` 字段就是为这个流程存在的。
+
+#### 部署约束（环境变量方案的补偿措施）
+
+环境变量方案比明文入库强得多，但**拿到进程环境或 K8s Secret 的人可以解密全部凭据**。因此必须配套：
+
+1. **KEK 只注入到运行面进程**（执行内核所在的 Pod）。**管理面 CLI 与 admin API 不持有 KEK、不参与凭据解密**
+   ——这条正好让"凭据可见性"成为真实的安全边界，成本几乎为零
+2. KEK **不进日志、不进崩溃转储、不进配置查询接口**；配置查询只返回 `kek_id`，永不返回密钥值
+3. **凭据解密失败必须 fail-closed**：拒绝执行并返回 `TH_UPSTREAM_ERROR`，
+   **不得**返回空值、不得降级为匿名调用。
+   同时**必须触发平台侧告警**——这是平台配置问题（KEK 缺失、密文损坏），不是调用方的错；
+   只让调用方看到一个 502 会把平台故障误判成"上游抖动"
+4. KEK 轮换的重包装任务由**运行面进程**执行，管理面不介入
 
 ### 10.2 出站安全（沿用上一版做法，这部分做得对）
 
@@ -656,15 +992,46 @@ kind: static_header | api_key | basic | oauth2_client | mtls
 
 | 维度 | 做法 |
 |---|---|
-| **审计**（治理事实） | `AuditLog`：谁改了什么、谁调用了什么、结果哈希。**不存明文参数与结果** |
+| **审计**（治理事实） | `AuditLog`：谁改了什么、谁调用了什么、结果哈希 |
+| **凭据使用审计** | 每次解密凭据出站时记一条：`credential_id` + `principal_id` + `tool_id` + `trace_id`（**不记凭据值**）——§10.1 提到的"访问审计"落在这里 |
 | **Trace**（技术链路） | **不引入 OpenTelemetry**：`trace_id` 在入口生成，贯穿 `retrieve → authorize → execute → upstream`，写入结构化日志与 `Invocation` 记录；排查时按 `trace_id` 串日志 |
-| **指标** | **不引入 Prometheus**：关键计数（QPS、错误率、配额拒绝、熔断次数）写入日志；另提供管理侧统计接口，从 `Invocation` 聚合出用量报表 |
-| **日志** | 结构化 JSON，每条带 `trace_id`；参数与结果默认脱敏 |
+| **指标** | **不引入 Prometheus**：关键计数（QPS、错误率、配额拒绝、熔断次数、**检索降级率**）写入日志；另提供管理侧统计接口，从事件表聚合出用量报表 |
+| **延迟分位** | 不接 Prometheus 的代价是**无法从原始日志直接算 p95**。补救：日志里写**预聚合的延迟直方图桶**（固定边界，如 10/25/50/100/200/500/1000/2000ms），日志解析即可算分位——成本几乎为零 |
+| **日志** | 结构化 JSON，每条带 `trace_id` |
 | **健康检查** | liveness / readiness 分离；readiness 检查 PostgreSQL、Redis、检索索引 |
 
 > **明确不引入**：OpenTelemetry、Prometheus。将来若接入统一监控体系，`trace_id` 与结构化日志可直接被采集，**不需要改业务代码**。
+>
+> **零成本兜底（当前不实现，留作后手）**：若将来确实需要被监控系统主动抓取，可暴露一个**只读的 `/metrics` 文本端点**
+> （Prometheus 文本格式）。那只是**字符串格式化**——不引入任何依赖、不启动任何服务。
 
-上一版把调用参数与结果**明文**写进 `runtime_trace_log`，v0.2 默认只存摘要 + SHA-256。
+### 11.1 数据留存与脱敏（逐项裁决）
+
+"审计不存明文" 与 "评测要从真实调用采样"（§14.4）此前是冲突的。逐项裁决如下：
+
+| 数据 | 是否存储 | 说明 |
+|---|---|---|
+| **检索 query**（`/v1/tools/search` 的输入） | ✅ **存**：默认**截断 512 字符** + **默认脱敏** | 属**检索行为**数据，不是业务数据；也是评测标注的**唯一来源**，不存则评测体系无从建立 |
+| **检索事件** | ✅ 单独记录 | `search` **不写 `Invocation`**（那是执行记录）；单独事件含 `query`、`top-k`、`degraded`、`latency` |
+| **工具调用参数** | ❌ 明文不存 | 只存 `input_schema` 摘要 + `SHA-256` |
+| **执行结果** | ❌ 明文不存 | 只存 `SHA-256` + 字节数 |
+| **业务身份上下文**（`context`） | ⚠️ 按字段白名单 | 默认只保留 `tenant_id` / `user_id` 的哈希，其余丢弃 |
+| **凭据值** | ❌ **永不记录** | 只记 `credential_id` |
+
+> 上一版把调用参数与结果**明文**写进 `runtime_trace_log`，v0.2 按上表执行。
+
+**默认脱敏规则（可配置开关）**——写入前用正则替换为占位符，避免合规评审卡住：
+
+| 模式 | 替换为 |
+|---|---|
+| 手机号 `1[3-9]\d{9}` | `<PHONE>` |
+| 身份证（18 位，含末位 X） | `<ID_CARD>` |
+| 邮箱 | `<EMAIL>` |
+| 银行卡（16–19 位连续数字） | `<BANK_CARD>` |
+
+- **截断长度**默认 512 字符（与 §6.1 的 `query` 上限一致），可配置
+- **脱敏默认开启**；关闭必须显式配置，不能是默认行为
+- 本节只影响**检索 query**；工具**参数**与**结果**仍是"只存哈希"，不受影响
 
 ---
 
@@ -676,7 +1043,7 @@ kind: static_header | api_key | basic | oauth2_client | mtls
 | 主存储 | PostgreSQL | 权威数据 + 审计 |
 | 向量 | **pgvector** | 一个库搞定；备份/一致性简单；**可水平扩展**（上一版嵌入式 Chroma 是硬伤） |
 | 检索 | **`pg_trgm`（M0，绕开中文分词）+ pgvector + RRF 融合** | 混合检索；M0 不引入分词方案 |
-| 精排（可选） | **cross-encoder reranker**（判别式，非 LLM）。**供应商尚未确定**：管线中保留该阶段，但**默认走"无精排"降级路径**（等价于直接用 RRF 顺序），接口就位后可直接接入 | 见 §6.2；**"CPU + 100 候选 + base 模型"需实测延迟** |
+| 精排（可选，**默认关**） | **DashScope `qwen3.7-text-rerank`**（判别式，非 LLM，境内）。供应商已确定；管线保留精排阶段，**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**需并入延迟 SLO** |
 | embedding 服务 | **现成的境内服务**（OpenAI 兼容 `/v1/embeddings`，模型 `kinfra-text-embedding-4b`），通过配置注入 base_url 与密钥 | 已确认可用；不自建、不调境外 |
 | 缓存/计数 | Redis + Lua | 配额、并发、幂等、确认令牌；**已有现成实例** |
 | 迁移 | **Alembic 唯一来源** | 不再有 `init.sql` 与 ORM 双份 DDL |
@@ -793,7 +1160,7 @@ def test_core_is_framework_free():
 | Lint / 类型 | ruff + mypy |
 | 单元测试 | 内核、策略、映射、导入器 |
 | 集成测试 | testcontainers（PostgreSQL + Redis） |
-| **契约测试** | OpenAPI 快照 + MCP schema 快照（防止无意破坏调用方） |
+| **契约测试** | OpenAPI 快照（M0）；**MCP schema 快照为 M1**（M0 无 MCP 前端）。防止无意破坏调用方 |
 | **E2E** | 导入工具 → 发布 → 检索 → 通过 MCP 调用 → 通过 REST 调用 → 断言配额与审计 |
 | **检索评测** | 标注集上跑 `recall@k` / MRR / nDCG，**CI 门禁** |
 | 架构断言 | §14.1 的五条 |
@@ -801,7 +1168,7 @@ def test_core_is_framework_free():
 ### 14.4 评测集怎么攒（M0）
 
 - 初期：人工构造 200 条 `query → 正确工具` 标注（覆盖各业务域）
-- 中期：从真实调用中采样，人工确认（把线上成功调用转成标注）
+- 中期：从**真实检索事件**中采样，人工确认（`query` 的存储规则见 §11.1——这是评测体系能建立的前提）
 - 长期：把"检索后调用成功"当作弱标注，配合人工抽检
 - **每次改描述 / 改索引 / 换模型都跑一遍，指标下降则禁止合并**
 
@@ -863,16 +1230,17 @@ def test_core_is_framework_free():
 |---|---|---|
 | **管理面形态** | **只用 CLI**，不做管理 HTTP API、不做管理前端 | 省掉会话/CSRF/验证码/操作码一整套（C3）；代价是 M0 只能命令行操作 |
 | **调用方认证** | **API Key**（每 Principal 一把，可轮换） | 签名的请求认证（RSA/Ed25519）留到 M1，作为可插拔 authenticator（Q2） |
-| **MCP 前端** | **不做** | M1（Q3） |
+| **MCP 客户端 / MCP 服务端** | **两者都不做**（区分见 §5.1） | 均为 M1，且**彼此独立**（Q3） |
 | **确认令牌端点** | **不做**，内核只保留判定并对高风险/写操作直接拒绝 | M0 工具以读为主，链路 fail-safe（Q4） |
+| **写操作工具的导入** | **照常建档，但标 `executable=false`**，并在导入报告中显式列出"因 M0 未实现确认令牌而未启用"；**不跳过导入** | 避免"导入即不可用却无任何提示"；标记不可用可让管理员看到后决定是否补齐确认流程 |
 | **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5） |
 | **元数据富化** | **只做规则富化** | LLM 描述补全改为"评测触发的可选项"，见 §5.4 |
-| **精排（rerank）** | **管线保留该阶段，但默认走"无精排"降级路径**（直接用 RRF 顺序）；供应商待定 | 见 §6.2；接口就位后可直接接入，不改管线 |
+| **精排（rerank）** | **供应商已定（DashScope `qwen3.7-text-rerank`）**；管线保留该阶段，但**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**不计入基线延迟 SLO**，见 §6.7 |
 | **多租户** | **不做**，`tenant_id` 字段预留 | — |
 | **KEK** | **环境变量注入，不接 KMS** | 轮换走运维流程，见 §10.1 |
 | **可观测性** | **不接 OpenTelemetry、不接 Prometheus** | 用 `trace_id` + 结构化日志；统计走管理侧聚合接口，见 §11 |
 | **外部凭据保管** | **不接 Vault**，`external_ref` 仅作字段预留 | 凭据密文入库，见 §10.1 |
-| **审批权限** | 管理面是 CLI，**能执行 CLI 的人即可审** | M1 引入角色（Q7） |
+| **审批权限** | 管理面是 CLI，**能执行 CLI 的人即可审**；M0 的审批**只留痕、不做权限分离**（导入者可自审自批） | M1 引入角色与职责分离（Q7） |
 | **按来源免审策略** | **不做**，M0 `review_required` 恒为 true | M1（Q8） |
 | **审计保留周期** | **不删除** | M1 定策略（Q9） |
 | **工具服务 SDK** | **不做** | M1（Q10） |
@@ -884,7 +1252,7 @@ def test_core_is_framework_free():
 | 1 | 领域模型 + Alembic 首个迁移 |
 | 2 | Principal（API Key）+ Grant + 授权判定与可见工具集合 |
 | 3 | **OpenAPI 导入器** + `source_ref` 幂等重导 + 命名规范化 + 规则富化 |
-| 4 | **简单审批流**：`draft → pending_review → published/rejected` + 审核记录 |
+| 4 | **简单审批流**：`draft → pending_review → published/rejected` + 审核记录（M0 **不含** `deprecated`/`retired`，见 §4.3） |
 | 5 | **embedding 服务适配器**：在线单条（短超时 + 失败降级）+ 离线批量（分批 + 续跑） |
 | 6 | **工具检索**：权限过滤 + `pg_trgm` ∥ 向量 + RRF + scope 收窄 + taxonomy 接口 |
 | 7 | **执行内核**：http provider + 凭据注入 + 配额/并发 + 幂等 + 审计 |
@@ -898,11 +1266,13 @@ def test_core_is_framework_free():
 
 ### 16.3 M1：放量到 1k
 
-- MCP 导入器 + 统一规范化层合并两路
-- **MCP 前端**（搜索式暴露）
+- **MCP 客户端**：MCP 导入器 + Provider `type=mcp`（会话管理、重连、上游超时）——与 OpenAPI 导入合并到统一规范化层
+- **MCP 服务端**：MCP 前端（transport、transport security、Host 校验、`search_tools` / `get_tool` / `call_tool`）
+
+> 上面两项是**独立交付物、无依赖关系**，可并行；技术栈完全不同（客户端要会话管理，服务端要传输安全）。
 - **凭据保管与注入**（解锁真实内部工具）
 - 描述补全（LLM 富化）：**仅当评测证明"描述质量是瓶颈"时才引入**，见 §5.4
-- 精排（cross-encoder reranker）：**仅当评测显示"recall@5 低但 recall@30 高"（排序问题）时引入**，见 §6.2；同时评测集扩到 500 条
+- 精排（**DashScope rerank 适配器**）：**供应商已定，但默认关闭**；仅当评测显示"recall@5 低但 recall@30 高"（排序问题）时开启，见 §6.2；同时评测集扩到 500 条
 - 管理前端（目录、授权、配额、审计）
 
 ### 16.4 M2：放量到 1w
@@ -943,6 +1313,12 @@ def test_core_is_framework_free():
 | D7 | embedding 服务 | 使用现成的境内服务（OpenAI 兼容 `/v1/embeddings`） | §6.4 §12 |
 | D8 | M0 范围与实现细节 | **见 §16.2 的「M0 范围决策」表**（管理面形态、认证方式、MCP 前端、确认令牌、关键词检索、富化、精排、多租户、KEK、可观测性、外部凭据保管、审批权限、免审策略、审计保留、工具服务 SDK） | §16.2 |
 | D9 | **明确排除的外部依赖** | **KMS、Vault、OpenTelemetry、Prometheus 一律不接**；Redis 与 PostgreSQL(+pgvector) 使用**已有现成实例** | §12 |
+| D10 | **错误模型** | 统一错误体 `{code, message, trace_id, retryable, retry_after_ms}` + `TH_*` 错误码枚举（17 个）；**由内核统一产出，两个前端只做协议翻译** | §7.4 |
+| D11 | **配额语义** | 每个命中的 grant **各自独立计数，任一超限即拒绝**；增加 grant 只增加约束、不增加额度 | §9.1 |
+| D12 | **Channel 悬空** | **拒绝**废弃被 Channel 指向的版本（**不做自动回退**）；无 stable 通道的工具视为不可调用 | §4.3 |
+| D13 | **数据留存** | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation` | §11.1 |
+| D14 | **写操作工具在 M0** | 照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 |
+| D15 | **rerank 供应商** | **DashScope `qwen3.7-text-rerank`**（境内、判别式）；管线保留精排阶段，**默认关闭**，由评测决定开启；远程调用 p95 150–400ms 需并入延迟 SLO | §6.2 §6.7 §12 |
 
 **这些决策已足够冻结 M0 的表结构与接口，可以直接开工。**
 
@@ -960,6 +1336,7 @@ def test_core_is_framework_free():
 | R6 | 审计与 Invocation 的保留周期 | M0 不删除；M1 由合规确定 | |
 | R7 | KEK 轮换的运维流程 | M1 | **不接 KMS**，靠多 KEK 并存 + 后台重包装，见 §10.1 |
 | R8 | 中文分词 / BM25 升级 | 评测触发，可能永不引入 | M0 用 `pg_trgm` 绕开，见 §6.2 |
-| R9 | **reranker 供应商选型** | **供应商待定，不阻塞任何阶段** | 管线保留精排阶段但**默认走降级路径**（RRF 顺序）；接口 + 配置项 + no-op 实现先就位，**代码留 TODO**；见 §6.2 |
+| R9 | **reranker 接入与启用** | **供应商已定（DashScope）**，M1 交付适配器 | 管线保留精排阶段但**默认走降级路径**（RRF 顺序）；接口 + 配置项 + no-op 实现先就位，**代码留 TODO**；是否开启由评测 A/B 决定，见 §6.2 |
+| R9b | **rerank 服务的限流 / SLA / 计费** | M1 接入时实测 | 与 embedding 同类，属"事实探测"而非决策项 |
 | R10 | 排序用的行为信号（调用成功率/频次）是否纳入 | M2 | 依赖足够的调用数据积累 |
 | R11 | 统一监控接入（若将来有公司级监控体系） | 未定 | `trace_id` + 结构化日志可直接被采集，**不需要改业务代码**，见 §11 |
