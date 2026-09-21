@@ -119,23 +119,38 @@
 
 ### 4.1 实体总览
 
-| 实体 | 职责 | 关键字段 |
+> **两条全局约定**（所有表都适用，下表只列业务字段，**不重复列这两组**）：
+>
+> **① 主键统一雪花算法**：`id bigint PRIMARY KEY`，由应用层生成（配置 `TOOLHIVE_SNOWFLAKE_DATACENTER_ID` / `WORKER_ID`），
+> 数据库不用自增或序列；所有外键同为 `bigint`。
+>
+> **② 审计字段每表必备**：`create_by_id` / `create_by_name` / `create_time` / `update_by_id` / `update_by_name` / `update_time`。
+> 三条要点：
+> - `*_by_name` 是**写入时刻的名称快照**，不随账号改名而变
+> - **审计字段不加外键**（操作人可能已离职、也可能是服务型 Principal）
+> - **追加型表（日志/事件）只填 `create_*`**，`create_by` 即"触发该记录的操作人"——因此这些表
+>   **不再单设 `actor_id` / `reviewer_id` 之类的重复字段**
+>
+> 完整可执行 DDL 见 `03-表结构DDL-v0.2.md`。
+
+| 实体 | 职责 | 业务字段 |
 |---|---|---|
-| `Principal` | 调用主体（**统一**人与机器） | `id, type(user\|service\|agent), tenant_id, name, status` |
-| `Credential` | 上游凭据（加密存储，只写不读） | `id, name, kind, ciphertext, kek_id, rotated_at` |
-| `Provider` | 上游连接定义 | `id, code, type(http\|mcp\|local), base_url, auth_ref, tls_config, limits, status` |
-| `Tool` | 逻辑工具 | `id, code, source_ref, name, description, domain, system, tags[], risk, **executable**, **discoverable**, review_required, input_schema, output_schema, status, owner` |
-| `ToolVersion` | 不可变版本快照 | `id, tool_id, version, 上述定义字段快照, status, published_at` |
-| `Channel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
-| `Binding` | 执行绑定 | `id, version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp` 类型全为空**；**`local` 仅 `method="COMPUTE"`**；`http` 三者必填，见 §4.3）；`timeout_s, retry_max`（可空，取默认值） |
-| `Grant` | 主体 × 范围 × 配额 | `id, principal_id, scope_type(domain\|system\|tag\|tool), scope_value, quota, constraints, status` |
-| `Invocation` | 每次调用记录 | `id, trace_id, principal_id, tool_id, version_id, protocol, outcome, duration_ms, request_digest, result_digest, error_code` |
-| `AuditLog` | 治理事件（谁改了什么） | `id, actor_id, action, object_type, object_id, before/after_summary` |
-| `OutboxEvent` | 索引/通知的异步投递 | 沿用上一版的 outbox 模式 |
-| `ApiKey` | **调用方凭证**（M0 的认证载体） | `id, principal_id, key_prefix`（明文前缀，便于识别与轮换）、`key_hash`（argon2）、`status(active\|revoked)`、`expires_at`、`rotated_at` |
-| `ReviewRecord` | 审批留痕（§4.3） | `id, version_id, action(submit\|approve\|reject), from_status, to_status, reviewer_id, comment, create_time` |
-| `SearchEvent` | **检索事件**（§11.1；评测采样的唯一来源） | `id, trace_id, principal_id, query`（截断+脱敏）、`top_k, degraded, latency_ms, create_time` |
-| `IndexMeta` | 索引版本元数据（§6.5/§6.4） | `index_version, model, dimension, status(building\|active\|retired), created_at, activated_at` |
+| `Principal` | 调用主体（**统一**人与机器） | `type(user\|service\|agent), tenant_id, name, display_name, status, row_version` |
+| `ApiKey` | **调用方凭证**（M0 的认证载体） | `principal_id, key_prefix`（明文前缀，便于识别与轮换）、`key_hash`（argon2）、`status(active\|revoked)`、`expires_at`、`rotated_at`、`last_used_at` |
+| `Credential` | 上游凭据（加密存储，只写不读） | `name, kind, ciphertext, external_ref, kek_id, meta, rotated_at` |
+| `Provider` | 上游连接定义 | `code, name, type(http\|mcp\|local), base_url, auth_ref, tls_config, limits, status, row_version` |
+| `Tool` | 逻辑工具 | `code, source_ref, provider_id`（**来源**，区别于绑定的 provider_id）、`name, description, domain, system, tags[], risk, executable, discoverable, review_required, input_schema, output_schema, status, owner, row_version` |
+| `ToolVersion` | 不可变版本快照 | `tool_id, version, 定义字段快照, status, review_comment, submitted_at, published_at, row_version` |
+| `ToolChannel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
+| `ExecutionBinding` | 执行绑定 | `version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp` 类型全为空**；**`local` 仅 `method="COMPUTE"`**；`http` 三者必填，见 §4.3）；`timeout_seconds, retry_max`（可空，取默认值） |
+| `ReviewRecord` | 审批留痕（§4.3，**追加型**） | `version_id, action(submit\|approve\|reject), from_status, to_status, comment`（审批人即 `create_by_*`） |
+| `Grant` | 主体 × 范围 × 配额 | `principal_id, scope_type(domain\|system\|tag\|tool), scope_value, quota, constraints, status` |
+| `IndexMeta` | 索引版本元数据（§6.5/§6.4） | `index_version, model, dimension, status(building\|active\|retired), activated_at, retired_at` |
+| `ToolEmbedding` | 向量索引数据（§6.5） | `tool_id, index_version, chunk_kind(name\|description\|combined), embedding, content_hash` |
+| `Invocation` | 每次调用记录（**追加型**） | `trace_id, principal_id, tool_id, version_id, protocol, outcome, error_code, duration_ms, request_digest, result_digest, result_bytes` |
+| `AuditLog` | 治理事件（谁改了什么，**追加型**） | `action, object_type, object_id, result, before_summary, after_summary, trace_id`（操作人即 `create_by_*`） |
+| `SearchEvent` | **检索事件**（§11.1；评测采样的唯一来源，**追加型**） | `trace_id, principal_id, query`（截断+脱敏）、`scope, top_k, returned, total_candidates, degraded, latency_ms` |
+| `OutboxEvent` | 索引/通知的异步投递 | `event_type, object_type, object_id, payload, status, attempts, next_retry_at, locked_by, locked_until, last_error` |
 
 > **一个 `Principal` 可以有多个 `ApiKey`**（便于轮换：先建新 key、切流、再吊销旧 key）。
 > 认证时按 `key_prefix` 定位候选，再校验 `key_hash`；`status=revoked` 或过期即拒绝。
@@ -469,6 +484,11 @@ PostgreSQL 的全文检索（FTS/BM25）依赖**分词**，而中文分词需要
 - 若评测（§6.7）显示关键词这一路贡献不足，再评估是否引入 `zhparser` + BM25（M1/M2）
 
 > 因此 **M0 不引入任何分词方案**——这是一个被绕开的问题，不是被解决的问题。
+>
+> **部署前置条件**：`pg_trgm` 在 PostgreSQL 的 contrib 包里，**目标服务器当前尚未安装**
+> （实测可用扩展只有 `plpgsql` 与 `vector`）。需先装 `postgresql-contrib`
+> （OpenCloudOS / RHEL 系：`yum install postgresql15-contrib`）并执行 `CREATE EXTENSION pg_trgm`。
+> 这属于**环境准备**，不影响本节的设计选型。
 
 #### 精排（可选，默认关）：reranker，**不是 LLM**
 
@@ -561,7 +581,10 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 **关键设计点：**
 
 1. **它是"平台自身的出站"，不是"调用方触发的出站"。** 因此不走 Provider 的 SSRF 白名单那套（域名固定可信），但必须有**独立的超时、重试、熔断与降级**。
-2. **向量维度首次调用时探测**，写入索引元数据。换模型时维度可能变化，这也是 §6.5 索引版本化存在的原因。
+2. **向量维度已实测为 2560**（`kinfra-text-embedding-4b`），写入 `index_meta.dimension`。
+   2560 维**超过 pgvector 对 `vector` 类型的 2000 维索引上限**，因此列类型用 **`halfvec(2560)`**
+   （上限 4000 维，已实测可建 HNSW 索引）——细节见 `03-表结构DDL-v0.2.md` §4.1。
+   **换模型时维度可能变**，这也是 §6.5 索引版本化存在的原因
 3. **在线嵌入失败一律降级为关键词检索**（`degraded=true`），不得让检索整体失败。
 4. **成本要预估**：1w 工具全量重嵌的成本与耗时，是"换 embedding 模型"这个决策的主要代价。
 5. **批量嵌入要能续跑**：中断后从上次位置继续，不要把已经嵌入的再做一遍。
@@ -979,7 +1002,7 @@ Principal ──< Grant >── 范围(domain | system | tag | tool)
 WHERE domain = $1 AND tool_id = ANY($2)
 ```
 
-> 1w 量级下全表扫描也能接受（1024 维 × 1w ≈ 40MB），但 M2 必须完成分区，
+> 1w 量级下全表扫描也能接受（2560 维 halfvec × 1w ≈ 50MB），但 M2 必须完成分区，
 > 并把 `hnsw.ef_search` 的调参纳入检索评测的对比项。
 
 **可见集合必须缓存**：`domain` grant 展开后可能有几千个 `tool_id`，每次检索都重算并不可取。
@@ -1145,8 +1168,9 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 |---|---|---|
 | 语言/框架 | Python 3.12 + FastAPI | 团队已有积累；此量级不是性能瓶颈 |
 | 主存储 | PostgreSQL | 权威数据 + 审计 |
-| 向量 | **pgvector** | 一个库搞定；备份/一致性简单；**可水平扩展**（上一版嵌入式 Chroma 是硬伤） |
-| 检索 | **`pg_trgm`（M0，绕开中文分词）+ pgvector + RRF 融合** | 混合检索；M0 不引入分词方案 |
+| 主键 | **雪花算法**（应用层生成 `bigint`） | 全局唯一、趋势递增、不依赖数据库序列；跨实例需配 `datacenter_id`/`worker_id`（§4.1） |
+| 向量 | **pgvector**（服务端 0.8.6，已安装） | 一个库搞定；备份/一致性简单；**可水平扩展**（上一版嵌入式 Chroma 是硬伤）。⚠️ 2560 维超出 `vector` 的 2000 维索引上限，列类型用 **`halfvec(2560)`**，见 §6.4 |
+| 检索 | **`pg_trgm`（M0，绕开中文分词）+ pgvector + RRF 融合** | 混合检索；M0 不引入分词方案。⚠️ `pg_trgm` 需装 contrib 包（部署前置条件，见 §6.2） |
 | 精排（可选，**默认关**） | **DashScope `qwen3.7-text-rerank`**（判别式，非 LLM，境内）。供应商已确定；管线保留精排阶段，**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**需并入延迟 SLO** |
 | embedding 服务 | **现成的境内服务**（OpenAI 兼容 `/v1/embeddings`，模型 `kinfra-text-embedding-4b`），通过配置注入 base_url 与密钥 | 已确认可用；不自建、不调境外 |
 | 缓存/计数 | Redis + Lua | 配额、并发、幂等、确认令牌；**已有现成实例** |
@@ -1337,7 +1361,7 @@ def test_core_is_framework_free():
 | **MCP 客户端 / MCP 服务端** | **两者都不做**（区分见 §5.1） | 均为 M1，且**彼此独立**（Q3） |
 | **确认令牌端点** | **不做**。内核**只保留判定**（命中高风险/写操作即返回 `TH_CONFIRMATION_REQUIRED`），**不实现令牌发放、存储与消费**——那整套属 M1 | M0 工具以读为主，链路 fail-safe（Q4）。注意：由于 G6 已把这类工具标为 `executable=false`（第 2 步即拒），第 6 步在 M0 **正常路径下不可达**，保留它只是纵深防御 |
 | **需确认工具的导入** | **照常建档，但标 `executable=false`**；判定条件**与内核第 6 步的确认判定完全对齐**：`method ∈ {POST,PUT,PATCH,DELETE}` **或** `risk == high`（**只读但高风险的工具同样处理**）。导入报告显式说明原因；**不跳过导入** | 否则会出现"搜得到、调得动、必被拒"的坏体验：`risk=high` 的 GET 工具不会被标不可用，但执行时第 6 步要求确认而 M0 无确认端点。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
-| **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5） |
+| **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5）；`pg_trgm` 属 contrib 包，**需在服务器安装** |
 | **元数据富化** | **只做规则富化** | LLM 描述补全改为"评测触发的可选项"，见 §5.4 |
 | **精排（rerank）** | **供应商已定（DashScope `qwen3.7-text-rerank`）**；管线保留该阶段，但**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**不计入基线延迟 SLO**，见 §6.7 |
 | **多租户** | **不做**，`tenant_id` 字段预留 | — |
@@ -1455,6 +1479,7 @@ def test_core_is_framework_free():
 | R6 | 审计与 Invocation 的保留周期 | M0 不删除；M1 由合规确定 | |
 | R7 | KEK 轮换的**实现** | M1（**流程已在 §10.1 设计定**） | 不接 KMS，靠多 KEK 并存 + 后台重包装 |
 | R8 | 中文分词 / BM25 升级 | 评测触发，可能永不引入 | M0 用 `pg_trgm` 绕开，见 §6.2 |
+| R8b | 服务器安装 `postgresql-contrib`（提供 `pg_trgm`） | **部署前置条件，开工前完成** | 不影响设计；实测当前服务器可用扩展只有 `plpgsql` 与 `vector` |
 | R9 | **reranker 接入与启用** | **供应商已定（DashScope）**，M1 交付适配器 | 管线保留精排阶段但**默认关闭**（走 no-op，等价于 RRF 顺序）；接口 + 配置项 + no-op 实现先就位，**代码留 TODO**；是否开启由评测 A/B 决定，见 §6.2 |
 | R9b | **rerank 服务的限流 / SLA / 计费** | M1 接入时实测 | 与 embedding 同类，属"事实探测"而非决策项 |
 | R10 | 排序用的行为信号（调用成功率/频次）是否纳入 | M2 | 依赖足够的调用数据积累 |
