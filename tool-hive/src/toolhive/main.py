@@ -58,6 +58,13 @@ async def lifespan(app: FastAPI):
         await role_svc.ensure_super_admin_role()
         await role_svc.sync_operation_codes()
 
+    # MCP Host 白名单以后台 mcp_server_config 配置为准（SDK 每次请求读取该设置）
+    from toolhive.mcp.server import apply_allowed_hosts
+    from toolhive.services.mcp_server_config_service import McpServerConfigService
+    async with async_session_factory() as session:
+        mcp_config = await McpServerConfigService(session).get_config()
+        apply_allowed_hosts(mcp_config.allowed_hosts)
+
     outbox_worker = None
     if settings.outbox.enabled:
         from toolhive.services.outbox.worker import OutboxWorker
@@ -66,13 +73,15 @@ async def lifespan(app: FastAPI):
     # MCP 会话管理器：被挂载子应用的 lifespan 不会自动运行，宿主必须进入
     from toolhive.mcp.server import get_server
     mcp_server = get_server()
-    async with mcp_server.session_manager.run():
-        yield
-    if outbox_worker is not None:
-        await outbox_worker.stop()
-    # 关闭时清理资源
-    from toolhive.infrastructure.redis import close_redis
-    await close_redis()
+    try:
+        async with mcp_server.session_manager.run():
+            yield
+    finally:
+        # 异常退出时同样要释放后台任务与连接资源
+        if outbox_worker is not None:
+            await outbox_worker.stop()
+        from toolhive.infrastructure.redis import close_redis
+        await close_redis()
 
 
 app = FastAPI(

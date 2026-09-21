@@ -250,6 +250,7 @@ class RoleService:
         if role.is_super_admin:
             raise ValidationError("超级管理员自动拥有全部操作项，无需分配")
         self._ensure_role_mutable(role)
+        operation_codes = self._validate_operation_codes(operation_codes)
 
         for code in operation_codes:
             existing = await self.db.scalar(
@@ -466,6 +467,17 @@ class RoleService:
             .where(ManagementAccount.status == AccountStatus.ENABLED)
         )
         return count or 0
+
+    @staticmethod
+    def _validate_operation_codes(operation_codes: list[str]) -> list[str]:
+        """校验操作码存在并去重，避免外键冲突变成 500。"""
+        known = {code.value for code in OperationCode}
+        unknown = [code for code in operation_codes if code not in known]
+        if unknown:
+            raise ValidationError(
+                "未知操作项: " + ", ".join(sorted(set(unknown))),
+            )
+        return list(dict.fromkeys(operation_codes))
 
     # ═════════════════════════════════════════════════════════════
     # 启动同步

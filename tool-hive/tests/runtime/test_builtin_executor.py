@@ -90,3 +90,44 @@ async def test_builtin_math_rejects_non_numeric() -> None:
     with pytest.raises(RuntimeApiError) as exc_info:
         await executor.execute(_binding("add"), _provider(), {"a": "x", "b": 1})
     assert exc_info.value.code == RUNTIME_PARAMETER_INVALID
+
+
+async def test_builtin_math_rejects_oversized_exponent() -> None:
+    """超大指数被拒绝，不得在事件循环内做无界幂运算。"""
+    executor = BuiltinExecutor()
+    with pytest.raises(RuntimeApiError) as exc_info:
+        await executor.execute(
+            _binding("power"), _provider(), {"a": 2, "b": 10**10},
+        )
+    assert exc_info.value.code == RUNTIME_PARAMETER_INVALID
+
+
+async def test_builtin_math_rejects_oversized_operand() -> None:
+    """超过量级上限的操作数被拒绝。"""
+    executor = BuiltinExecutor()
+    with pytest.raises(RuntimeApiError) as exc_info:
+        await executor.execute(
+            _binding("multiply"), _provider(), {"a": 10**18, "b": 2},
+        )
+    assert exc_info.value.code == RUNTIME_PARAMETER_INVALID
+
+
+async def test_builtin_math_float_overflow_is_parameter_error() -> None:
+    """浮点溢出返回参数错误（而不是未捕获的 OverflowError → 500）。"""
+    executor = BuiltinExecutor()
+    with pytest.raises(RuntimeApiError) as exc_info:
+        await executor.execute(
+            _binding("power"), _provider(), {"a": 10.0, "b": 1000},
+        )
+    assert exc_info.value.code == RUNTIME_PARAMETER_INVALID
+
+
+async def test_builtin_math_result_stays_json_serializable() -> None:
+    """允许范围内的幂运算结果必须能 JSON 序列化（不受 4300 位整数限制影响）。"""
+    import json
+
+    executor = BuiltinExecutor()
+    result = await executor.execute(
+        _binding("power"), _provider(), {"a": 2, "b": 8000},
+    )
+    assert json.dumps(result, sort_keys=True)

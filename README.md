@@ -44,7 +44,7 @@ toolhive/
 
 ## 快速开始
 
-环境要求：Linux（生产与 Nginx 同机）· CPython 3.11.6（`>=3.11.6,<3.12`）· PostgreSQL · Redis；前端开发需要 Node.js 18+。
+环境要求：Linux（生产与 Nginx 同机）· CPython 3.11.6（`>=3.11.6,<3.13`，生产仍以 3.11.6 为准）· PostgreSQL · Redis；前端开发需要 Node.js 18+。
 
 ```bash
 cd tool-hive
@@ -74,7 +74,17 @@ BASE_URL=http://127.0.0.1:8100 bash scripts/verify.sh
 
 ## Windows 开发环境执行步骤（当前配置）
 
-当前机器环境已按本仓库 `.env` 就绪：Python 使用本机环境，PostgreSQL/Redis 原生已配置运行，不使用 Docker/WSL。下面是需要执行的步骤。
+当前机器环境已按本仓库 `.env` 就绪：PostgreSQL/Redis 原生已配置运行，不使用 Docker/WSL。下面是需要执行的步骤。
+
+> **解释器**：依赖装在 conda 环境 **`F:\soft\anaconda\envs\toolhive`（Python 3.12.13）**，
+> 本机默认 `python`（3.14）**没有**安装本项目依赖，仓库内也不存在 `.venv`。
+> 下面命令中的 `python` 请替换为该环境的解释器，例如：
+>
+> ```powershell
+> $py = "F:\soft\anaconda\envs\toolhive\python.exe"
+> ```
+>
+> 否则会报 `ModuleNotFoundError: No module named 'toolhive'`。
 
 ### 首次初始化
 
@@ -87,10 +97,10 @@ cd F:\pycharm_workspace\toolhive\tool-hive
 # 2) 连接 toolhive 数据库，执行 sql\init.sql（建表、约束与种子数据）
 #
 # 3) 初始化首个超级管理员：
-python -m toolhive.cli init-admin --account admin --real-name "Admin"
+& $py -m toolhive.cli init-admin --account admin --real-name "Admin"
 
 # 4) 接入首批数学计算工具：
-python -m toolhive.cli seed-tools
+& $py -m toolhive.cli seed-tools
 ```
 
 ### 日常启动
@@ -99,7 +109,7 @@ python -m toolhive.cli seed-tools
 
 ```powershell
 cd F:\pycharm_workspace\toolhive\tool-hive
-python -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
+& $py -m uvicorn toolhive.main:app --host 127.0.0.1 --port 8100
 ```
 
 终端二：启动前端（首次先执行 `npm install`）
@@ -109,7 +119,20 @@ cd F:\pycharm_workspace\toolhive\frontend
 npm run dev
 ```
 
-然后浏览器打开 `http://localhost:5173/admin/login` 登录。
+然后浏览器打开 `http://localhost:5173/admin/login` 登录。开发代理已自动写入
+`X-ToolHive-Ingress`，因此 `network.allow_loopback_direct` 保持默认 `false` 也能正常联调。
+
+### 运行测试
+
+```powershell
+cd F:\pycharm_workspace\toolhive\tool-hive
+& $py -m ruff check .
+& $py -m pytest -q
+```
+
+> 若 pytest 报 `PermissionError` / `FileNotFoundError`（无法创建 `pytest-of-*` 临时目录），
+> 说明工作区里残留了 ACL 异常的旧临时目录（`tool-hive\pytest-of-nuit`、`.pytest_cache` 等），
+> 用管理员权限删除后即可恢复。
 
 ## 前端开发与生产构建
 

@@ -229,12 +229,21 @@ class RuntimeSecurityMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _matches_api_pattern(path: str, patterns: list[str]) -> bool:
-        """API 范围匹配：精确匹配或尾 * 前缀匹配。"""
+        """API 范围匹配：精确匹配、尾 ``*`` 前缀匹配、尾 ``/**`` 通配匹配。
+
+        ``/**`` 是文档与前端提示中推荐的写法（如 ``/api/runtime/v1/**``），
+        按去掉 ``/**`` 后的路径前缀匹配；尾 ``*`` 保留原有"去一个字符后前缀匹配"
+        语义，避免破坏既有配置。
+        """
         for pattern in patterns:
             value = pattern.strip()
             if not value:
                 continue
-            if value.endswith("*"):
+            if value.endswith("**"):
+                prefix = value[:-2].rstrip("/")
+                if path == prefix or path.startswith(prefix + "/"):
+                    return True
+            elif value.endswith("*"):
                 if path.startswith(value[:-1]):
                     return True
             elif path == value:

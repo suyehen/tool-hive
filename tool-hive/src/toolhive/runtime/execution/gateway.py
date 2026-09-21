@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -12,6 +13,17 @@ from toolhive.runtime.errors import (
     RUNTIME_PROVIDER_ERROR,
     RuntimeApiError,
 )
+
+# 运算规模上限：内置执行器在事件循环内同步计算，必须限制可被放大的输入，
+# 否则单次调用即可长时间占满 worker（幂运算尤其容易构造）。
+MAX_OPERAND_ABS = 1e15
+"""单个操作数的绝对值上限。"""
+
+MAX_POWER_EXPONENT = 10000
+"""幂运算指数绝对值上限（结果位数上限会先一步拦截更大的结果）。"""
+
+MAX_RESULT_BITS = 8192
+"""整数结果二进制位数上限（约 2466 位十进制，确保可 JSON 序列化）。"""
 
 
 class ProviderExecutor(ABC):
@@ -86,12 +98,26 @@ class BuiltinExecutor(ProviderExecutor):
             raise RuntimeApiError(
                 RUNTIME_PARAMETER_INVALID, "参数 b 必须是数字", 400,
             )
+        _check_operand(a, "a")
+        _check_operand(b, "b")
         result = self._compute(operation, a, b)
         return {"result": result}
 
     @staticmethod
     def _compute(operation: str, a: int | float, b: int | float) -> int | float:
-        """执行四则 / 幂 / 取模运算。"""
+        """执行四则 / 幂 / 取模运算，并限制结果规模。"""
+        try:
+            result = BuiltinExecutor._compute_raw(operation, a, b)
+        except OverflowError as exc:
+            raise RuntimeApiError(
+                RUNTIME_PARAMETER_INVALID, "计算结果超出可表示范围", 400,
+            ) from exc
+        _check_result(result)
+        return result
+
+    @staticmethod
+    def _compute_raw(operation: str, a: int | float, b: int | float) -> int | float:
+        """执行四则 / 幂 / 取模运算（调用前必须已完成入参范围校验）。"""
         if operation == "add":
             return a + b
         if operation == "subtract":
@@ -105,7 +131,7 @@ class BuiltinExecutor(ProviderExecutor):
                 )
             return a / b
         if operation == "power":
-            return a ** b
+            return _power(a, b)
         if operation == "modulo":
             if b == 0:
                 raise RuntimeApiError(
@@ -115,6 +141,57 @@ class BuiltinExecutor(ProviderExecutor):
         raise RuntimeApiError(
             RUNTIME_PROVIDER_ERROR, f"未知数学操作: {operation}", 400,
         )
+
+
+def _check_operand(value: int | float, name: str) -> None:
+    """校验单个操作数：必须是有限数且不超过量级上限。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise RuntimeApiError(
+            RUNTIME_PARAMETER_INVALID, f"参数 {name} 必须是有限数字", 400,
+        )
+    if abs(value) > MAX_OPERAND_ABS:
+        raise RuntimeApiError(
+            RUNTIME_PARAMETER_INVALID,
+            f"参数 {name} 的绝对值不能超过 {MAX_OPERAND_ABS:g}",
+            400,
+        )
+
+
+def _check_result(result: int | float) -> None:
+    """校验计算结果规模，防止超大整数进入响应与 Trace 序列化。"""
+    if isinstance(result, float):
+        if not math.isfinite(result):
+            raise RuntimeApiError(
+                RUNTIME_PARAMETER_INVALID, "计算结果超出可表示范围", 400,
+            )
+        return
+    if isinstance(result, int) and result.bit_length() > MAX_RESULT_BITS:
+        raise RuntimeApiError(
+            RUNTIME_PARAMETER_INVALID,
+            f"计算结果位数超过上限 {MAX_RESULT_BITS} 位",
+            400,
+        )
+
+
+def _power(a: int | float, b: int | float) -> int | float:
+    """幂运算：先按估算规模拒绝，避免在事件循环内做无界计算。"""
+    if abs(b) > MAX_POWER_EXPONENT:
+        raise RuntimeApiError(
+            RUNTIME_PARAMETER_INVALID,
+            f"幂运算指数绝对值不能超过 {MAX_POWER_EXPONENT}",
+            400,
+        )
+    if isinstance(a, int) and isinstance(b, int) and b > 0:
+        # 提前估算结果位数（|a|^b 的位长约 b * (bit_length(a) - 1) + 1），
+        # 超限时直接拒绝，不进入实际计算；估算偏小也无妨，_check_result 会兜底
+        estimated_bits = b * (a.bit_length() - 1) + 1
+        if estimated_bits > MAX_RESULT_BITS:
+            raise RuntimeApiError(
+                RUNTIME_PARAMETER_INVALID,
+                f"幂运算结果位数超过上限 {MAX_RESULT_BITS} 位",
+                400,
+            )
+    return a ** b
 
 class ProviderGateway:
     """统一出站网关：按 Provider 类型分发到固定执行器。"""

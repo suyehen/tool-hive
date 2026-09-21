@@ -46,8 +46,8 @@ async def test_health_success() -> None:
     factory = MagicMock(return_value=cm)
     with (
         patch(
-            "toolhive.runtime.execution.health.resolve_host",
-            return_value=[],
+            "toolhive.runtime.execution.health.resolve_host_async",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "toolhive.runtime.execution.health.validate_resolved_addresses",
@@ -69,8 +69,8 @@ async def test_health_http_error_status_unhealthy() -> None:
     factory = MagicMock(return_value=cm)
     with (
         patch(
-            "toolhive.runtime.execution.health.resolve_host",
-            return_value=[],
+            "toolhive.runtime.execution.health.resolve_host_async",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "toolhive.runtime.execution.health.validate_resolved_addresses",
@@ -86,7 +86,7 @@ async def test_health_http_error_status_unhealthy() -> None:
 async def test_health_dns_failure() -> None:
     """域名解析失败返回不可达。"""
     with patch(
-        "toolhive.runtime.execution.health.resolve_host",
+        "toolhive.runtime.execution.health.resolve_host_async",
         side_effect=RuntimeError("dns down"),
     ):
         result = await check_provider_health(_provider())

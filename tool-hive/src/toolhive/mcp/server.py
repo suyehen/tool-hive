@@ -83,23 +83,68 @@ def get_server() -> Server:
 
 
 _mcp_app: Starlette | None = None
+_transport_security: TransportSecuritySettings | None = None
+
+# 内置回环默认值：init.sql 未初始化或后台未配置时的兜底白名单
+DEFAULT_ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
+
+
+def _normalize_allowed_hosts(hosts: list[str]) -> list[str]:
+    """把后台配置的 Host 白名单补齐为 SDK 可匹配的形式。
+
+    SDK 的 ``TransportSecurityMiddleware`` 只做"精确匹配"或"``:*`` 通配匹配"，
+    因此对不带端口的条目要同时补一条 ``host:*``，否则 ``Host: 127.0.0.1:8100``
+    这类请求会被判为非法（返回 421）。
+    """
+    normalized: list[str] = []
+    for raw in hosts:
+        host = str(raw).strip()
+        if not host or host in normalized:
+            continue
+        normalized.append(host)
+        if host.endswith(":*"):
+            continue
+        if host.startswith("["):
+            has_port = "]:" in host
+        else:
+            has_port = ":" in host
+        if not has_port:
+            wildcard = f"{host}:*"
+            if wildcard not in normalized:
+                normalized.append(wildcard)
+    return normalized
+
+
+def get_transport_security() -> TransportSecuritySettings:
+    """返回进程内共享的传输安全设置（MCP 每次请求都会重新读取）。"""
+    global _transport_security
+    if _transport_security is None:
+        _transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=_normalize_allowed_hosts(DEFAULT_ALLOWED_HOSTS),
+        )
+    return _transport_security
+
+
+def apply_allowed_hosts(hosts: list[str]) -> None:
+    """用后台 ``mcp_server_config.allowed_hosts`` 覆盖 Host 白名单。
+
+    在应用启动阶段调用；空配置或全部非法时退回内置回环默认值，避免把 MCP
+    入口锁死。SDK 侧每次请求读取同一个 settings 对象，因此无需重建应用。
+    """
+    normalized = _normalize_allowed_hosts(hosts) if hosts else []
+    get_transport_security().allowed_hosts = (
+        normalized or _normalize_allowed_hosts(DEFAULT_ALLOWED_HOSTS)
+    )
 
 
 def get_mcp_app() -> Starlette:
     """返回可挂载的 MCP Starlette 子应用（惰性构建，进程内复用）。"""
     global _mcp_app
     if _mcp_app is None:
-        security = TransportSecuritySettings(
-            allowed_hosts=[
-                "127.0.0.1",
-                "127.0.0.1:*",
-                "localhost",
-                "localhost:*",
-            ],
-        )
         # streamable_http_path="/"：以宿主挂载前缀（/mcp）作为完整公开路径
         _mcp_app = _server.streamable_http_app(
             streamable_http_path="/",
-            transport_security=security,
+            transport_security=get_transport_security(),
         )
     return _mcp_app

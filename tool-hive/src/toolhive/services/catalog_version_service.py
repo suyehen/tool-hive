@@ -67,11 +67,20 @@ class CatalogVersionService:
         )
         return list(result.scalars().all())
 
-    async def get_version(self, version_id: str) -> CatalogToolVersion:
-        """按主键查询版本，不存在时抛 404。"""
+    async def get_version(
+        self, version_id: str, *, for_update: bool = False,
+    ) -> CatalogToolVersion:
+        """按主键查询版本，不存在时抛 404。
+
+        ``for_update=True`` 时对该行加排他锁（``SELECT ... FOR UPDATE``），
+        供状态迁移在事务内串行化，避免并发审核/发布互相覆盖。
+        """
         version = await self.db.get(CatalogToolVersion, version_id)
         if version is None:
             raise NotFoundError(f"工具版本不存在: {version_id}")
+        if for_update:
+            # 与 update_version 使用同一加锁写法：读出行后按主键加锁刷新
+            await self.db.refresh(version, with_for_update=True)
         return version
 
     async def get_binding(
@@ -274,7 +283,7 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """送审：草稿 / 驳回 → 待审核；要求 Schema 与执行绑定齐全。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         tool = await self._get_tool(version.tool_id)
         if tool.status == CatalogObjectStatus.ARCHIVED:
             raise ConflictError("已归档工具下的版本不可送审")
@@ -306,7 +315,7 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """审核通过：待审核 → 已通过。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status != ToolVersionStatus.PENDING_REVIEW:
             raise ConflictError("只有待审核状态的版本可以审核通过")
         old_status = version.status
@@ -327,7 +336,7 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """审核驳回：待审核 → 驳回（可修改后重新送审）。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status != ToolVersionStatus.PENDING_REVIEW:
             raise ConflictError("只有待审核状态的版本可以驳回")
         old_status = version.status
@@ -348,10 +357,10 @@ class CatalogVersionService:
         self, version_id: str, *, set_default: bool, comment: str | None = None,
     ) -> CatalogToolVersion:
         """发布版本；首个发布必须 set_default=True，默认版本唯一。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status != ToolVersionStatus.APPROVED:
             raise ConflictError("只有已通过审核的版本可以发布")
-        tool = await self._get_tool(version.tool_id)
+        tool = await self._get_tool(version.tool_id, for_update=True)
         if tool.status == CatalogObjectStatus.ARCHIVED:
             raise ConflictError("已归档工具下的版本不可发布")
         if set_default:
@@ -378,12 +387,12 @@ class CatalogVersionService:
     @transactional()
     async def set_default(self, tool_id: str, version_id: str) -> CatalogToolVersion:
         """切换工具默认版本（仅已发布版本可设为默认）。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.tool_id != tool_id:
             raise NotFoundError("版本不属于该工具")
         if version.status != ToolVersionStatus.PUBLISHED:
             raise ValidationError("只有已发布版本可以设为默认")
-        tool = await self._get_tool(tool_id)
+        tool = await self._get_tool(tool_id, for_update=True)
         if tool.default_version_id == version.id:
             raise ConflictError("该版本已是默认版本")
         tool.default_version_id = version.id
@@ -407,7 +416,7 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """停用版本：已发布 → 已停用（在途请求放行完成）。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status != ToolVersionStatus.PUBLISHED:
             raise ConflictError("只有已发布状态的版本可以停用")
         old_status = version.status
@@ -425,7 +434,7 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """重新启用版本：已停用 → 已发布。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status != ToolVersionStatus.DISABLED:
             raise ConflictError("只有已停用状态的版本可以重新启用")
         old_status = version.status
@@ -443,13 +452,13 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """撤回版本：已发布 / 已停用 → 已撤回；若为默认版本则清除默认。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status not in (
             ToolVersionStatus.PUBLISHED,
             ToolVersionStatus.DISABLED,
         ):
             raise ConflictError("只有已发布或已停用状态的版本可以撤回")
-        tool = await self._get_tool(version.tool_id)
+        tool = await self._get_tool(version.tool_id, for_update=True)
         if tool.default_version_id == version.id:
             tool.default_version_id = None
             tool.update_time = datetime.now(UTC)
@@ -470,10 +479,10 @@ class CatalogVersionService:
         self, version_id: str, comment: str | None = None,
     ) -> CatalogToolVersion:
         """归档版本（终态）；若为默认版本则清除默认。"""
-        version = await self.get_version(version_id)
+        version = await self.get_version(version_id, for_update=True)
         if version.status == ToolVersionStatus.ARCHIVED:
             raise ConflictError("版本已归档")
-        tool = await self._get_tool(version.tool_id)
+        tool = await self._get_tool(version.tool_id, for_update=True)
         if tool.default_version_id == version.id:
             tool.default_version_id = None
             tool.update_time = datetime.now(UTC)
@@ -504,10 +513,15 @@ class CatalogVersionService:
         if output_schema is not None and not isinstance(output_schema, dict):
             raise ValidationError("output_schema 必须是 JSON 对象")
 
-    async def _get_tool(self, tool_id: str) -> CatalogTool:
+    async def _get_tool(
+        self, tool_id: str, *, for_update: bool = False,
+    ) -> CatalogTool:
+        """查询工具；``for_update=True`` 时对该行加排他锁。"""
         tool = await self.db.get(CatalogTool, tool_id)
         if tool is None:
             raise NotFoundError(f"工具不存在: {tool_id}")
+        if for_update:
+            await self.db.refresh(tool, with_for_update=True)
         return tool
 
     async def _validate_binding_data(

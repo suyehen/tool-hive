@@ -7,7 +7,7 @@ import httpx
 from toolhive.models.catalog_provider import CatalogProvider
 from toolhive.runtime.execution.outbound import (
     pin_outbound_url,
-    resolve_host,
+    resolve_host_async,
     validate_resolved_addresses,
 )
 
@@ -23,7 +23,7 @@ async def check_provider_health(provider: CatalogProvider) -> dict:
     host = allowed_domains[0]
     port = (config.get("allowed_ports") or [443])[0]
     try:
-        addresses = resolve_host(host)
+        addresses = await resolve_host_async(host)
         validate_resolved_addresses(
             addresses, config.get("allowed_cidrs") or [],
         )

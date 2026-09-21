@@ -447,11 +447,15 @@ class AccountService:
 
     @transactional()
     async def unlock_account(self, account: ManagementAccount) -> None:
-        """提前解锁账号。"""
+        """提前解锁账号：仅锁定状态可解锁，不会顺带启用已禁用账号。"""
         if account.status == AccountStatus.OFFBOARDED:
             raise ValidationError("已离职账号不可解锁")
-        # 超管账号保护：解锁需先移除超管角色
+        # 超管账号保护：解锁需先移除超管角色（先于状态判断，保持超管提示优先）
         await self._ensure_not_super_admin(account)
+        if account.status == AccountStatus.DISABLED:
+            raise ConflictError("账号已禁用，解锁不会启用账号，请使用启用操作")
+        if account.status != AccountStatus.LOCKED:
+            raise ConflictError("账号未处于锁定状态，无需解锁")
         auth = self._require_auth_state(account)
         account.status = AccountStatus.ENABLED
         auth.login_failures = 0

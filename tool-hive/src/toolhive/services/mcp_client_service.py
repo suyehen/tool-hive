@@ -24,7 +24,10 @@ from toolhive.models.mcp_client_ip_rule import McpClientIpRule
 from toolhive.models.mcp_client_scope import McpClientScope
 from toolhive.models.mcp_client_token import McpClientToken
 from toolhive.services.audit_service import AuditService, get_current_operator_id
-from toolhive.services.catalog_scope_validator import CatalogScopeValidator
+from toolhive.services.catalog_scope_validator import (
+    CatalogScopeValidator,
+    dedupe_scope_items,
+)
 from toolhive.services.security.password import hash_password
 
 _MCP_CLIENT_PREFIX = "mcp_"
@@ -442,6 +445,8 @@ class McpClientService:
     ) -> list[McpClientScope]:
         """全量替换客户端授权范围（先整体校验再替换）。"""
         client = await self.get_by_client_code(client_code)
+        # 去重：唯一约束 unique(client_id, scope_type, scope_code) 不接受重复项
+        items = list(dedupe_scope_items(items))
         for item in items:
             if item["scope_type"] not in tuple(ToolScopeType):
                 raise ValidationError(f"无效的工具范围类型: {item['scope_type']}")

@@ -73,6 +73,30 @@ class TestOutboxService:
         assert e.next_retry_at is None
         db.flush.assert_awaited_once()
 
+    async def test_retry_delivery_resets_attempts(self) -> None:
+        """人工重投必须重置 attempts，否则首次失败会立刻回到 DEAD。"""
+        delivery = OutboxDelivery(
+            delivery_id="d1",
+            event_id="e1",
+            target="redis",
+            status="DEAD",
+            attempts=10,
+            last_error="boom",
+        )
+        event = OutboxEvent(
+            event_id="e1",
+            event_type="catalog.updated",
+            object_type="catalog",
+            object_id="c1",
+            status="DEAD",
+        )
+        db = self._build_db((delivery, event))
+        svc = OutboxService(db)
+
+        d, _ = await svc.retry_delivery("d1")
+
+        assert d.attempts == 0
+
     async def test_retry_delivery_not_found(self) -> None:
         db = self._build_db(None)
         svc = OutboxService(db)

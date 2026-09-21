@@ -42,6 +42,23 @@ async def test_matches_api_pattern_exact_and_wildcard() -> None:
     )
 
 
+async def test_matches_api_pattern_double_star() -> None:
+    """文档推荐的 /** 通配写法必须真正命中运行 API（此前恒不匹配）。"""
+    patterns = ["/api/runtime/v1/**"]
+    assert RuntimeSecurityMiddleware._matches_api_pattern(
+        "/api/runtime/v1/tools/math.basic.calculator/execute", patterns,
+    )
+    assert RuntimeSecurityMiddleware._matches_api_pattern(
+        "/api/runtime/v1/tools/discover", patterns,
+    )
+    assert RuntimeSecurityMiddleware._matches_api_pattern(
+        "/api/runtime/v1", patterns,
+    )
+    assert not RuntimeSecurityMiddleware._matches_api_pattern(
+        "/api/runtime/v2/tools", patterns,
+    )
+
+
 async def test_trace_action_mapping() -> None:
     """错误码归类到对应 Trace 动作。"""
     assert RuntimeSecurityMiddleware._trace_action_for(

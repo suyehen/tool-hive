@@ -25,15 +25,22 @@ export default function CallRecordsPage() {
   const [clients, setClients] = useState<Array<Record<string, unknown>>>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [status, setStatus] = useState<string>();
   const [clientId, setClientId] = useState<string>();
   const [detail, setDetail] = useState<{ trace_id: string; events: TraceEvent[] } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const load = async () => {
+  const load = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const data = await listCallRecords(0, 100, { status, client_id: clientId });
+      const data = await listCallRecords((currentPage - 1) * currentSize, currentSize, {
+        status,
+        client_id: clientId,
+      });
       setItems(data.items);
       setTotal(data.total);
     } catch {
@@ -89,10 +96,17 @@ export default function CallRecordsPage() {
             label: `${String(client.name)}（${String(client.client_code)}）`,
           }))}
         />
-        <Button type="primary" onClick={load}>
+        <Button
+          type="primary"
+          onClick={() => {
+            // 条件变化后回到第一页，避免停留在越界页码
+            setPage(1);
+            void load(1, pageSize);
+          }}
+        >
           查询
         </Button>
-        <Button icon={<ReloadOutlined />} onClick={load}>
+        <Button icon={<ReloadOutlined />} onClick={() => void load()}>
           刷新
         </Button>
       </Space>
@@ -101,10 +115,18 @@ export default function CallRecordsPage() {
         loading={loading}
         dataSource={items}
         pagination={{
-          current: 1,
-          pageSize: 100,
+          current: page,
+          pageSize,
           total,
+          showSizeChanger: true,
           showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          void load(nextPage, nextSize);
         }}
         columns={[
           { title: 'Trace ID', dataIndex: 'trace_id', width: 200 },

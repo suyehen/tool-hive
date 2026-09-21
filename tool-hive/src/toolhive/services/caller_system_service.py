@@ -33,6 +33,7 @@ from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
 from toolhive.models.catalog_tool import CatalogTool
 from toolhive.runtime.authentication.verifiers import get_verifier
 from toolhive.services.audit_service import AuditService, get_current_operator_id
+from toolhive.services.catalog_scope_validator import dedupe_scope_items
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +456,8 @@ class CallerSystemService:
     ) -> list[CallerToolScope]:
         """全量替换工具范围（先删旧记录再写入新集合）。"""
         await self.get_by_system_id(system_id)
+        # 去重：同一 (scope_type, scope_code) 只保留首次出现，避免写入重复范围行
+        items = list(dedupe_scope_items(items))
 
         # 先整体校验新集合，避免删除旧记录后才发现输入非法
         for item in items:

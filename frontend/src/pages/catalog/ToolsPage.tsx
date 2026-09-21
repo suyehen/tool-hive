@@ -488,6 +488,9 @@ export default function ToolsPage() {
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
+              // 新建前必须清空 editItem，否则共用的 Modal 会沿用"编辑"标题、
+              // 禁用命名空间/工具编码并调用 handleUpdate，导致无法创建
+              setEditItem(null);
               toolForm.resetFields();
               toolForm.setFieldsValue({ risk_level: 'low', discoverable: true, executable: true });
               setCreateOpen(true);
@@ -520,7 +523,7 @@ export default function ToolsPage() {
       />
 
       {/* 工具创建 / 编辑 */}
-      <Modal title={editItem ? '编辑工具' : '新建工具'} open={createOpen || editOpen} onOk={editItem ? handleUpdate : handleCreate} onCancel={() => { setCreateOpen(false); setEditOpen(false); }} width={720} destroyOnClose>
+      <Modal title={editItem ? '编辑工具' : '新建工具'} open={createOpen || editOpen} onOk={editItem ? handleUpdate : handleCreate} onCancel={() => { setCreateOpen(false); setEditOpen(false); setEditItem(null); }} width={720} destroyOnClose>
         <Form form={toolForm} layout="vertical" preserve={false}>
           <Space.Compact block>
             <Form.Item name="namespace" label="命名空间" rules={[{ required: true, message: '请输入命名空间' }]} style={{ width: '50%' }}>

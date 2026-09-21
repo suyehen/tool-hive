@@ -21,8 +21,13 @@ class McpServerConfigService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @transactional()
     async def get_config(self) -> McpServerConfig:
-        """返回配置行；init.sql 未初始化时自动补齐默认行。"""
+        """返回配置行；init.sql 未初始化时自动补齐默认行。
+
+        必须作为事务边界：读路径（GET）也依赖这个"自愈插入"落库，
+        否则会话关闭时未提交的 INSERT 会被回滚（见 infrastructure/database.py）。
+        """
         config = await self.db.get(McpServerConfig, MCP_SERVER_CONFIG_ID)
         if config is None:
             config = McpServerConfig(

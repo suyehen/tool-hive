@@ -93,8 +93,14 @@ export default function ProvidersPage() {
     setEditOpen(true);
   };
 
-  const buildConfig = (values: ProviderFormValues): ProviderTargetSecurityConfig | null => {
-    if (values.provider_type !== 'http') return null;
+  const buildConfig = (
+    values: ProviderFormValues,
+    explicitType?: string,
+  ): ProviderTargetSecurityConfig | null => {
+    // 编辑弹窗的「类型」是只读展示项、未注册为表单字段，validateFields() 不会返回
+    // provider_type；因此编辑路径显式传入类型，否则会以 null 提交并静默丢弃目标安全配置
+    const providerTypeValue = explicitType ?? values.provider_type;
+    if (providerTypeValue !== 'http') return null;
     return {
       allowed_domains: parseList(values.allowed_domains),
       allowed_ports: parseList(values.allowed_ports).map(Number),
@@ -131,7 +137,7 @@ export default function ProvidersPage() {
       await updateProvider(editItem.id, {
         name: values.name,
         description: values.description,
-        target_security_config: buildConfig(values),
+        target_security_config: buildConfig(values, editItem.provider_type),
         row_version: editItem.row_version,
       });
       message.success('Provider 已更新');

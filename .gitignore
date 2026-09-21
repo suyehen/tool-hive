@@ -14,6 +14,9 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
+# 本地生成的向量库数据（可由 outbox 重建，不入库）
+chroma_data/
+
 # Environment
 .env
 .venv/

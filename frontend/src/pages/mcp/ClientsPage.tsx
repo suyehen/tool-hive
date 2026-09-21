@@ -41,6 +41,8 @@ export default function ClientsPage() {
   const [items, setItems] = useState<McpClientItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [createOpen, setCreateOpen] = useState(false);
   const [tokenResult, setTokenResult] = useState<string>();
   const [active, setActive] = useState<McpClientItem | null>(null);
@@ -51,10 +53,12 @@ export default function ClientsPage() {
   const [form] = Form.useForm();
   const [ipForm] = Form.useForm();
 
-  const load = async () => {
+  const load = async (targetPage?: number, targetSize?: number) => {
+    const currentPage = targetPage ?? page;
+    const currentSize = targetSize ?? pageSize;
     setLoading(true);
     try {
-      const data = await listMcpClients(0, 100);
+      const data = await listMcpClients((currentPage - 1) * currentSize, currentSize);
       setItems(data.items);
       setTotal(data.total);
     } catch {
@@ -184,7 +188,7 @@ export default function ClientsPage() {
             新建客户端
           </Button>
         )}
-        <Button icon={<ReloadOutlined />} onClick={load}>
+        <Button icon={<ReloadOutlined />} onClick={() => void load()}>
           刷新
         </Button>
       </Space>
@@ -192,7 +196,20 @@ export default function ClientsPage() {
         rowKey="client_code"
         loading={loading}
         dataSource={items}
-        pagination={{ pageSize: 100, total, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+        }}
+        onChange={(pagination) => {
+          const nextPage = pagination.current ?? 1;
+          const nextSize = pagination.pageSize ?? 100;
+          setPage(nextPage);
+          setPageSize(nextSize);
+          void load(nextPage, nextSize);
+        }}
         columns={[
           { title: '客户端编码', dataIndex: 'client_code', width: 210 },
           { title: '名称', dataIndex: 'name', width: 180 },

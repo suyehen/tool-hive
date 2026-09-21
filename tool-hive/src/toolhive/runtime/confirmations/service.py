@@ -121,9 +121,9 @@ class ConfirmationService:
                     400,
                 )
             if record.expires_at <= now:
-                record.status = ConfirmationStatus.EXPIRED
-                record.update_time = now
-                await self.db.flush()
+                # 过期标记必须独立提交：本方法因抛错会让外层事务回滚，
+                # 若沿用同一事务，EXPIRED 永远落不了库
+                await self._mark_expired(confirmation_id, now)
                 raise RuntimeApiError(
                     RUNTIME_CONFIRMATION_INVALID, "确认令牌已过期", 400,
                 )
@@ -153,3 +153,13 @@ class ConfirmationService:
             },
         )
         return record
+
+    @transactional(requires_new=True)
+    async def _mark_expired(self, confirmation_id: str, now: datetime) -> None:
+        """把超时的确认记录标记为 EXPIRED（独立事务，不受外层回滚影响）。"""
+        record = await self.db.get(RuntimeConfirmation, confirmation_id)
+        if record is None or record.status != ConfirmationStatus.PENDING:
+            return
+        record.status = ConfirmationStatus.EXPIRED
+        record.update_time = now
+        await self.db.flush()

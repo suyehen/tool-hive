@@ -8,6 +8,8 @@ import socket
 from dataclasses import dataclass
 from typing import Any
 
+from anyio import to_thread
+
 from toolhive.models.catalog_execution_binding import CatalogExecutionBinding
 from toolhive.models.catalog_provider import CatalogProvider
 from toolhive.runtime.errors import (
@@ -80,6 +82,11 @@ def resolve_host(host: str) -> list[ipaddress._BaseAddress]:
             RUNTIME_PROVIDER_ERROR, f"域名无解析结果: {host}", 502,
         )
     return addresses
+
+
+async def resolve_host_async(host: str) -> list[ipaddress._BaseAddress]:
+    """``resolve_host`` 的异步封装：DNS 解析在线程池执行，不阻塞事件循环。"""
+    return await to_thread.run_sync(resolve_host, host)
 
 
 def validate_resolved_addresses(

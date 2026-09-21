@@ -85,7 +85,10 @@ class OutboxService:
         if pair is None:
             raise NotFoundError("投递记录不存在")
         delivery, event = pair
+        # 人工重投：重置计数与退避，否则 attempts 已达上限时首次失败会立即回到 DEAD，
+        # 人工重投就失去重试策略的意义
         delivery.status = OutboxStatus.PENDING
+        delivery.attempts = 0
         delivery.last_error = None
         event.status = OutboxStatus.PENDING
         event.next_retry_at = None

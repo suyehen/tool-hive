@@ -45,6 +45,10 @@ async def _get_current_user(
         path = request.url.path.removeprefix("/api/admin")
         if not path.startswith("/auth/"):
             raise HTTPException(status_code=403, detail="请先修改密码")
+    # 审计上下文在这里统一绑定：所有管理接口（含不走 require_operation 的
+    # /auth/** 自助接口）都能记录正确的操作人与 Trace ID
+    set_audit_trace(request.headers.get("X-ToolHive-Trace-Id"))
+    set_audit_actor(account.id, account.account)
     return account
 
 
@@ -60,10 +64,7 @@ def require_operation(code: OperationCode):
         account=Depends(_get_current_user),
         db: AsyncSession = Depends(get_db),
     ):
-        # 捕获管理请求透传 Trace ID（非法忽略），供审计记录关联
-        set_audit_trace(request.headers.get("X-ToolHive-Trace-Id"))
-        # 记录当前请求操作人，供 Service 层审计埋点读取
-        set_audit_actor(account.id, account.account)
+        # 操作人与 Trace ID 已在 _get_current_user 中绑定，此处只做操作项校验
         from toolhive.services.role_service import RoleService
         svc = RoleService(db)
         if not await svc.check_operation(account.id, code):

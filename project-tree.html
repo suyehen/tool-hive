@@ -477,9 +477,24 @@
       return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    // 按 IDEA 项目视图习惯排序：目录始终在文件前，各自再按字母顺序
+    function sortedItems(items) {
+      return [...items].sort((a, b) => {
+        const aIsDir = a.children && a.children.length > 0 ? 0 : 1;
+        const bIsDir = b.children && b.children.length > 0 ? 0 : 1;
+        if (aIsDir !== bIsDir) {
+          return aIsDir - bIsDir;
+        }
+        return a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+      });
+    }
+
     function renderItems(items) {
       const ul = document.createElement("ul");
-      items.forEach((item) => {
+      sortedItems(items).forEach((item) => {
         const li = document.createElement("li");
         const hasChildren = item.children && item.children.length > 0;
 

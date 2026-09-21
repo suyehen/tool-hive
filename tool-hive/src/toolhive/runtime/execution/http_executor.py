@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -20,7 +21,7 @@ from toolhive.runtime.execution.gateway import ProviderExecutor
 from toolhive.runtime.execution.outbound import (
     build_outbound_request,
     pin_outbound_url,
-    resolve_host,
+    resolve_host_async,
     validate_resolved_addresses,
 )
 
@@ -50,8 +51,9 @@ class HttpExecutor(ProviderExecutor):
         await self._check_circuit(binding.provider_id)
         request = build_outbound_request(provider, binding, arguments)
         self._validate_outbound_request(request)
-        # SSRF：DNS 全量解析后校验全部地址（任一不合格即整请求拒绝）
-        addresses = resolve_host(request.host)
+        # SSRF：DNS 全量解析后校验全部地址（任一不合格即整请求拒绝）；
+        # 解析在线程池执行，避免阻塞事件循环
+        addresses = await resolve_host_async(request.host)
         validate_resolved_addresses(
             addresses,
             (provider.target_security_config or {}).get("allowed_cidrs") or [],
@@ -112,54 +114,63 @@ class HttpExecutor(ProviderExecutor):
         """发起 HTTPS 请求：固定已校验 IP、流式限制响应体、不跟随重定向。"""
         total = request.timeout_seconds
         connect_timeout = min(self._security.provider_connect_timeout_seconds, total)
+        # 分阶段超时不得超过绑定声明的总超时：read 若大于 total 会让
+        # 「总超时取绑定 timeout_seconds」的约定失效（慢速滴水可长期占用连接）
+        read_timeout = min(self._security.provider_read_timeout_seconds, total)
         timeout = httpx.Timeout(
             total,
             connect=connect_timeout,
-            read=self._security.provider_read_timeout_seconds,
+            read=read_timeout,
         )
         pinned_url, host_headers = pin_outbound_url(
             request.url, connect_address, request.host,
         )
         headers = {**request.headers, **host_headers}
         try:
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                verify=True,
-                follow_redirects=False,
-                trust_env=False,
-            ) as client:
-                async with client.stream(
-                    method=request.method,
-                    url=pinned_url,
-                    headers=headers,
-                    params=request.query_params or None,
-                    json=request.json_body,
-                    extensions={"sni_hostname": request.host},
-                ) as response:
-                    # Header 数量超限时立即中止，不读取响应体
-                    if len(response.headers) > self._security.provider_max_header_count:
-                        raise RuntimeApiError(
-                            RUNTIME_PROVIDER_ERROR,
-                            "目标响应 Header 数量超限",
-                            502,
-                        )
-                    content, total_read = [], 0
-                    async for chunk in response.aiter_bytes():
-                        total_read += len(chunk)
-                        if total_read > self._security.provider_max_response_bytes:
+            # 整体墙钟超时：任何阶段累计超过 timeout_seconds 立即中止
+            async with asyncio.timeout(total):
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    verify=True,
+                    follow_redirects=False,
+                    trust_env=False,
+                ) as client:
+                    async with client.stream(
+                        method=request.method,
+                        url=pinned_url,
+                        headers=headers,
+                        params=request.query_params or None,
+                        json=request.json_body,
+                        extensions={"sni_hostname": request.host},
+                    ) as response:
+                        # Header 数量超限时立即中止，不读取响应体
+                        if len(response.headers) > self._security.provider_max_header_count:
                             raise RuntimeApiError(
                                 RUNTIME_PROVIDER_ERROR,
-                                "目标响应体超过大小上限",
+                                "目标响应 Header 数量超限",
                                 502,
                             )
-                        content.append(chunk)
-                    return httpx.Response(
-                        status_code=response.status_code,
-                        headers=response.headers,
-                        content=b"".join(content),
-                        request=response.request,
-                        history=response.history,
-                    )
+                        content, total_read = [], 0
+                        async for chunk in response.aiter_bytes():
+                            total_read += len(chunk)
+                            if total_read > self._security.provider_max_response_bytes:
+                                raise RuntimeApiError(
+                                    RUNTIME_PROVIDER_ERROR,
+                                    "目标响应体超过大小上限",
+                                    502,
+                                )
+                            content.append(chunk)
+                        return httpx.Response(
+                            status_code=response.status_code,
+                            headers=response.headers,
+                            content=b"".join(content),
+                            request=response.request,
+                            history=response.history,
+                        )
+        except TimeoutError as exc:
+            raise RuntimeApiError(
+                RUNTIME_PROVIDER_TIMEOUT, "目标请求超时", 504,
+            ) from exc
         except httpx.TimeoutException as exc:
             raise RuntimeApiError(
                 RUNTIME_PROVIDER_TIMEOUT, "目标请求超时", 504,

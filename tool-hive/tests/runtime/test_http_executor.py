@@ -84,8 +84,8 @@ def _bypass_dns():
     """跳过真实 DNS 解析与地址校验（由 outbound 测试覆盖）。"""
     with (
         patch(
-            "toolhive.runtime.execution.http_executor.resolve_host",
-            return_value=[],
+            "toolhive.runtime.execution.http_executor.resolve_host_async",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "toolhive.runtime.execution.http_executor.validate_resolved_addresses",

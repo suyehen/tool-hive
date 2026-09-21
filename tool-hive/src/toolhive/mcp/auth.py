@@ -19,10 +19,6 @@ from toolhive.core.enums import IPRuleStatus, McpClientStatus, McpTokenStatus
 from toolhive.models.mcp_client import McpClient
 from toolhive.models.mcp_client_ip_rule import McpClientIpRule
 from toolhive.models.mcp_client_token import McpClientToken
-from toolhive.models.mcp_server_config import (
-    MCP_SERVER_CONFIG_ID,
-    McpServerConfig,
-)
 from toolhive.services.security.password import verify_password
 
 logger = logging.getLogger(__name__)
@@ -71,9 +67,13 @@ class McpAuthService:
             raise McpAuthError(
                 MCP_AUTH_TOKEN_INVALID, "缺少访问令牌", 401,
             )
-        # Server 全局停用：所有 MCP 请求直接拒绝
-        config = await self.db.get(McpServerConfig, MCP_SERVER_CONFIG_ID)
-        if config is not None and not config.enabled:
+        # Server 全局停用：所有 MCP 请求直接拒绝。配置行缺失时按默认行处理
+        # （enabled=True），与后台「MCP 接入配置」页面展示的默认值保持一致。
+        from toolhive.services.mcp_server_config_service import (
+            McpServerConfigService,
+        )
+        config = await McpServerConfigService(self.db).get_config()
+        if not config.enabled:
             raise McpAuthError(
                 MCP_SERVER_DISABLED, "MCP 入口已停用", 403,
             )

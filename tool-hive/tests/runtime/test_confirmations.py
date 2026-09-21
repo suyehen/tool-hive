@@ -106,23 +106,34 @@ async def test_verify_rejects_replay() -> None:
 
 
 async def test_verify_rejects_expired() -> None:
-    """过期令牌被拒绝并标记 expired。"""
+    """过期令牌被拒绝，并通过独立事务标记 expired（不随外层回滚丢失）。"""
     record = _record(expires_at=datetime.now(UTC) - timedelta(minutes=1))
     db = AsyncMock()
     db.execute = AsyncMock(return_value=_update_result(0))
     db.get = AsyncMock(return_value=record)
-    db.add = AsyncMock()
+
+    expire_session = AsyncMock()
+    expire_session.get = AsyncMock(return_value=record)
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=expire_session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
     svc = ConfirmationService(db)
-    with pytest.raises(RuntimeApiError) as exc_info:
-        await svc.verify_confirmation(
-            system_id="sys_1",
-            confirmation_id="confirm-1",
-            token="token-abc",
-            tool_id="tool-1",
-            version_id="ver-1",
-        )
+    with patch(
+        "toolhive.infrastructure.database.async_session_factory", factory,
+    ):
+        with pytest.raises(RuntimeApiError) as exc_info:
+            await svc.verify_confirmation(
+                system_id="sys_1",
+                confirmation_id="confirm-1",
+                token="token-abc",
+                tool_id="tool-1",
+                version_id="ver-1",
+            )
     assert exc_info.value.code == RUNTIME_CONFIRMATION_INVALID
     assert record.status == ConfirmationStatus.EXPIRED
+    # 过期标记走独立事务提交，外层事务回滚不影响它
+    expire_session.commit.assert_awaited_once()
 
 
 async def test_verify_rejects_wrong_token() -> None:

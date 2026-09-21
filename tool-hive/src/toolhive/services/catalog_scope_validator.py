@@ -13,6 +13,23 @@ from toolhive.models.catalog_capability_pack import CatalogCapabilityPack
 from toolhive.models.catalog_tool import CatalogTool
 
 
+def dedupe_scope_items(items: Sequence[Mapping[str, str]]) -> list[Mapping[str, str]]:
+    """按 (scope_type, scope_code) 去重并保持首次出现的顺序。
+
+    范围集合是全量替换语义，重复项会导致唯一约束冲突（MCP 客户端范围）
+    或静默写入重复行（调用系统范围），因此统一在写入前收敛。
+    """
+    deduped: list[Mapping[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        key = (str(item["scope_type"]), str(item["scope_code"]).strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 class CatalogScopeValidator:
     """按 scope_type 批量校验工具 / 能力包 / 命名空间引用的存在性。"""
 

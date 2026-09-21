@@ -470,7 +470,7 @@ async def test_unlock_clears_account_failure_ips():
     db = AsyncMock()
     db.add = MagicMock()
     svc = AccountService(db, AdminSecuritySettings())
-    account = _account()
+    account = _account(status=AccountStatus.LOCKED)
 
     with (
         patch("toolhive.services.account_service.RoleService") as role_cls,
@@ -484,6 +484,30 @@ async def test_unlock_clears_account_failure_ips():
         await svc.unlock_account(account)
 
     clear.assert_awaited_once_with("acc-1")
+
+
+async def test_unlock_rejects_disabled_account():
+    """解锁不得把已禁用账号重新启用。"""
+    db = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with patch("toolhive.services.account_service.RoleService") as role_cls:
+        role_cls.return_value.is_super_admin_account = AsyncMock(return_value=False)
+        with pytest.raises(ConflictError) as exc_info:
+            await svc.unlock_account(_account(status=AccountStatus.DISABLED))
+    assert "已禁用" in str(exc_info.value)
+
+
+async def test_unlock_rejects_enabled_account():
+    """未锁定的账号无需解锁。"""
+    db = AsyncMock()
+    svc = AccountService(db, AdminSecuritySettings())
+
+    with patch("toolhive.services.account_service.RoleService") as role_cls:
+        role_cls.return_value.is_super_admin_account = AsyncMock(return_value=False)
+        with pytest.raises(ConflictError) as exc_info:
+            await svc.unlock_account(_account(status=AccountStatus.ENABLED))
+    assert "未处于锁定状态" in str(exc_info.value)
 
 
 async def test_disable_rejects_offboarded():

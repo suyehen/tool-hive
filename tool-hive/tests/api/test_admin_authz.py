@@ -10,7 +10,11 @@ from fastapi import HTTPException
 from toolhive.api.admin.deps import _get_current_user, require_operation
 from toolhive.core.enums import AccountStatus
 from toolhive.core.operation_codes import OperationCode
-from toolhive.services.audit_service import get_audit_trace, set_audit_trace
+from toolhive.services.audit_service import (
+    get_audit_trace,
+    get_current_operator_id,
+    set_audit_trace,
+)
 
 
 def _make_account(account_id: str = "acc-1") -> MagicMock:
@@ -67,19 +71,35 @@ async def test_require_operation_caller_policy():
     )
 
 
-async def test_require_operation_captures_trace_header():
-    """require_operation 捕获 X-ToolHive-Trace-Id 写入审计上下文。"""
+async def test_get_current_user_binds_audit_actor_and_trace():
+    """认证依赖绑定操作人与 X-ToolHive-Trace-Id。
+
+    审计上下文必须在 _get_current_user 中绑定，否则只走认证、不走
+    require_operation 的 /auth/** 自助接口（如修改密码）无法归属到人。
+    """
     set_audit_trace(None)
-    db = AsyncMock()
-    account = _make_account()
     request = MagicMock()
     request.headers.get = MagicMock(return_value="trace-abc")
-    with patch("toolhive.services.role_service.RoleService") as role_cls:
-        role_svc = role_cls.return_value
-        role_svc.check_operation = AsyncMock(return_value=True)
-        dep = require_operation(OperationCode.ADMIN_ACCOUNT_VIEW)
-        await dep(request=request, account=account, db=db)
+    request.state.session = MagicMock()
+    request.state.session.account_id = "acc-1"
+    request.state.session.security_version = "0"
+
+    account = _make_account()
+    account.account = "alice"
+    account.is_active.return_value = True
+    account.auth_state.must_change_password = False
+
+    with patch("toolhive.services.account_service.AccountService") as acct_cls:
+        acct_cls.return_value.get_by_id = AsyncMock(return_value=account)
+        result = await _get_current_user(
+            request=request,
+            db=AsyncMock(),
+            admin_security=MagicMock(),
+        )
+
+    assert result is account
     assert get_audit_trace() == "trace-abc"
+    assert get_current_operator_id() == "acc-1"
     set_audit_trace(None)
 
 

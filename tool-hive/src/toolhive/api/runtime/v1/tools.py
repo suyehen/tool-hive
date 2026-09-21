@@ -284,6 +284,24 @@ async def execute_tool(
             "Provider 返回结果不符合声明的输出 Schema",
             502,
         ) from None
+    # 结果必须可 JSON 序列化：超大整数等会在此抛错，必须在标记幂等成功之前发现
+    try:
+        result_digest = hashlib.sha256(
+            json.dumps(result, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+    except (TypeError, ValueError):
+        await update_idempotency_result(
+            system_id,
+            body.idempotency_key,
+            redis,
+            status="unknown",
+            trace_id=identity.trace_id,
+        )
+        raise RuntimeApiError(
+            RUNTIME_PROVIDER_ERROR,
+            "Provider 返回结果无法序列化为 JSON",
+            502,
+        ) from None
     await update_idempotency_result(
         system_id,
         body.idempotency_key,
@@ -313,9 +331,6 @@ async def execute_tool(
         summary=provider_summary,
         source_ip=identity.source_ip,
     )
-    result_digest = hashlib.sha256(
-        json.dumps(result, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
     await TraceService.log_event(
         trace_id=identity.trace_id,
         system_id=system_id,
