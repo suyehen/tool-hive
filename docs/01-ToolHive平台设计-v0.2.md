@@ -132,6 +132,14 @@
 | `Invocation` | 每次调用记录 | `id, trace_id, principal_id, tool_id, version_id, protocol, outcome, duration_ms, request_digest, result_digest, error_code` |
 | `AuditLog` | 治理事件（谁改了什么） | `id, actor_id, action, object_type, object_id, before/after_summary` |
 | `OutboxEvent` | 索引/通知的异步投递 | 沿用上一版的 outbox 模式 |
+| `ApiKey` | **调用方凭证**（M0 的认证载体） | `id, principal_id, key_prefix`（明文前缀，便于识别与轮换）、`key_hash`（argon2）、`status(active\|revoked)`、`expires_at`、`rotated_at` |
+| `ReviewRecord` | 审批留痕（§4.3） | `id, version_id, action(submit\|approve\|reject), from_status, to_status, reviewer_id, comment, create_time` |
+| `SearchEvent` | **检索事件**（§11.1；评测采样的唯一来源） | `id, trace_id, principal_id, query`（截断+脱敏）、`top_k, degraded, latency_ms, create_time` |
+| `IndexMeta` | 索引版本元数据（§6.5/§6.4） | `index_version, model, dimension, status(building\|active\|retired), created_at, activated_at` |
+
+> **一个 `Principal` 可以有多个 `ApiKey`**（便于轮换：先建新 key、切流、再吊销旧 key）。
+> 认证时按 `key_prefix` 定位候选，再校验 `key_hash`；`status=revoked` 或过期即拒绝。
+> **明文 key 只在创建时返回一次**，此后只存哈希。
 
 > **关于 `entity` / `action`**：命名规范是四段（§5.3），但实体与动作**由 `code` 字符串承载，不作为独立字段**。
 > 需要在授权或检索时按实体/动作过滤时，由富化阶段把它们写入 `tags`（如 `entity:customer`、`action:query`），
@@ -206,7 +214,7 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 |---|---|
 | 审批粒度 | **按 ToolVersion**（一个版本一次审核），不是按流程实例 |
 | 审核记录 | 一张 `ReviewRecord` 表：`version_id, reviewer_id, decision, comment, created_at` |
-| 送审前置条件 | 必须有 `input_schema`、`output_schema` 与**执行绑定**（按 Provider 类型分支，见下方修正说明） |
+| 送审前置条件 | **`input_schema` 必需**（参数校验的依据）、**`output_schema` 可空**（为空则跳过输出校验）、必须有**执行绑定**（按 Provider 类型分支，见下方修正说明） |
 | 发布前置条件 | 状态必须是 `pending_review` 且已被通过 |
 | 首次发布 | 必须设置 `stable` 通道指向该版本 |
 | 免审通道 | `Tool.review_required` 字段保留：置 false 时导入后可直接发布（M1 起支持"按来源信任策略"自动设置） |
@@ -228,6 +236,20 @@ draft ──送审──→ pending_review ──通过──→ published ─�
 > | `local` | `provider_id` + `method="COMPUTE"`（无出站） |
 >
 > 送审校验**按类型分支**：`http` 校验映射完整性；`mcp` / `local` 只校验 `provider_id` 存在且 Provider 处于启用状态。
+
+> ⚠️ **`output_schema` 不是送审前置条件**（同类矛盾，已修正）
+>
+> 此前本节要求"必须有 `output_schema`"，而 §5.2 说它"可为空（不阻塞）"——直接冲突。
+> 后果与上面那个 binding 矛盾**完全同类**：**OpenAPI 文档里大量接口没有 response schema**，
+> 按前者这些工具**全部无法送审 → 无法发布 → 不可调用**。
+>
+> 统一口径：
+>
+> | 字段 | 是否必需 | 理由 |
+> |---|---|---|
+> | `input_schema` | **必需** | 它是参数校验（§7.1 第 5 步）的唯一依据，没有它无法安全执行 |
+> | `output_schema` | **可空** | 为空时**跳过 §7.1 第 11 步输出校验**，其余流程不变 |
+> | 执行绑定 | **必需** | 见上方 Provider 类型分支表 |
 
 #### M0 实现的状态范围
 
@@ -700,6 +722,48 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
 | 熔断 | 按 Provider 维度 |
 | 审计 | 结构化事件；**不存明文参数与结果**，只存摘要与哈希 |
 
+#### 幂等结果缓存的存储规则（此前未定义，与 D13 的关系现予裁决）
+
+§7.4 硬规则 1 要求"幂等命中已完成的结果 → 返回 200 与原结果"，但 §11.1 / D13 说"执行结果不存明文"。
+**要返回原结果，就必须在某个地方存着它**——这两条必须显式调和：
+
+| 维度 | 规则 |
+|---|---|
+| **介质** | Redis（与幂等 key 同一存储） |
+| **保留期** | `idempotency_ttl`，默认 **24h**，与 key 同生命周期，到期一并清除 |
+| **是否脱敏** | **不脱敏**。理由：**调用方有权拿回自己那次调用的完整结果**；脱敏的目的是保护"长期留存与日志"，不是对调用方隐瞒结果 |
+| **D13 的适用范围** | **D13 只约束审计表、日志与检索事件**，**不约束幂等结果缓存**——后者是**运行期临时状态**，与 Redis 里的配额计数同类，不属于"留存" |
+| **大小上限** | `idempotency_cache_max_bytes`，默认 **256KB**。超过上限时**只缓存状态、不缓存结果体**：重试返回 `200` + `result: null` + `idempotency_replayed: true` + `trace_id`，调用方据此知道"已执行过但结果未保留" |
+| **持久化** | M0 建议该缓存**不落盘**（Redis 不为该 DB 开启 AOF / RDB） |
+
+> ⚠️ **容量是必须处理的问题**：出站响应上限在 MiB 量级，若不做上限，24h 内的高频调用会在 Redis 里堆积大量结果体。
+> **`idempotency_cache_max_bytes` 是必须配置的参数，不是可选项。**
+
+> ⚠️ **平台不承诺"跨重启幂等"**：Redis 重启后 24h 窗口丢失，重试会重新执行。
+> 这是"不把业务结果落盘"与"强幂等"之间的取舍。**对真正不容重复的写操作，
+> 应由上游系统自己做幂等**（平台把调用方的幂等键透传给上游，或在上游侧去重）；
+> 平台只保证**在缓存存活期内**不重复执行。
+
+#### 基础设施故障时的 fail-open / fail-closed（此前未定义）
+
+配额、并发、幂等、确认令牌都押在 Redis 上，因此**必须逐项定义"Redis 不可用时怎么办"**。
+**两类机制的处理完全相反，不能一刀切**：
+
+| 机制 | 类别 | Redis 不可用时 | 理由 |
+|---|---|---|---|
+| **幂等** | **正确性依赖** | **fail-closed** → `TH_DEPENDENCY_UNAVAILABLE` (503) | fail-open 会导致**重复执行写操作**，后果最严重 |
+| **确认令牌** | **正确性依赖** | **fail-closed** → `TH_DEPENDENCY_UNAVAILABLE` (503) | fail-open 等于一次性令牌可重放 |
+| **QPS 限流** | **防滥用**（成本 / 容量控制） | **fail-open + 立即告警** | 它是"防滥用"而非"安全边界"；Redis 抖动通常短暂，因它全平台停服代价更大 |
+| **日配额** | **防滥用** | **fail-open + 立即告警** | 同上；配额超支可事后追责，全平台停服不可接受 |
+| **并发信号量** | **防滥用** | **fail-open + 立即告警** | 同上 |
+| **可见集合缓存**（§9.2） | **性能优化** | **绕过缓存直接查库** | 缓存不是控制点——**降级为直查是正确的第三选择**，既不是 open 也不是 closed |
+
+> **一句话原则：关乎"正确性"的 fail-closed；关乎"防滥用"的 fail-open 并告警；纯缓存的直接绕过。**
+>
+> **PostgreSQL 不可用时一律 fail-closed**（`TH_DEPENDENCY_UNAVAILABLE`）——没有数据库就没有授权与审计，不能放行。
+>
+> 上一版已有同类原则（安全类校验一律 fail-closed 并返回 503），本节是它的完整化与分类化。
+
 ### 7.3 内核唯一入口
 
 ```python
@@ -762,6 +826,7 @@ class InvocationRequest:
 | `TH_UPSTREAM_REJECTED` | 502 | ❌ | 上游 4xx（含平台凭据失效）——重试无用 | 目标服务拒绝了请求 |
 | `TH_CHANNEL_REFERENCES_VERSION` | 409 | ❌ | 试图废弃一个被 Channel 指向的版本（§4.3） | 该版本仍被引用 |
 | `TH_RETRIEVAL_UNAVAILABLE` | 503 | ✅ | 检索不可用（关键词与向量**同时**失败，见 §6.6） | 检索服务暂时不可用 |
+| `TH_DEPENDENCY_UNAVAILABLE` | 503 | ✅ | **关键依赖不可用**：Redis（幂等 / 确认令牌）或 PostgreSQL 故障，按 §7.2 的矩阵执行 fail-closed | 服务依赖不可用，请求被拒绝 |
 | `TH_INTERNAL_ERROR` | 500 | ✅ | 未预期异常 | 内部错误 |
 
 > **为什么把上游错误拆成两个码**：`UPSTREAM_ERROR`（5xx 抖动）值得重试，
@@ -1251,6 +1316,7 @@ def test_core_is_framework_free():
 | **KEK** | **环境变量注入，不接 KMS** | 轮换走运维流程，见 §10.1 |
 | **可观测性** | **不接 OpenTelemetry、不接 Prometheus** | 用 `trace_id` + 结构化日志；统计走**管理侧 CLI 聚合（M0）/ 接口（M1）**，见 §11 |
 | **外部凭据保管** | **不接 Vault**，`external_ref` 仅作字段预留 | 凭据密文入库，见 §10.1 |
+| **凭据范围** | **M0 只做最小可用**：`static_header` / `bearer` 两种类型、**单 KEK**、CLI 创建与吊销、出站注入。**不做**轮换界面、KEK 轮换、`oauth2_client` / `mTLS` | 不含凭据则导入的真实工具大多调不通，M0 验收无法成立；但轮换与多类型属 M1（§16.3）。此前 §16.2 与 §16.3 都写了"凭据注入"、两头都说得通，现已划清 |
 | **审批权限** | 管理面是 CLI，**能执行 CLI 的人即可审**；M0 的审批**只留痕、不做权限分离**（导入者可自审自批） | M1 引入角色与职责分离（Q7） |
 | **按来源免审策略** | **不做**，M0 `review_required` 恒为 true | M1（Q8） |
 | **审计保留周期** | **不删除** | M1 定策略（Q9） |
@@ -1266,9 +1332,9 @@ def test_core_is_framework_free():
 | 4 | **简单审批流**：`draft → pending_review → published/rejected` + 审核记录（M0 **不含** `deprecated`/`retired`，见 §4.3） |
 | 5 | **embedding 服务适配器**：在线单条（短超时 + 失败降级）+ 离线批量（分批 + 续跑） |
 | 6 | **工具检索**：权限过滤 + `pg_trgm` ∥ 向量 + RRF + scope 收窄 + taxonomy 接口 |
-| 7 | **执行内核**：http provider + 凭据注入 + 配额/并发 + 幂等 + 审计 |
+| 7 | **执行内核**：http provider + **最小凭据注入**（见下方"凭据范围"）+ 配额/并发 + 幂等 + 审计 |
 | 8 | **REST 前端**（MCP 前端为 M1） |
-| 9 | **管理 CLI**：导入、送审、审核、发布、授权、重建索引、跑评测 |
+| 9 | **管理 CLI**：导入、送审、审核、发布、授权、**凭据管理**、重建索引、跑评测 |
 | 10 | **评测集 v0（100~200 条）+ recall@k CI 门禁** |
 | 11 | 架构断言 + CI 流水线（含契约快照与 E2E） |
 | 12 | 可观测基础：`trace_id` 贯穿 + 结构化日志（**不接 OTel / Prometheus**） |
@@ -1281,7 +1347,7 @@ def test_core_is_framework_free():
 - **MCP 服务端**：MCP 前端（transport、transport security、Host 校验、`search_tools` / `get_tool` / `call_tool`）
 
 > 上面两项是**独立交付物、无依赖关系**，可并行；技术栈完全不同（客户端要会话管理，服务端要传输安全）。
-- **凭据保管与注入**（解锁真实内部工具）
+- **凭据轮换与类型扩展**：多 KEK 轮换、`oauth2_client` / `mTLS` 类型（**M0 已有最小注入**，见 §16.2「凭据范围」）
 - 描述补全（LLM 富化）：**仅当评测证明"描述质量是瓶颈"时才引入**，见 §5.4
 - 精排（**DashScope rerank 适配器**）：**供应商已定，但默认关闭**；仅当评测显示"recall@5 低但 recall@30 高"（排序问题）时开启，见 §6.2；同时评测集扩到 500 条
 - 管理前端（目录、授权、配额、审计）
@@ -1324,10 +1390,10 @@ def test_core_is_framework_free():
 | D7 | embedding 服务 | 使用现成的境内服务（OpenAI 兼容 `/v1/embeddings`） | §6.4 §12 |
 | D8 | M0 范围与实现细节 | **以 §16.2 的「M0 范围决策」表为唯一口径**（此处不再重复枚举，避免两处不同步） | §16.2 |
 | D9 | **明确排除的外部依赖** | **KMS、Vault、OpenTelemetry、Prometheus 一律不接**；Redis 与 PostgreSQL(+pgvector) 使用**已有现成实例**。**将来若接入统一监控体系，`trace_id` 与结构化日志可直接被采集，不需要改业务代码**（故 R11 的"未定"不影响现在开工） | §12 |
-| D10 | **错误模型** | 统一错误体 `{code, message, trace_id, retryable, retry_after_ms}` + **19 个 `TH_*` 错误码**（见 §7.4 表）；**由内核统一产出，两个前端只做协议翻译** | §7.4 |
+| D10 | **错误模型** | 统一错误体 `{code, message, trace_id, retryable, retry_after_ms}` + **20 个 `TH_*` 错误码**（见 §7.4 表）；**由内核统一产出，两个前端只做协议翻译** | §7.4 |
 | D11 | **配额语义** | 每个命中的 grant **各自独立计数，任一超限即拒绝**；增加 grant 只增加约束、不增加额度 | §9.1 |
 | D12 | **Channel 悬空** | **拒绝**废弃被 Channel 指向的版本（**不做自动回退**）；无 stable 通道的工具视为不可调用 | §4.3 |
-| D13 | **数据留存** | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation` | §11.1 |
+| D13 | **数据留存**（**只约束审计表、日志与检索事件**） | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation`。**不约束幂等结果缓存**（属运行期临时状态，规则见 §7.2） | §11.1 §7.2 |
 | D14 | **需确认的工具在 M0** | 判定条件**与内核确认判定对齐**（写方法 **或** `risk == high`），照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 §4.1 |
 | D15 | **rerank 供应商** | **DashScope `qwen3.7-text-rerank`**（境内、判别式）；管线保留精排阶段，**默认关闭**，由评测决定开启；远程调用 p95 150–400ms 需并入延迟 SLO | §6.2 §6.7 §12 |
 
