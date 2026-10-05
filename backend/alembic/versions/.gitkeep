@@ -1,0 +1,9 @@
+# 迁移版本目录
+#
+# 本目录存放 Alembic 迁移脚本。**首次建库的迁移由任务 C1 创建**：
+# 依据 docs/03-表结构DDL-v0.2.md 转写为 alembic/versions/0001_initial.py。
+#
+# 之后 schema 变更一律在此新增迁移，docs/03 的 DDL 文档不再更新
+# （设计 §12：Alembic 是 schema 的唯一来源）。
+#
+# 本文件只是为了让空目录能进 git，可随时删除。

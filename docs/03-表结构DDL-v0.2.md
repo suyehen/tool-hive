@@ -2,7 +2,7 @@
 
 > 上游依据：`01-ToolHive平台设计-v0.2.md` §4.1 实体总览
 > **本文档是 M0 的建表交付物**，可直接在 PostgreSQL 上执行。
-> ⚠️ **落库后以 `alembic/versions/0001_initial.py` 为唯一来源**：本文件用于评审与首次建库，
+> ⚠️ **落库后以 `backend/alembic/versions/0001_initial.py` 为唯一来源**：本文件用于评审与首次建库，
 > 之后 schema 变更只走迁移；ORM metadata 与迁移结果的一致性由 `C2` **人工核对**保证
 > （**M0 不建测试套件**，见设计 §14.3）。
 
@@ -19,6 +19,11 @@ id bigint PRIMARY KEY      -- 雪花 ID，64 位有符号（实际只用 63 位�
 - 由应用层的雪花生成器产出，**数据库不做自增、不用序列**
 - 需要配置 `TOOLHIVE_SNOWFLAKE_DATACENTER_ID` 与 `TOOLHIVE_SNOWFLAKE_WORKER_ID`（多实例不得重复）
 - 所有外键一律 `bigint`，与主键类型一致
+
+> **位分配（1 符号 + 41 时间戳 + 5 数据中心 + 5 机器 + 12 序列）、起始纪元
+> （`1704067200000`）、时钟回退处置与 worker 租约**见设计 **§4.4** —— 那些是实现契约，
+> 本文档不复制（数值只应有一个来源）。因此这里的 `bigint` 列**不写 `DEFAULT`**：
+> ID 一律由应用层生成，数据库不给兜底。
 
 ### 1.2 审计字段：每张表必备
 
@@ -505,7 +510,7 @@ pgvector 对 `vector` 类型的索引上限是 **2000 维**，`halfvec`（半精
 
 ## 6. 与迁移的关系
 
-1. **首次建库**：可直接执行本文档的 DDL，或（推荐）把它转写为 `alembic/versions/0001_initial.py`
+1. **首次建库**：可直接执行本文档的 DDL，或（推荐）把它转写为 `backend/alembic/versions/0001_initial.py`
 2. **之后所有 schema 变更只走 Alembic**，本文档**不再更新**
 3. `C2` 的**人工核对**保证 `ORM metadata` == 迁移结果 —— 这条能同时兜住"ORM 漏写字段"和"迁移漏改"两类问题
 

@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toolhive"
+version = "0.1.0"
+description = "ToolHive —— 工具控制平面：统一接入、检索与受控执行"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+# 依据：设计 §12 技术选型。M0 明确不引入的组件（KMS / Vault / OTel / Prometheus）
+# 不得出现在这里 —— 由 tests/architecture 的断言兜底。
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "redis>=5.0",
+    "httpx>=0.27",
+    "orjson>=3.10",
+    "typer>=0.12",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# MCP 前端不在 M0 范围（设计 §16.2），因此默认不装。
+# core/ 无论如何都不得 import mcp —— 由架构断言强制（设计 §14.1 第 1 条）。
+mcp = ["mcp>=1.0"]
+dev = ["ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+toolhive = "toolhive.cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+toolhive = ["py.typed", "adapters/cache/scripts/*.lua"]
+
+# =============================================================================
+# ruff —— 任务 A1 的质量门禁之一
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff 自身规则
+    "ANN",  # 强制类型注解 —— 本项目的类型基线（设计 §14.3）
+]
+ignore = [
+    # RUF001/002/003 把中文全角标点（，。：（））判为"歧义字符"。
+    # 本项目是中文代码库：注释、文档字符串与面向用户的错误信息都用中文，
+    # 全角标点是**有意为之**，不是在 ASCII 与全角之间选错。关掉以免噪声淹没真问题。
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试与构建脚本放宽注解要求；src/ 保持严格。
+"tests/**" = ["ANN"]
+"scripts/**" = ["ANN"]
+"alembic/**" = ["ANN", "E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["toolhive"]
+
+# =============================================================================
+# mypy —— 任务 A1 的质量门禁之二。验收：`mypy src` 零错误
+# =============================================================================
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+# 测试与脚本允许不完全注解（它们不是交付给别的模块 import 的代码）。
+module = ["tests.*", "scripts.*", "alembic.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+# asyncpg 0.31 未随包提供 py.typed，因此缺类型信息。
+# 注意：src/ 下的代码**不直接依赖 asyncpg** —— 启动校验（toolhive/startup.py）
+# 用 Protocol 描述连接能力，由 adapters/db（任务 B1）提供实现。
+# 这里只为部署脚本 preflight.py 放行。
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true

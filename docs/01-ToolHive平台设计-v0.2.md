@@ -123,6 +123,7 @@
 >
 > **① 主键统一雪花算法**：`id bigint PRIMARY KEY`，由应用层生成（配置 `TOOLHIVE_SNOWFLAKE_DATACENTER_ID` / `WORKER_ID`），
 > 数据库不用自增或序列；所有外键同为 `bigint`。
+> **位分配、起始纪元、时钟回退处置与 worker 租约见 §4.4** —— 那些是实现契约，必须照做。
 >
 > **② 审计字段每表必备**：`create_by_id` / `create_by_name` / `create_time` / `update_by_id` / `update_by_name` / `update_time`。
 > 三条要点：
@@ -285,6 +286,104 @@ M0 **只实现** `draft → pending_review → published / rejected`，加上工
 
 > 选"拒绝废弃"而不是"自动回退到上一个 published 版本"：**自动回退会让生产流量静默切到另一个版本**，
 > 这比报错更危险——调用方拿到的结果会悄悄变化。宁可让运维显式切换。
+
+---
+
+### 4.4 雪花 ID：位分配与发号规则（已确认）
+
+§4.1 的全局约定①只说"主键统一雪花算法"，**没有规定位分配与发号细节**。
+本节把这些补齐——它们是**实现契约**，不写下来就会各写各的。
+
+#### 为什么是雪花而不是 UUID
+
+| | 雪花 `bigint` | UUID v4 |
+|---|---|---|
+| 存储 | 8 字节 | 16 字节（且随机） |
+| 索引 | **趋势递增**，B-tree 插入几乎全在右端，页分裂少 | 完全随机，插入点分散 → 索引膨胀、缓存命中差 |
+| 可读性 | 可按时间排序、排查时能一眼看出先后 | 无时序信息 |
+| 调试 | 人能念出来 | 只能复制粘贴 |
+
+一个**真实的代价**要承认：雪花 ID **超过了 JavaScript 的安全整数范围**（2^53-1）。
+实测当前时间下生成的 ID 约为 `3.65e17`，远超 `9.007e15`。
+**因此凡是会流向浏览器 JS 的接口，`id` 必须序列化为字符串。** 详见下方"与前端的关系"。
+
+#### 位分配（64 位有符号，实际只用 63 位正数）
+
+```
+┌─┬───────────────────────────┬────────────┬────────────┬──────────────┐
+│0│      41 位毫秒时间戳        │ 5 位数据中心 │  5 位机器   │  12 位序列    │
+└─┴───────────────────────────┴────────────┴────────────┴──────────────┘
+ 符号        相对自定义纪元              0..31        0..31        0..4095
+```
+
+| 段 | 位宽 | 取值范围 | 容量 |
+|---|---|---|---|
+| 符号位 | 1 | 恒为 `0` | 保证是正数，避免与 JS/其它语言的符号处理纠缠 |
+| 时间戳 | 41 | 相对纪元的毫秒数 | `2^41` ms ≈ **69.7 年** |
+| 数据中心 | 5 | `0..31` | 32 |
+| 机器 | 5 | `0..31` | 32 |
+| 序列 | 12 | `0..4095` | 每节点每毫秒 4096 个 |
+
+**总容量**：`32 × 32 = 1024` 个节点，合计约 **419 万 ID/毫秒**。对 1w 工具的量级是压倒性富余。
+
+#### 起始纪元：`1704067200000`（2024-01-01T00:00:00Z）
+
+> 🔴 **这个值一旦上线就不能再改。** 改纪元会让**同一毫秒**在新旧纪元下算出不同的时间戳部分，
+> 与历史 ID 直接撞车。已落库的 ID 也无法追溯修正。
+>
+> 选自定义纪元而不是 Unix 纪元的原因：41 位从 1970 起算只够到 **2039 年**，
+> 从 2024 起算可用到 **2093-09-06**。这不是"够用就行"——**纪元改不了，所以要一次选够**。
+
+纪元常量以毫秒整数形式写死在代码里（`adapters/id/snowflake.py`），
+**不做成配置项**——配置项意味着有人会去改它，而这个值不允许被改。
+
+#### 发号规则
+
+| 情形 | 处置 | 理由 |
+|---|---|---|
+| 同一毫秒内序列未用尽 | 序列 +1，直接发号 | 正常路径 |
+| **同一毫秒内序列用尽**（>4095） | **阻塞到下一毫秒**再发号 | 说明瞬时并发极高；阻塞是有界的（≤1ms），比抛错更可用 |
+| 时钟回退 **≤ 5ms** | **自旋等待**到追上上次发号时间 | NTP 微调很常见，为 1ms 打断服务不值得 |
+| 时钟回退 **> 5ms** | **抛错拒绝发号** | 大幅回退通常是运维事故（改系统时间、虚拟机迁移）。此时无法保证不重复，**必须失败而不是猜** |
+| 任何情况 | **绝不重复发号** | 这是唯一的硬约束。宁可拒绝服务，也不能产生重复主键 |
+
+> 时钟回退的阈值 `5ms` 做成常量而非配置项，理由同纪元：它影响正确性，不该被随手调。
+
+#### 多实例：worker 号的租约（防止静默撞号）
+
+`datacenter_id` / `worker_id` 由环境变量配置，但**光靠配置不能保证不重复**——
+两个实例配了同一个 `(1, 1)` 就会各自从序列 0 开始发号，**产出完全相同的 ID**，
+而数据库只会报一个主键冲突，排查时极难定位到"是发号器撞了"。
+
+**做法**：启动时用 Redis 对 `(datacenter_id, worker_id)` 抢一个**带 TTL 的租约**：
+
+```
+SET toolhive:snowflake:lease:{dc}:{worker} {instance_id} NX PX {ttl}
+```
+
+* 抢到 → 正常启动，并由后台任务**定期续租**（TTL 取续租间隔的数倍）
+* 抢不到 → **拒绝启动**，报错明确指出"该 (dc, worker) 已被实例 X 占用"
+* 进程崩溃 → TTL 到期后租约自动释放，无需人工清理
+
+这正好复用已有的 Redis（§12），代价约 20 行代码，换来的是**把一类静默的数据损坏变成启动期失败**。
+
+#### 环境变量
+
+```dotenv
+TOOLHIVE_SNOWFLAKE_DATACENTER_ID=1   # 0..31
+TOOLHIVE_SNOWFLAKE_WORKER_ID=1       # 0..31
+```
+
+单实例部署用 `(1, 1)` 即可。**跨实例时必须两两不同**，重复会被上面的租约拦下。
+
+#### 与前端的关系（M1 管理台）
+
+雪花 ID 超出 JS 安全整数范围，**浏览器直接 `JSON.parse` 会静默丢精度**——
+`365366704102051840` 会变成 `365366704102051840` 附近的一个错误值，且**不报错**。
+
+因此：**凡返回给浏览器/JS 调用方的接口，`id` 与所有 `*_id` 字段一律序列化为字符串。**
+数据库与 Python 侧仍是 `bigint`，只在序列化边界转换。
+M0 的 REST 前端（任务 I）就要按这条实现，M1 管理台才能安全消费。
 
 ---
 
@@ -1200,25 +1299,52 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 
 ## 13. 目录结构
 
-```
-src/toolhive/
-├── core/                     # 领域与内核，禁止依赖 web 框架（架构断言强制）
-│   ├── domain/               #   Tool / Version / Provider / Principal / Grant
-│   ├── invocation/           #   执行内核流水线
-│   ├── policy/               #   授权、配额、熔断、确认、幂等
-│   └── providers/            #   适配器：http / mcp / local（只有"怎么连"）
-├── retrieval/                # 检索：索引构建、粗排、精排、评测入口
-├── ingestion/                # 导入器 + 元数据规范化 + 富化管线
-├── adapters/                 # db / cache / secrets / upstream
-├── frontends/
-│   ├── mcp/  rest/  admin/
-├── observability/
-└── builtin_tools/            # 平台元能力（准入规则见 §16.6）
+**后端与前端分成两个顶层目录**：`backend/` 是整个 Python 工程，`frontend/` 是管理台界面。
+`docs/` 跨两者。
 
-eval/                         # 检索验证：手动 query 集 + 指标脚本（M0 交付物）
-tests/
-└── architecture/             # 架构断言（M0 唯一保留的自动化验证）
 ```
+backend/                      # Python 后端（整个 Python 工程）
+├── src/toolhive/
+│   ├── core/                 # 领域与内核，禁止依赖 web 框架（架构断言强制）
+│   │   ├── domain/           #   Tool / Version / Provider / Principal / Grant
+│   │   ├── invocation/       #   执行内核流水线
+│   │   ├── policy/           #   授权、配额、熔断、确认、幂等
+│   │   └── providers/        #   适配器：http / mcp / local（只有"怎么连"）
+│   ├── retrieval/            # 检索：索引构建、粗排、精排、验证入口
+│   ├── ingestion/            # 导入器 + 元数据规范化 + 富化管线
+│   ├── adapters/             # db / cache / secrets / upstream / id
+│   ├── protocols/            # 协议适配器：mcp / rest / admin —— **后端代码**
+│   ├── observability/        # 结构化日志、trace_id、延迟直方图
+│   ├── cli/                  # 管理面 CLI（**M0 唯一的管理入口**，§16.2）
+│   └── builtin_tools/        # 平台元能力（准入规则见 §16.6）
+├── eval/                     # 检索验证：手动 query 集 + 指标脚本（M0 交付物）
+├── alembic/                  # 迁移（schema 的唯一来源）
+├── tests/
+│   └── architecture/         # 架构断言（M0 唯一保留的自动化验证）
+├── scripts/                  # 手动验证脚本（verify.py 等）
+├── pyproject.toml
+└── .env                      # 后端环境变量（不入库）
+
+frontend/                     # 管理台界面（React + Vite）—— **M1 交付**，M0 为空占位
+docs/                         # 设计与部署文档（跨前后端）
+```
+
+> **⚠️ `protocols/` 不是浏览器界面。** 别再把它和 `frontend/` 搞混：
+>
+> | 说法 | 位置 | 是什么 | 语言 | 阶段 |
+> |---|---|---|---|---|
+> | **协议适配器**（设计里叫「协议前端」） | `backend/src/toolhive/protocols/`（`rest` / `mcp` / `admin`） | 把外部协议翻译成内核调用——**这是后端代码** | Python | REST 在 M0；MCP 与管理 API 在 M1 |
+> | **管理台界面** | `frontend/` | 人在浏览器里点的界面 | TS + React + Vite | **M1** |
+>
+> §3.3 与 §14.1 说的"协议前端必须是薄适配器""各前端之间不得互相 import"，
+> 指的都是**第一行**。`frontend/` 是独立工程，与 Python 侧只通过 HTTP 接口契约耦合，
+> 既不共享代码，也不受那几条架构断言约束。
+>
+> **该目录原名 `frontends/`**（与 `frontend/` 只差一个字母），因为一词二义已改名为 `protocols/`。
+> 设计里「协议前端」这个**说法**保留不变，只是目录名换成了更准确的英文。
+>
+> M0 为什么没有 `frontend/` 内容：§16.2 决定**管理面只用 CLI**，不做管理 HTTP API、不做管理前端。
+> M1 先在 `protocols/admin/` 把 CLI 能力暴露成 HTTP 接口，界面才有东西可调——**界面不直连数据库**。
 
 ### 13.1 工具实现放哪（重要）
 
@@ -1249,18 +1375,25 @@ tests/
 ### 14.1 架构约束（架构断言强制）
 
 1. `core/` 不得 import `fastapi` / `starlette` / `mcp` / `uvicorn`
-2. `adapters/` 不得反向依赖 `frontends/`
-3. `frontends/` 之间不得互相 import
+2. `adapters/` 不得反向依赖 `protocols/`
+3. `protocols/` 之间不得互相 import
 4. 工具命名必须符合 `<domain>.<system>.<entity>.<action>`
 5. `builtin_tools/` 不得 import `httpx` / `sqlalchemy`（保证纯函数）
 
 ### 14.2 架构适应度函数示例
 
+> 下面是第 1 条约束的**示例**（简化版，用来说清思路）。
+> **实际实现见 `backend/tests/architecture/`**，由 `backend/scripts/verify.py` 执行——
+> 那里把所有断言统一成"返回违规清单"的形式，一次跑完全部、逐条报告，
+> 并且路径相对文件定位（`Path(__file__)`）而不是相对 cwd。
+
 ```python
-# tests/architecture/test_core_is_framework_free.py
+# backend/tests/architecture/test_core_is_framework_free.py
 import ast
 from pathlib import Path
 
+# 相对本文件定位，而不是相对 cwd —— 从哪个目录运行都成立。
+PACKAGE = Path(__file__).resolve().parents[2] / "src" / "toolhive"
 FORBIDDEN = {"fastapi", "starlette", "mcp", "uvicorn"}
 
 def _import_roots(path: Path) -> set[str]:
@@ -1276,7 +1409,7 @@ def _import_roots(path: Path) -> set[str]:
 def test_core_is_framework_free():
     offenders = [
         f"{p}: {sorted(bad)}"
-        for p in Path("src/toolhive/core").rglob("*.py")
+        for p in (PACKAGE / "core").rglob("*.py")
         if (bad := _import_roots(p) & FORBIDDEN)
     ]
     assert not offenders, "core/ 不允许依赖 Web 框架或协议库:\n" + "\n".join(offenders)
