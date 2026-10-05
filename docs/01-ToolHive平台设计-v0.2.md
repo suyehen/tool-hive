@@ -334,7 +334,7 @@ M0 **只实现** `draft → pending_review → published / rejected`，加上工
 > 选自定义纪元而不是 Unix 纪元的原因：41 位从 1970 起算只够到 **2039 年**，
 > 从 2024 起算可用到 **2093-09-06**。这不是"够用就行"——**纪元改不了，所以要一次选够**。
 
-纪元常量以毫秒整数形式写死在代码里（`adapters/id/snowflake.py`），
+纪元常量以毫秒整数形式写死在代码里（`backend/src/toolhive/adapters/snowflake.py`），
 **不做成配置项**——配置项意味着有人会去改它，而这个值不允许被改。
 
 #### 发号规则
@@ -1312,7 +1312,8 @@ backend/                      # Python 后端（整个 Python 工程）
 │   │   └── providers/        #   适配器：http / mcp / local（只有"怎么连"）
 │   ├── retrieval/            # 检索：索引构建、粗排、精排、验证入口
 │   ├── ingestion/            # 导入器 + 元数据规范化 + 富化管线
-│   ├── adapters/             # db / cache / secrets / upstream / id
+│   ├── adapters/             # 基础设施适配：db/ cache/ 是多模块子包，其余单文件直接放本层
+│   │                         #   snowflake.py（雪花 ID）· crypto.py（信封加密）· http.py（出站 HTTP）
 │   ├── protocols/            # 协议适配器：mcp / rest / admin —— **后端代码**
 │   ├── observability/        # 结构化日志、trace_id、延迟直方图
 │   ├── cli/                  # 管理面 CLI（**M0 唯一的管理入口**，§16.2）

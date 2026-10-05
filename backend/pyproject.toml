@@ -73,6 +73,10 @@ ignore = [
     "RUF001",
     "RUF002",
     "RUF003",
+    # PEP 695 泛型语法（class Foo[T]:）是 py312 的新写法，但 TypeVar/Generic 更常见，
+    # 且与 ParamSpec、重载、装饰器的混用更成熟。这是风格选择，不影响正确性。
+    "UP046",
+    "UP047",
 ]
 
 [tool.ruff.lint.per-file-ignores]

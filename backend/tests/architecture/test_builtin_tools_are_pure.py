@@ -7,7 +7,7 @@
 一处**有意扩展**（已在 :data:`FORBIDDEN_TOP_LEVEL` 中标注）：除设计明列的
 ``httpx`` / ``sqlalchemy`` 之外，还禁止 ``builtin_tools/`` import 本项目的
 ``toolhive.adapters``。理由是那条规则的**意图**是"保证纯函数"——
-而 ``adapters`` 正是通往网络与数据库的门（``adapters.upstream`` 是 HTTP 客户端、
+而 ``adapters`` 正是通往网络与数据库的门（``adapters.http`` 是 HTTP 客户端、
 ``adapters.db`` 是数据库）。允许这条路径等于让规则形同虚设。
 若认为此项过严，删掉 :data:`FORBIDDEN_PROJECT_PREFIXES` 即可，不影响其它断言。
 """

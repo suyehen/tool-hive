@@ -133,14 +133,129 @@ class DatabaseSettings(_Section):
     command_timeout: float = Field(5.0, validation_alias="TOOLHIVE_DB_COMMAND_TIMEOUT")
 
 
+def _validate_database(cfg: DatabaseSettings, report: ConfigReport) -> None:
+    """校验 ``database`` 分区。紧挨着 :class:`DatabaseSettings`，让字段与它的规则在同一处。"""
+
+    if not cfg.url.startswith(("postgresql://", "postgres://")):
+        report.problems.append(
+            ConfigProblem("database", "url", "连接串必须以 postgresql:// 或 postgres:// 开头")
+        )
+    if cfg.pool_min < 1:
+        report.problems.append(ConfigProblem("database", "pool_min", "必须 >= 1"))
+    if cfg.pool_max < cfg.pool_min:
+        report.problems.append(
+            ConfigProblem(
+                "database", "pool_max", f"必须 >= pool_min（{cfg.pool_min}）"
+            )
+        )
+    if cfg.command_timeout <= 0:
+        report.problems.append(ConfigProblem("database", "command_timeout", "必须 > 0"))
+
+
 class RedisSettings(_Section):
-    """Redis。设计 §12。
+    """Redis。设计 §12；连接池与超时的取值理由见 ``adapters/cache/client.py``。
 
     ⚠️ 注意 ``db`` 编号：服务器上的 ``db0`` 被另一个应用占用，ToolHive 用 ``db1``
     （见 docs/04 §1.3）。编号写在 URL 末尾，这里不单独配置。
     """
 
     url: str = Field(..., validation_alias="TOOLHIVE_REDIS_URL")
+    pool_max_connections: int = Field(20, validation_alias="TOOLHIVE_REDIS_POOL_MAX_CONNECTIONS")
+    # 连接池用尽时等待多久。**必须短于最紧的请求预算**：等太久只会先吃掉延迟预算，
+    # 再以一个语义不清的超时收场。见 adapters/cache/client.py 的说明。
+    pool_wait_timeout_seconds: float = Field(
+        1.0, validation_alias="TOOLHIVE_REDIS_POOL_WAIT_TIMEOUT_SECONDS"
+    )
+    connect_timeout_seconds: float = Field(
+        3.0, validation_alias="TOOLHIVE_REDIS_CONNECT_TIMEOUT_SECONDS"
+    )
+    command_timeout_seconds: float = Field(
+        2.0, validation_alias="TOOLHIVE_REDIS_COMMAND_TIMEOUT_SECONDS"
+    )
+    health_check_interval_seconds: int = Field(
+        30, validation_alias="TOOLHIVE_REDIS_HEALTH_CHECK_INTERVAL_SECONDS"
+    )
+
+
+def _validate_redis(cfg: RedisSettings, report: ConfigReport) -> None:
+    """校验 ``redis`` 分区。紧挨着 :class:`RedisSettings`，让字段与它的规则在同一处。"""
+
+    if not cfg.url.startswith(("redis://", "rediss://", "unix://")):
+        report.problems.append(
+            ConfigProblem("redis", "url", "连接串必须以 redis:// 或 rediss:// 开头")
+        )
+    if cfg.pool_max_connections < 1:
+        report.problems.append(ConfigProblem("redis", "pool_max_connections", "必须 >= 1"))
+    # 连接与命令超时必须 > 0：设计 §7.2 要求 Redis 不可用时按 fail-open/fail-closed 分类处理，
+    # 而"能及时知道它挂了"是前提——不设超时会让请求挂死在连接上。
+    for timeout_name, timeout_seconds in (
+        ("pool_wait_timeout_seconds", cfg.pool_wait_timeout_seconds),
+        ("connect_timeout_seconds", cfg.connect_timeout_seconds),
+        ("command_timeout_seconds", cfg.command_timeout_seconds),
+    ):
+        if timeout_seconds <= 0:
+            report.problems.append(
+                ConfigProblem("redis", timeout_name, "必须 > 0（否则 Redis 不可达时无法及时降级）")
+            )
+    if cfg.health_check_interval_seconds < 0:
+        report.problems.append(
+            ConfigProblem("redis", "health_check_interval_seconds", "必须 >= 0")
+        )
+
+
+class UpstreamSettings(_Section):
+    """出站 HTTP 客户端（任务 B5，设计 §10.2）。
+
+    这里配的是**连接层**参数；"能不能连这个地址"是 SSRF 防护的事（任务 E2），
+    不在本分区。
+
+    ⚠️ 超时语义：``read_timeout_seconds`` 是**单次尝试**的上限，
+    而真正的上限是请求自带的**整体 deadline**——两者取小（设计 §7.2：
+    "一个整体 deadline 从入口贯穿到出站"）。
+    """
+
+    connect_timeout_seconds: float = Field(
+        3.0, validation_alias="TOOLHIVE_UPSTREAM_CONNECT_TIMEOUT_SECONDS"
+    )
+    read_timeout_seconds: float = Field(
+        10.0, validation_alias="TOOLHIVE_UPSTREAM_READ_TIMEOUT_SECONDS"
+    )
+    max_connections: int = Field(100, validation_alias="TOOLHIVE_UPSTREAM_MAX_CONNECTIONS")
+    max_keepalive_connections: int = Field(
+        20, validation_alias="TOOLHIVE_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS"
+    )
+    user_agent: str = Field("toolhive/0.1", validation_alias="TOOLHIVE_UPSTREAM_USER_AGENT")
+
+
+def _validate_upstream(cfg: UpstreamSettings, report: ConfigReport) -> None:
+    """校验 ``upstream`` 分区。紧挨着 :class:`UpstreamSettings`，让字段与它的规则在同一处。"""
+
+    for timeout_name, timeout_seconds in (
+        ("connect_timeout_seconds", cfg.connect_timeout_seconds),
+        ("read_timeout_seconds", cfg.read_timeout_seconds),
+    ):
+        if timeout_seconds <= 0:
+            report.problems.append(
+                ConfigProblem(
+                    "upstream", timeout_name, "必须 > 0（否则出站调用会无限期挂住整个请求）"
+                )
+            )
+    if cfg.max_connections < 1:
+        report.problems.append(ConfigProblem("upstream", "max_connections", "必须 >= 1"))
+    if cfg.max_keepalive_connections < 0:
+        report.problems.append(
+            ConfigProblem("upstream", "max_keepalive_connections", "必须 >= 0")
+        )
+    if cfg.max_keepalive_connections > cfg.max_connections:
+        report.problems.append(
+            ConfigProblem(
+                "upstream",
+                "max_keepalive_connections",
+                f"不得大于 max_connections（{cfg.max_connections}）",
+            )
+        )
+    if not cfg.user_agent:
+        report.problems.append(ConfigProblem("upstream", "user_agent", "不得为空"))
 
 
 class SnowflakeSettings(_Section):
@@ -157,6 +272,21 @@ class SnowflakeSettings(_Section):
     worker_id: int = Field(1, validation_alias="TOOLHIVE_SNOWFLAKE_WORKER_ID")
 
 
+def _validate_snowflake(cfg: SnowflakeSettings, report: ConfigReport) -> None:
+    """校验 ``snowflake`` 分区。紧挨着 :class:`SnowflakeSettings`，让字段与它的规则在同一处。"""
+
+    # 位分配 1 符号 + 41 时间戳 + 5 数据中心 + 5 机器 + 12 序列，
+    # 因此数据中心与机器各占 5 位，取值 0..31。上限来自设计 §4.4，不要在这里放宽或收紧。
+    if not 0 <= cfg.datacenter_id <= 31:
+        report.problems.append(
+            ConfigProblem("snowflake", "datacenter_id", "必须在 0..31（5 位，设计 §4.4）")
+        )
+    if not 0 <= cfg.worker_id <= 31:
+        report.problems.append(
+            ConfigProblem("snowflake", "worker_id", "必须在 0..31（5 位，设计 §4.4）")
+        )
+
+
 class SecretSettings(_Section):
     """凭据加密的 KEK。设计 §10.1。
 
@@ -164,7 +294,10 @@ class SecretSettings(_Section):
     ``{"k1": "<32 字节 base64>", "k2": "..."}``
     """
 
-    keks: str = Field(..., validation_alias="TOOLHIVE_KEKS")
+    # ``repr=False``：这个字段装的是**密钥原文**。pydantic 默认会把字段值放进 repr，
+    # 而 repr 会出现在日志、异常回溯、调试器与崩溃转储里——设计 §10.1 部署约束第 2 条
+    # 明确要求"KEK 不进日志、不进崩溃转储"。同理见下面 embedding/rerank 的 api_key。
+    keks: str = Field(..., validation_alias="TOOLHIVE_KEKS", repr=False)
     active_kek_id: str = Field(..., validation_alias="TOOLHIVE_ACTIVE_KEK_ID")
 
     def kek_ids(self) -> set[str]:
@@ -195,6 +328,40 @@ class SecretSettings(_Section):
         return {str(k): str(v) for k, v in data.items()}
 
 
+def _validate_secret(cfg: SecretSettings, report: ConfigReport) -> None:
+    """校验 ``secret`` 分区。紧挨着 :class:`SecretSettings`，让字段与它的规则在同一处。"""
+
+    parsed_keks = cfg._parsed()
+    if not parsed_keks:
+        report.problems.append(
+            ConfigProblem("secret", "keks", "必须是 JSON 对象，形如 {\"k1\": \"<32 字节 base64>\"}")
+        )
+    else:
+        for kek_id, encoded in parsed_keks.items():
+            try:
+                raw = base64.b64decode(encoded, validate=True)
+            except (binascii.Error, ValueError):
+                report.problems.append(
+                    ConfigProblem("secret", "keks", f"KEK {kek_id!r} 不是合法的 base64")
+                )
+                continue
+            if len(raw) != 32:
+                report.problems.append(
+                    ConfigProblem(
+                        "secret", "keks", f"KEK {kek_id!r} 解码后 {len(raw)} 字节，AES-256 要求 32"
+                    )
+                )
+        if cfg.active_kek_id not in parsed_keks:
+            report.problems.append(
+                ConfigProblem(
+                    "secret",
+                    "active_kek_id",
+                    f"{cfg.active_kek_id!r} 不在 KEKS 中"
+                    f"（现有：{sorted(parsed_keks)}）",
+                )
+            )
+
+
 class EmbeddingSettings(_Section):
     """embedding 服务。设计 §6.4 / §6.5。
 
@@ -203,7 +370,8 @@ class EmbeddingSettings(_Section):
     """
 
     base_url: str = Field(..., validation_alias="TOOLHIVE_EMBEDDING_BASE_URL")
-    api_key: str = Field("", validation_alias="TOOLHIVE_EMBEDDING_API_KEY")
+    # repr=False：密钥原文，理由同 SecretSettings.keks
+    api_key: str = Field("", validation_alias="TOOLHIVE_EMBEDDING_API_KEY", repr=False)
     model: str = Field(..., validation_alias="TOOLHIVE_EMBEDDING_MODEL")
     dim: int = Field(2560, validation_alias="TOOLHIVE_EMBEDDING_DIM")
     timeout_seconds: float = Field(5.0, validation_alias="TOOLHIVE_EMBEDDING_TIMEOUT_SECONDS")
@@ -212,6 +380,32 @@ class EmbeddingSettings(_Section):
     def embeddings_path(self) -> str:
         """OpenAI 兼容的接口路径（设计 §6.4）。"""
         return f"{self.base_url.rstrip('/')}/v1/embeddings"
+
+
+def _validate_embedding(cfg: EmbeddingSettings, report: ConfigReport) -> None:
+    """校验 ``embedding`` 分区。紧挨着 :class:`EmbeddingSettings`，让字段与它的规则在同一处。"""
+
+    if not cfg.base_url.startswith(("http://", "https://")):
+        report.problems.append(
+            ConfigProblem("embedding", "base_url", "必须以 http:// 或 https:// 开头")
+        )
+    if not cfg.model:
+        report.problems.append(ConfigProblem("embedding", "model", "不得为空"))
+    if cfg.dim <= 0:
+        report.problems.append(ConfigProblem("embedding", "dim", "必须 > 0"))
+    if cfg.timeout_seconds <= 0:
+        report.problems.append(ConfigProblem("embedding", "timeout_seconds", "必须 > 0"))
+    if not cfg.api_key:
+        # 不拒绝启动：设计 §6.6 规定向量服务不可用时**降级为纯关键词检索**（degraded=true）。
+        # 但缺 Key 是明确的部署失误，必须显式告警。
+        report.problems.append(
+            ConfigProblem(
+                "embedding",
+                "api_key",
+                "未配置：检索将退化为纯关键词（设计 §6.6），请确认这是有意为之",
+                severity="warning",
+            )
+        )
 
 
 class RetrievalSettings(_Section):
@@ -228,6 +422,37 @@ class RetrievalSettings(_Section):
     )
 
 
+def _validate_retrieval(cfg: RetrievalSettings, report: ConfigReport) -> None:
+    """校验 ``retrieval`` 分区。紧挨着 :class:`RetrievalSettings`，让字段与它的规则在同一处。"""
+
+    if not cfg.active_index_version:
+        report.problems.append(
+            ConfigProblem("retrieval", "active_index_version", "不得为空（设计 §6.5 要求显式指定）")
+        )
+    if cfg.default_k < 1:
+        report.problems.append(ConfigProblem("retrieval", "default_k", "必须 >= 1"))
+    if not 1 <= cfg.max_k <= MAX_SEARCH_K:
+        report.problems.append(
+            ConfigProblem(
+                "retrieval",
+                "max_k",
+                f"必须在 1..{MAX_SEARCH_K}（设计 §6.1 规定上限 {MAX_SEARCH_K}）",
+            )
+        )
+    if cfg.default_k > cfg.max_k:
+        report.problems.append(
+            ConfigProblem(
+                "retrieval",
+                "default_k",
+                f"不得大于 max_k（{cfg.default_k} > {cfg.max_k}）",
+            )
+        )
+    if cfg.description_snippet_chars < 1:
+        report.problems.append(
+            ConfigProblem("retrieval", "description_snippet_chars", "必须 >= 1")
+        )
+
+
 class RerankSettings(_Section):
     """精排。设计 §6.2 / §16.2 —— **M0 默认关闭**，只交付接口 + no-op。
 
@@ -239,9 +464,39 @@ class RerankSettings(_Section):
     provider: str = Field("dashscope", validation_alias="TOOLHIVE_RERANK_PROVIDER")
     endpoint: str = Field("", validation_alias="TOOLHIVE_RERANK_ENDPOINT")
     model: str = Field("", validation_alias="TOOLHIVE_RERANK_MODEL")
-    api_key: str = Field("", validation_alias="TOOLHIVE_RERANK_API_KEY")
+    # repr=False：密钥原文，理由同 SecretSettings.keks
+    api_key: str = Field("", validation_alias="TOOLHIVE_RERANK_API_KEY", repr=False)
     timeout_ms: int = Field(1000, validation_alias="TOOLHIVE_RERANK_TIMEOUT_MS")
     max_candidates: int = Field(50, validation_alias="TOOLHIVE_RERANK_MAX_CANDIDATES")
+
+
+def _validate_rerank(cfg: RerankSettings, report: ConfigReport) -> None:
+    """校验 ``rerank`` 分区。紧挨着 :class:`RerankSettings`，让字段与它的规则在同一处。
+
+    **关闭时允许留空；开启时必须齐全。**"""
+
+    if cfg.enabled:
+        for field_name, field_value in (
+            ("endpoint", cfg.endpoint),
+            ("model", cfg.model),
+            ("api_key", cfg.api_key),
+        ):
+            if not field_value:
+                report.problems.append(
+                    ConfigProblem(
+                        "rerank",
+                        field_name,
+                        f"精排已启用（enabled=true）时 {field_name} 不得为空",
+                    )
+                )
+        if cfg.endpoint and not cfg.endpoint.startswith(("http://", "https://")):
+            report.problems.append(
+                ConfigProblem("rerank", "endpoint", "必须以 http:// 或 https:// 开头")
+            )
+        if cfg.timeout_ms <= 0:
+            report.problems.append(ConfigProblem("rerank", "timeout_ms", "必须 > 0"))
+        if cfg.max_candidates < 1:
+            report.problems.append(ConfigProblem("rerank", "max_candidates", "必须 >= 1"))
 
 
 class IdempotencySettings(_Section):
@@ -249,6 +504,15 @@ class IdempotencySettings(_Section):
 
     ttl_seconds: int = Field(86400, validation_alias="TOOLHIVE_IDEMPOTENCY_TTL_SECONDS")
     max_result_bytes: int = Field(262144, validation_alias="TOOLHIVE_IDEMPOTENCY_MAX_RESULT_BYTES")
+
+
+def _validate_idempotency(cfg: IdempotencySettings, report: ConfigReport) -> None:
+    """校验 ``idempotency`` 分区。紧挨着 :class:`IdempotencySettings`，让字段与它的规则在同一处。"""
+
+    if cfg.ttl_seconds <= 0:
+        report.problems.append(ConfigProblem("idempotency", "ttl_seconds", "必须 > 0"))
+    if cfg.max_result_bytes < 1:
+        report.problems.append(ConfigProblem("idempotency", "max_result_bytes", "必须 >= 1"))
 
 
 class LoggingSettings(_Section):
@@ -282,6 +546,24 @@ class LoggingSettings(_Section):
 # ---------------------------------------------------------------------------
 
 
+def _validate_logging(cfg: LoggingSettings, report: ConfigReport) -> None:
+    """校验 ``logging`` 分区。紧挨着 :class:`LoggingSettings`，让字段与它的规则在同一处。
+
+    **桶边界必须递增且非空**——桶不递增的直方图算出来的分位数没有意义。"""
+
+    buckets = cfg.latency_buckets
+    if not buckets:
+        report.problems.append(
+            ConfigProblem(
+                "logging",
+                "latency_buckets_ms",
+                "解析失败或为空，应为逗号分隔的毫秒整数，如 10,25,50,100,200,500,1000,2000",
+            )
+        )
+    elif any(b <= 0 for b in buckets):
+        report.problems.append(ConfigProblem("logging", "latency_buckets_ms", "桶边界必须 > 0"))
+
+
 class Settings:
     """全量配置。由 ``load_settings()`` 构造，不直接实例化。"""
 
@@ -291,6 +573,7 @@ class Settings:
         runtime: RuntimeSettings,
         database: DatabaseSettings,
         redis: RedisSettings,
+        upstream: UpstreamSettings,
         snowflake: SnowflakeSettings,
         secret: SecretSettings,
         embedding: EmbeddingSettings,
@@ -302,6 +585,7 @@ class Settings:
         self.runtime = runtime
         self.database = database
         self.redis = redis
+        self.upstream = upstream
         self.snowflake = snowflake
         self.secret = secret
         self.embedding = embedding
@@ -328,6 +612,11 @@ class Settings:
                 "pool": f"{self.database.pool_min}-{self.database.pool_max}",
             },
             "redis": {"host": _redact_url(self.redis.url)},
+            "upstream": {
+                "connect_timeout_s": self.upstream.connect_timeout_seconds,
+                "read_timeout_s": self.upstream.read_timeout_seconds,
+                "max_connections": self.upstream.max_connections,
+            },
             "snowflake": {
                 "datacenter_id": self.snowflake.datacenter_id,
                 "worker_id": self.snowflake.worker_id,
@@ -437,6 +726,7 @@ def _load_from(env_file: str | Path | None) -> Settings:
         ("runtime", RuntimeSettings),
         ("database", DatabaseSettings),
         ("redis", RedisSettings),
+        ("upstream", UpstreamSettings),
         ("snowflake", SnowflakeSettings),
         ("secret", SecretSettings),
         ("embedding", EmbeddingSettings),
@@ -489,160 +779,16 @@ def validate(settings: Settings) -> ConfigReport:
     """
     report = ConfigReport()
 
-    # ---- database -------------------------------------------------------
-    if not settings.database.url.startswith(("postgresql://", "postgres://")):
-        report.problems.append(
-            ConfigProblem("database", "url", "连接串必须以 postgresql:// 或 postgres:// 开头")
-        )
-    if settings.database.pool_min < 1:
-        report.problems.append(ConfigProblem("database", "pool_min", "必须 >= 1"))
-    if settings.database.pool_max < settings.database.pool_min:
-        report.problems.append(
-            ConfigProblem(
-                "database", "pool_max", f"必须 >= pool_min（{settings.database.pool_min}）"
-            )
-        )
-    if settings.database.command_timeout <= 0:
-        report.problems.append(ConfigProblem("database", "command_timeout", "必须 > 0"))
-
-    # ---- redis ----------------------------------------------------------
-    if not settings.redis.url.startswith(("redis://", "rediss://", "unix://")):
-        report.problems.append(
-            ConfigProblem("redis", "url", "连接串必须以 redis:// 或 rediss:// 开头")
-        )
-
-    # ---- snowflake（设计 §4.4）------------------------------------------
-    # 位分配 1 符号 + 41 时间戳 + 5 数据中心 + 5 机器 + 12 序列，
-    # 因此数据中心与机器各占 5 位，取值 0..31。上限来自设计 §4.4，不要在这里放宽或收紧。
-    if not 0 <= settings.snowflake.datacenter_id <= 31:
-        report.problems.append(
-            ConfigProblem("snowflake", "datacenter_id", "必须在 0..31（5 位，设计 §4.4）")
-        )
-    if not 0 <= settings.snowflake.worker_id <= 31:
-        report.problems.append(
-            ConfigProblem("snowflake", "worker_id", "必须在 0..31（5 位，设计 §4.4）")
-        )
-
-    # ---- secret（§10.1）-------------------------------------------------
-    parsed_keks = settings.secret._parsed()
-    if not parsed_keks:
-        report.problems.append(
-            ConfigProblem("secret", "keks", "必须是 JSON 对象，形如 {\"k1\": \"<32 字节 base64>\"}")
-        )
-    else:
-        for kek_id, value in parsed_keks.items():
-            try:
-                raw = base64.b64decode(value, validate=True)
-            except (binascii.Error, ValueError):
-                report.problems.append(
-                    ConfigProblem("secret", "keks", f"KEK {kek_id!r} 不是合法的 base64")
-                )
-                continue
-            if len(raw) != 32:
-                report.problems.append(
-                    ConfigProblem(
-                        "secret", "keks", f"KEK {kek_id!r} 解码后 {len(raw)} 字节，AES-256 要求 32"
-                    )
-                )
-        if settings.secret.active_kek_id not in parsed_keks:
-            report.problems.append(
-                ConfigProblem(
-                    "secret",
-                    "active_kek_id",
-                    f"{settings.secret.active_kek_id!r} 不在 KEKS 中"
-                    f"（现有：{sorted(parsed_keks)}）",
-                )
-            )
-
-    # ---- embedding（§6.4 / §6.5）----------------------------------------
-    if not settings.embedding.base_url.startswith(("http://", "https://")):
-        report.problems.append(
-            ConfigProblem("embedding", "base_url", "必须以 http:// 或 https:// 开头")
-        )
-    if not settings.embedding.model:
-        report.problems.append(ConfigProblem("embedding", "model", "不得为空"))
-    if settings.embedding.dim <= 0:
-        report.problems.append(ConfigProblem("embedding", "dim", "必须 > 0"))
-    if settings.embedding.timeout_seconds <= 0:
-        report.problems.append(ConfigProblem("embedding", "timeout_seconds", "必须 > 0"))
-    if not settings.embedding.api_key:
-        # 不拒绝启动：设计 §6.6 规定向量服务不可用时**降级为纯关键词检索**（degraded=true）。
-        # 但缺 Key 是明确的部署失误，必须显式告警。
-        report.problems.append(
-            ConfigProblem(
-                "embedding",
-                "api_key",
-                "未配置：检索将退化为纯关键词（设计 §6.6），请确认这是有意为之",
-                severity="warning",
-            )
-        )
-
-    # ---- retrieval（§6.1）-----------------------------------------------
-    if not settings.retrieval.active_index_version:
-        report.problems.append(
-            ConfigProblem("retrieval", "active_index_version", "不得为空（设计 §6.5 要求显式指定）")
-        )
-    if settings.retrieval.default_k < 1:
-        report.problems.append(ConfigProblem("retrieval", "default_k", "必须 >= 1"))
-    if not 1 <= settings.retrieval.max_k <= MAX_SEARCH_K:
-        report.problems.append(
-            ConfigProblem(
-                "retrieval",
-                "max_k",
-                f"必须在 1..{MAX_SEARCH_K}（设计 §6.1 规定上限 {MAX_SEARCH_K}）",
-            )
-        )
-    if settings.retrieval.default_k > settings.retrieval.max_k:
-        report.problems.append(
-            ConfigProblem(
-                "retrieval",
-                "default_k",
-                f"不得大于 max_k（{settings.retrieval.default_k} > {settings.retrieval.max_k}）",
-            )
-        )
-    if settings.retrieval.description_snippet_chars < 1:
-        report.problems.append(
-            ConfigProblem("retrieval", "description_snippet_chars", "必须 >= 1")
-        )
-
-    # ---- rerank（§6.2）：关闭时允许留空；开启时必须齐全 ------------------
-    if settings.rerank.enabled:
-        for name, value in (
-            ("endpoint", settings.rerank.endpoint),
-            ("model", settings.rerank.model),
-            ("api_key", settings.rerank.api_key),
-        ):
-            if not value:
-                report.problems.append(
-                    ConfigProblem("rerank", name, f"精排已启用（enabled=true）时 {name} 不得为空")
-                )
-        if settings.rerank.endpoint and not settings.rerank.endpoint.startswith(("http://", "https://")):
-            report.problems.append(
-                ConfigProblem("rerank", "endpoint", "必须以 http:// 或 https:// 开头")
-            )
-        if settings.rerank.timeout_ms <= 0:
-            report.problems.append(ConfigProblem("rerank", "timeout_ms", "必须 > 0"))
-        if settings.rerank.max_candidates < 1:
-            report.problems.append(ConfigProblem("rerank", "max_candidates", "必须 >= 1"))
-
-    # ---- idempotency（§7.2）---------------------------------------------
-    if settings.idempotency.ttl_seconds <= 0:
-        report.problems.append(ConfigProblem("idempotency", "ttl_seconds", "必须 > 0"))
-    if settings.idempotency.max_result_bytes < 1:
-        report.problems.append(ConfigProblem("idempotency", "max_result_bytes", "必须 >= 1"))
-
-    # ---- logging（§11）：桶边界必须递增且非空 ----------------------------
-    buckets = settings.logging.latency_buckets
-    if not buckets:
-        report.problems.append(
-            ConfigProblem(
-                "logging",
-                "latency_buckets_ms",
-                "解析失败或为空，应为逗号分隔的毫秒整数，如 10,25,50,100,200,500,1000,2000",
-            )
-        )
-    elif any(b <= 0 for b in buckets):
-        report.problems.append(ConfigProblem("logging", "latency_buckets_ms", "桶边界必须 > 0"))
+    _validate_database(settings.database, report)
+    _validate_redis(settings.redis, report)
+    _validate_upstream(settings.upstream, report)
+    _validate_snowflake(settings.snowflake, report)
+    _validate_secret(settings.secret, report)
+    _validate_embedding(settings.embedding, report)
+    _validate_retrieval(settings.retrieval, report)
+    _validate_rerank(settings.rerank, report)
+    _validate_idempotency(settings.idempotency, report)
+    _validate_logging(settings.logging, report)
 
     return report
 
