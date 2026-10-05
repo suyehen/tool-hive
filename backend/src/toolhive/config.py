@@ -32,7 +32,8 @@ import base64
 import binascii
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
@@ -368,10 +369,35 @@ def _redact_url(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _environ_taken_over(values: Mapping[str, str]) -> Iterator[None]:
+    """临时把 ``os.environ`` 换成 ``values``，退出时**原样还原**。
+
+    为什么需要接管进程环境：pydantic-settings 的取值来源里**没有"传入一个字典"的入口**，
+    ``EnvSettingsSource`` 永远去读 ``os.environ``。
+
+    > 这里曾经写成 ``section_type(_environ=environ)``，那是**错的**：
+    > pydantic-settings 不认 ``_environ`` 这个参数，而各分区都设了 ``extra="ignore"``，
+    > 于是它被**静默丢弃**，参数形同虚设——传进去的值一个都没用上，
+    > 却会在缺少 ``.env`` 时报出一堆"字段缺失"，极难定位。
+
+    接管期间是**整体替换**而不是叠加：这样结果只取决于调用方传了什么，
+    不受当前进程里残留的 ``TOOLHIVE_*`` 影响。
+    """
+    saved = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ.update(values)
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+
 def load_settings(
     env_file: str | Path | None = None,
     *,
-    environ: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> Settings:
     """加载配置并校验。**校验不通过即抛 ``ConfigError``**——调用方不得吞掉它。
 
@@ -381,15 +407,29 @@ def load_settings(
         ``.env`` 文件路径。为 ``None`` 时，若当前目录存在 ``.env`` 则自动加载。
         真实环境变量**优先于** ``.env``（pydantic-settings 的既定行为）。
     environ:
-        仅测试用：显式传入环境变量字典，避免污染进程环境。
+        显式给出一整套环境变量，作为**唯一来源**：此时**既不读进程环境，也不读 ``.env``**。
+        用途是在不改动机器环境的前提下，校验"这样一份配置能不能通过启动校验"
+        （例如上线前核对一份待生效的配置）。
+
+        ⚠️ **它是完整替代，不是叠加。** 没给的项走默认值或报缺失，
+        不会回头去进程环境里找。想叠加请自行合并后传入：``{**os.environ, **extra}``。
     """
+    if environ is not None:
+        with _environ_taken_over(environ):
+            return _load_from(env_file=None)
+
     if env_file is None:
         candidate = Path(".env")
         env_file = candidate if candidate.is_file() else None
+    return _load_from(env_file)
 
+
+def _load_from(env_file: str | Path | None) -> Settings:
+    """从"当前进程环境 + 可选的 ``.env``"构造并校验。
+
+    **调用方负责先把环境安排好**——它自己不碰 ``os.environ``。
+    """
     section_kwargs: dict[str, Any] = {"_env_file": env_file}
-    if environ is not None:
-        section_kwargs["_environ"] = environ
 
     sections: dict[str, Any] = {}
     missing: list[ConfigProblem] = []

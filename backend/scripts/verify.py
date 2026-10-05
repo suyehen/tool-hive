@@ -25,7 +25,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import io
+import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -122,33 +125,124 @@ def run_arch() -> StageResult:
 # ---------------------------------------------------------------------------
 
 
+def _config_guard() -> list[str]:
+    """配置系统自检——**不读 ``.env``，也不依赖机器上的环境变量**。
+
+    存在的理由：``load_settings(environ=...)`` 曾经是**写了但完全没生效**的死参数——
+    实现把 ``_environ`` 传给了 pydantic-settings，而它不认这个参数，
+    又因为各分区设了 ``extra="ignore"``，于是被**静默丢弃**。
+    当时 config 段只走真实 ``.env`` 这条路径，所以这个 bug 一直测不出来。
+
+    下面四项专门覆盖"显式传入一份配置字典"这条路径：
+    值要真的生效、未给的项要回落默认值、非法配置仍要被拒、退出后环境要还原。
+    """
+    from toolhive.config import ConfigError, load_settings
+
+    # 32 个零字节的 base64 —— 明显是占位值，不是真密钥。
+    dummy_kek = base64.b64encode(b"\x00" * 32).decode()
+    base = {
+        "TOOLHIVE_DATABASE_URL": "postgresql://u:p@127.0.0.1:5432/toolhive",
+        "TOOLHIVE_REDIS_URL": "redis://:p@127.0.0.1:6379/1",
+        "TOOLHIVE_KEKS": json.dumps({"k1": dummy_kek}),
+        "TOOLHIVE_ACTIVE_KEK_ID": "k1",
+        "TOOLHIVE_EMBEDDING_BASE_URL": "https://example.invalid",
+        "TOOLHIVE_EMBEDDING_MODEL": "m",
+        # 给个占位 key：否则每次调用都会触发「api_key 未配置」告警，
+        # 而那条告警不是本守护要覆盖的路径，只会把输出刷满。
+        "TOOLHIVE_EMBEDDING_API_KEY": "dummy-not-a-real-key",
+    }
+    problems: list[str] = []
+
+    # ① environ= 必须生效，且值要真的反映到结果里
+    try:
+        probe = load_settings(
+            environ={
+                **base,
+                "TOOLHIVE_DB_POOL_MAX": "7",
+                "TOOLHIVE_SNOWFLAKE_WORKER_ID": "9",
+            }
+        )
+    except ConfigError as exc:
+        problems.append(
+            f"environ= 未生效（{len(exc.problems)} 条问题，"
+            f"首条：{exc.problems[0].message[:60]}）"
+        )
+    else:
+        if probe.database.pool_max != 7 or probe.snowflake.worker_id != 9:
+            problems.append(
+                "environ= 被接受但值没生效："
+                f"pool_max={probe.database.pool_max}（期望 7）、"
+                f"worker_id={probe.snowflake.worker_id}（期望 9）"
+            )
+
+    # ② 未提供的项必须回落默认值 —— 证明它是「完整替代」，没有偷偷去读进程环境
+    try:
+        fallback = load_settings(environ=base)
+        if fallback.database.pool_max != 20:
+            problems.append(
+                f"未提供的项没有回落默认值：pool_max={fallback.database.pool_max}（期望 20）"
+            )
+    except ConfigError as exc:
+        problems.append(f"最小可用配置被判非法（{len(exc.problems)} 条）")
+
+    # ③ 非法配置仍必须被拒 —— 否则无法区分「校验通过」与「校验根本没跑」
+    invalid_cases = (
+        (
+            "KEK 不足 32 字节",
+            {**base, "TOOLHIVE_KEKS": json.dumps({"k1": base64.b64encode(b"x" * 16).decode()})},
+        ),
+        ("ACTIVE_KEK_ID 不存在", {**base, "TOOLHIVE_ACTIVE_KEK_ID": "k9"}),
+        ("worker_id 超范围", {**base, "TOOLHIVE_SNOWFLAKE_WORKER_ID": "99"}),
+    )
+    for label, cfg in invalid_cases:
+        try:
+            load_settings(environ=cfg)
+        except ConfigError:
+            continue
+        problems.append(f"非法配置未被拒绝：{label}")
+
+    # ④ 退出后进程环境必须原样还原，不能把测试值泄漏到进程里
+    before = dict(os.environ)
+    load_settings(environ={**base, "TOOLHIVE_VERIFY_SENTINEL": "1"})
+    if dict(os.environ) != before:
+        problems.append("environ= 退出后未还原进程环境（有泄漏）")
+
+    return problems
+
+
 def run_config() -> StageResult:
-    env_file = BACKEND_ROOT / ".env"
-    if not env_file.is_file():
-        return StageResult(
-            "config",
-            SKIP,
-            [f"未找到 {env_file.name}，跳过。部署步骤见 docs/04-部署前置条件 §3"],
+    lines: list[str] = []
+
+    guard_problems = _config_guard()
+    if guard_problems:
+        lines.append(f"{FAIL}  配置系统自检（environ= 路径）")
+        lines.extend(f"      - {p}" for p in guard_problems)
+    else:
+        lines.append(
+            f"{PASS}  配置系统自检（environ= 路径）：值生效、默认值回落、非法被拒、环境还原"
         )
 
-    try:
-        from toolhive.config import ConfigError, load_settings
-    except ImportError as exc:
-        return StageResult("config", FAIL, [f"无法 import toolhive.config：{exc}"])
+    env_file = BACKEND_ROOT / ".env"
+    if not env_file.is_file():
+        lines.append(f"{SKIP}  未找到 {env_file.name}，未做真实配置校验")
+        lines.append("      部署步骤见 docs/04-部署前置条件 §3")
+        return StageResult("config", FAIL if guard_problems else SKIP, lines)
+
+    from toolhive.config import ConfigError, load_settings
 
     try:
         settings = load_settings(env_file)
     except ConfigError as exc:
-        return StageResult("config", FAIL, str(exc).splitlines())
+        lines.append(f"{FAIL}  真实 {env_file.name} 未通过校验")
+        lines.extend(f"      {line}" for line in str(exc).splitlines())
+        return StageResult("config", FAIL, lines)
 
-    import json
-
-    lines = ["配置校验通过。脱敏快照（**不含任何密钥值**）："]
+    lines.append(f"{PASS}  真实 {env_file.name} 校验通过。脱敏快照（**不含任何密钥值**）：")
     lines.extend(
         f"  {line}"
         for line in json.dumps(settings.describe(), ensure_ascii=False, indent=2).splitlines()
     )
-    return StageResult("config", PASS, lines)
+    return StageResult("config", FAIL if guard_problems else PASS, lines)
 
 
 # ---------------------------------------------------------------------------
