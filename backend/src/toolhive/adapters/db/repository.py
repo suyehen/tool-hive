@@ -42,6 +42,8 @@ __all__ = [
     "EntityNotFoundError",
     "OptimisticLockError",
     "Repository",
+    "RepositoryError",
+    "UnflushedChangesError",
 ]
 
 _log = logging.getLogger(__name__)
@@ -49,7 +51,20 @@ _log = logging.getLogger(__name__)
 ModelT = TypeVar("ModelT", bound=Base)
 
 
-class EntityNotFoundError(LookupError):
+class RepositoryError(Exception):
+    """仓储异常的共同基类，调用方可在仓储边界统一捕获。"""
+
+
+class UnflushedChangesError(RepositoryError):
+    """读取刷新或条件更新会覆盖当前对象的未 flush 修改。"""
+
+    def __init__(self, model: str, entity_id: int) -> None:
+        self.model = model
+        self.entity_id = entity_id
+        super().__init__(f"{model} id={entity_id} 存在未 flush 修改，请先明确保存或撤销")
+
+
+class EntityNotFoundError(RepositoryError, LookupError):
     """按主键查不到实体。
 
     注意：**不要把这个异常直接透给调用方**。设计 §9.3 的"不可区分原则"要求
@@ -63,7 +78,7 @@ class EntityNotFoundError(LookupError):
         self.entity_id = entity_id
 
 
-class OptimisticLockError(RuntimeError):
+class OptimisticLockError(RepositoryError, RuntimeError):
     """乐观锁冲突：``row_version`` 已被别的请求改掉。
 
     这是**正常的并发结果**，不是系统故障。调用方应当把它映射成
@@ -104,9 +119,25 @@ class Repository(Generic[ModelT]):
     def _select(self) -> Select[Any]:
         return select(self.model)
 
+    def _ensure_clean(self, entity_ids: Sequence[int]) -> None:
+        """刷新前保护本地修改，避免 autoflush=False 时静默覆盖。"""
+        ids = set(entity_ids)
+        for entity in self._session.dirty:
+            if isinstance(entity, self.model):
+                entity_id = getattr(entity, "id", None)
+                if entity_id in ids:
+                    raise UnflushedChangesError(self._model_name, entity_id)
+
     async def get_by_id(self, entity_id: int) -> ModelT | None:
-        """按主键读，**不加锁**。"""
-        result = await self._session.execute(self._select().where(self.model.id == entity_id))
+        """按主键读并刷新已加载属性，**不加锁**。
+
+        返回数据库在当前事务隔离级别下可见的状态。存在未 flush 修改时拒绝覆盖。
+        """
+        self._ensure_clean([entity_id])
+        result = await self._session.execute(
+            self._select().where(self.model.id == entity_id)
+            .execution_options(populate_existing=True)
+        )
         return result.scalar_one_or_none()
 
     async def get_for_update(self, entity_id: int) -> ModelT | None:
@@ -114,9 +145,12 @@ class Repository(Generic[ModelT]):
 
         ⚠️ 必须在事务内使用：没有事务时 ``FOR UPDATE`` 拿到的锁会在语句结束即释放，
         等于没加锁。设计 §4.3 的"并发 approve 只有一个成功"就依赖这个锁。
+        刷新会覆盖已加载属性，调用前不要保留该对象的未 flush 修改。
         """
+        self._ensure_clean([entity_id])
         result = await self._session.execute(
             self._select().where(self.model.id == entity_id).with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one_or_none()
 
@@ -135,10 +169,14 @@ class Repository(Generic[ModelT]):
         return entity
 
     async def list_by_ids(self, entity_ids: Sequence[int]) -> list[ModelT]:
-        """按一批主键读取。空列表直接返回空，不发无谓的查询。"""
+        """按一批主键读取并刷新；同样保护未 flush 修改。空列表不查询。"""
         if not entity_ids:
             return []
-        result = await self._session.execute(self._select().where(self.model.id.in_(entity_ids)))
+        self._ensure_clean(entity_ids)
+        result = await self._session.execute(
+            self._select().where(self.model.id.in_(entity_ids))
+            .execution_options(populate_existing=True)
+        )
         return list(result.scalars().all())
 
     async def exists(self, entity_id: int) -> bool:
@@ -200,7 +238,10 @@ class Repository(Generic[ModelT]):
         ``rowcount != 1`` 意味着期间有别人改过（或记录被删），此时抛
         :class:`OptimisticLockError`。**必须检查 rowcount**——
         不检查的话 UPDATE 影响 0 行也会"成功返回"，冲突被静默吞掉。
+        显式 fetch 同步身份映射，使已加载对象的字段/版本同步更新；
+        后续 touch() 从新版本递增。它不替代 ORM 修改路径自己的并发保护。
         """
+        self._ensure_clean([entity_id])
         new_version = expected_row_version + 1
         statement = (
             update(self.model)
@@ -209,6 +250,7 @@ class Repository(Generic[ModelT]):
                 self.model.row_version == expected_row_version,
             )
             .values(row_version=new_version, **dict(values))
+            .execution_options(synchronize_session="fetch")
         )
         result = await self._session.execute(statement)
         if _rowcount(result) != 1:

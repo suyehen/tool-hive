@@ -48,7 +48,9 @@ end
 
 if current > 0 then
     -- key 的 TTL 只需长到能覆盖最晚到期的那个租约，再留一倍余量。
-    redis.call('PEXPIRE', key, lease_ms * 2)
+    local latest = redis.call('ZREVRANGE', key, 0, 0, 'WITHSCORES')
+    local remaining_ms = math.max(1, tonumber(latest[2]) - now_ms)
+    redis.call('PEXPIRE', key, math.ceil(remaining_ms + lease_ms))
 end
 
 return { acquired, current }

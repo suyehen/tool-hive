@@ -2,24 +2,27 @@
 
     F:\\soft\\anaconda\\envs\\toolhive\\python.exe scripts\\verify.py
 
-一条命令跑完四段，逐条输出通过/失败，任一失败以非零码退出：
+逐条输出通过/失败/跳过，任一失败以非零码退出：
 
 ===========  ==========================================================
 1. lint      ``ruff check .``
 2. types     ``mypy src tests scripts``
 3. arch      架构断言（设计 §14.1 的全部约束，逐条一个断言）
-4. config    配置系统冒烟：从 ``.env`` 加载并做启动校验（**只打印脱敏快照**）
+4. runtime   本地异常路径回归（无外部服务）
+5. integration 显式指定验证配置后运行严格 selfcheck；未指定时报告 SKIP
+6. config    配置系统冒烟：从 ``.env`` 加载并做启动校验（**只打印脱敏快照**）
 ===========  ==========================================================
 
-设计依据：§14.3 规定 M0 的自动化验证**只保留架构断言**，
-因此本脚本不做 CI、不做测试框架，只把"最该跑的那几项"串成一条命令——
+设计依据：§14.3 保留架构断言与高影响异常路径的本地回归，
+本脚本不做 CI、不做测试框架，只把验证串成一条命令——
 目的是让"改完顺手跑一下"的成本低到不会被跳过。
 
 用法::
 
-    python scripts/verify.py                 # 四段全跑
+    python scripts/verify.py                 # 本地验证及配置；真实集成默认 SKIP
     python scripts/verify.py --no-config     # 跳过需要 .env 的那段
     python scripts/verify.py --only arch     # 只跑架构断言
+    python scripts/verify.py --no-config --integration-env .env.test  # 严格集成
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ for _stream in (sys.stdout, sys.stderr):
     if isinstance(_stream, io.TextIOWrapper):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-STAGES = ("lint", "types", "arch", "config")
+STAGES = ("lint", "types", "arch", "runtime", "integration", "config")
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -270,10 +273,34 @@ def _tail(text: str, limit: int = 40) -> list[str]:
     return [f"（前 {len(stripped) - limit} 行省略）", *stripped[-limit:]]
 
 
+def run_runtime() -> StageResult:
+    result = _run_tool([sys.executable, str(BACKEND_ROOT / "scripts" / "regression.py")])
+    return StageResult("runtime", PASS if result.returncode == 0 else FAIL,
+                       _tail(result.stdout + result.stderr))
+
+
+def run_integration(env_file: Path | None, *, required: bool = False) -> StageResult:
+    """显式选择配置才写基础设施；未选择时清楚报告 SKIP。"""
+    if env_file is None:
+        return StageResult("integration", FAIL if required else SKIP, [
+            "未执行真实 PostgreSQL/Redis 验证；使用 --integration-env <隔离环境配置>",
+            "该阶段会创建临时表及缓存键；严格模式不允许依赖不可达时跳过。",
+        ])
+    if not env_file.is_file():
+        return StageResult("integration", FAIL, ["指定的集成验证配置文件不存在"])
+    result = _run_tool([
+        sys.executable, str(BACKEND_ROOT / "scripts" / "selfcheck.py"),
+        "--strict", "--env-file", str(env_file.resolve()),
+    ])
+    return StageResult("integration", PASS if result.returncode == 0 else FAIL,
+                       _tail(result.stdout + result.stderr, limit=100))
+
+
 RUNNERS = {
     "lint": run_lint,
     "types": run_types,
     "arch": run_arch,
+    "runtime": run_runtime,
     "config": run_config,
 }
 
@@ -281,7 +308,11 @@ RUNNERS = {
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="verify",
-        description="ToolHive 手动验证：lint + 类型 + 架构断言 + 配置冒烟",
+        description="ToolHive 验证：静态、本地回归、可选严格集成及配置冒烟",
+    )
+    parser.add_argument(
+        "--integration-env", type=Path,
+        help="执行会写入临时表/缓存键的严格集成验证；指定隔离环境配置文件",
     )
     parser.add_argument(
         "--only",
@@ -292,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-config",
         action="store_true",
-        help="跳过 config 段（等价于 --only lint --only types --only arch）",
+        help="跳过读取 .env 的 config 段，仍执行本地运行时回归",
     )
     args = parser.parse_args(argv)
 
@@ -301,6 +332,8 @@ def main(argv: list[str] | None = None) -> int:
         selected = [s for s in STAGES if s in set(args.only)]
     if args.no_config:
         selected = [s for s in selected if s != "config"]
+    if args.integration_env and "integration" not in selected:
+        selected.append("integration")
 
     print("ToolHive 手动验证（任务 A5）")
     print("=" * 72)
@@ -308,7 +341,13 @@ def main(argv: list[str] | None = None) -> int:
     results: list[StageResult] = []
     for stage in selected:
         print(f"\n--- {stage} ---")
-        result = RUNNERS[stage]()
+        if stage == "integration":
+            result = run_integration(
+                args.integration_env,
+                required=bool(args.only and "integration" in args.only),
+            )
+        else:
+            result = RUNNERS[stage]()
         for line in result.lines:
             print(line)
         print(f"[{result.status}] {stage}")

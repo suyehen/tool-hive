@@ -26,6 +26,7 @@ dependencies = [
     "orjson>=3.10",
     "typer>=0.12",
     "numpy>=1.26",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -33,9 +34,10 @@ dependencies = [
 # core/ 无论如何都不得 import mcp —— 由架构断言强制（设计 §14.1 第 1 条）。
 mcp = ["mcp>=1.0"]
 dev = ["ruff>=0.6", "mypy>=1.11"]
+# 可选隔离 Lua 验证，不是生产运行依赖。
+lua-test = ["fakeredis[lua]>=2.24,<3"]
 
-[project.scripts]
-toolhive = "toolhive.cli.main:app"
+# 管理 CLI 尚未实现；J 模块交付 cli.main 后再声明 toolhive entry point。
 
 [tool.setuptools.packages.find]
 where = ["src"]

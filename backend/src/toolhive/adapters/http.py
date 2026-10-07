@@ -28,6 +28,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Final
@@ -191,13 +192,19 @@ class UpstreamClient:
             # 把 trace_id 带给上游，便于跨系统串链路（设计 §11）。
             merged[TRACE_HEADER] = trace_id
 
-        return await self._client.request(
-            method,
-            url,
-            headers=merged or None,
-            content=content,
-            timeout=timeout,
-        )
+        async with asyncio.timeout_at(deadline.expires_at if deadline else None) as budget:
+            try:
+                return await self._client.request(
+                    method,
+                    url,
+                    headers=merged or None,
+                    content=content,
+                    timeout=timeout,
+                )
+            except asyncio.CancelledError:
+                if budget.expired():
+                    raise DeadlineExceededError("整体 deadline 已耗尽，出站请求已取消") from None
+                raise
 
     async def aclose(self) -> None:
         await self._client.aclose()

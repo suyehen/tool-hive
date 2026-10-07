@@ -105,7 +105,8 @@ class AuditMixin:
         > * ``touch()`` 走 ORM 属性赋值 → 版本号**无条件**递增（后写者赢）。
         > * :meth:`Repository.update_with_row_version` 走**条件 UPDATE**
         >   （``WHERE row_version = :expected``）→ 这才是真正的并发保护。
-        >   它直接用 Core UPDATE 作用于表，不经过实体，因此**不会**与 ``touch()`` 重复递增。
+        >   它经 Session.execute 的 ORM DML 路径执行并同步身份映射；
+        >   随后的 touch() 代表另一次修改，从同步后的版本递增。
         """
         self.update_by_id = actor_id
         self.update_by_name = actor_name
@@ -132,7 +133,7 @@ class RowVersionMixin:
     """
 
     row_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("1"), default=1
+        Integer, nullable=False, server_default=text("0"), default=0
     )
 
 

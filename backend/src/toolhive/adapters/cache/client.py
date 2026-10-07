@@ -190,7 +190,7 @@ class ScriptRegistry:
         参数会先经 :func:`_validate_script_args` 校验——类型不对时**在发往 Redis 之前**
         就报出"哪个脚本的第几个参数"，而不是让它烂在编码阶段。
 
-        脚本一律返回 Lua table（在 Python 侧是 ``list``），元素是整数或字符串。
+        计数脚本返回 Lua table，worker 租约脚本返回整数；统一转换成 list。
         返回类型标成 ``list[Any]``：Redis 的返回值形状由脚本决定，
         强行定死类型只会让每处调用都要 cast。
         """
@@ -221,5 +221,5 @@ class ScriptRegistry:
     def _as_list(value: object) -> list[Any]:
         if isinstance(value, list):
             return value
-        # 脚本只返回 table，所以走到这里说明脚本被改坏了。
+        # worker 租约脚本返回标量，保持调用方统一使用 result[0]。
         return [value]

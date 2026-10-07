@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
 import time
 import uuid
@@ -193,17 +194,25 @@ class LatencyBuckets:
 
     @property
     def labels(self) -> tuple[str, ...]:
-        """全部可能的桶标签，含溢出桶。"""
+        """累计桶名，含 +Inf；与单次观测的区间标签区分。"""
         labels = [f"le_{b}" for b in self._bounds]
-        labels.append(f"gt_{self._bounds[-1]}")
+        labels.append("le_+Inf")
         return tuple(labels)
 
     def label(self, latency_ms: float) -> str:
-        """把一次观测归入某个桶。"""
+        """返回单次观测的区间标签；不返回累计桶名。
+
+        首区间为 [0, upper]，后续为 (lower, upper]；溢出为 (lower, +Inf)。
+        例如 30ms → range_25_50_ms，0ms → range_0_10_ms。
+        """
+        if not math.isfinite(latency_ms) or latency_ms < 0:
+            raise ValueError("延迟必须是有限的非负毫秒值")
+        lower = 0
         for bound in self._bounds:
             if latency_ms <= bound:
-                return f"le_{bound}"
-        return f"gt_{self._bounds[-1]}"
+                return f"range_{lower}_{bound}_ms"
+            lower = bound
+        return f"range_{lower}_inf_ms"
 
     def __repr__(self) -> str:  # pragma: no cover - 仅调试用
         return f"LatencyBuckets({list(self._bounds)})"
@@ -223,9 +232,12 @@ class LatencyHistogram:
         self._sum_ms = 0.0
 
     def observe(self, latency_ms: float) -> str:
-        """记录一次观测，返回它落入的桶标签。"""
+        """更新累计桶，返回单次观测区间标签（不是累计桶名）。"""
         label = self._buckets.label(latency_ms)
-        self._counts[label] += 1
+        for bound in self._buckets.bounds:
+            if latency_ms <= bound:
+                self._counts[f"le_{bound}"] += 1
+        self._counts["le_+Inf"] += 1
         self._total += 1
         self._sum_ms += latency_ms
         return label
@@ -235,7 +247,7 @@ class LatencyHistogram:
         return self._total
 
     def snapshot(self) -> dict[str, Any]:
-        """可 JSON 序列化的快照，适合直接塞进日志字段。"""
+        """buckets 是完整累计序列，含 le_+Inf；最后一项等于 count。"""
         return {
             "count": self._total,
             "sum_ms": round(self._sum_ms, 3),
@@ -264,13 +276,13 @@ def log_latency(
     level: int = logging.INFO,
     **fields: object,
 ) -> str:
-    """记录一次延迟观测（含桶标签）。返回桶标签，便于调用方累计。
+    """记录一次延迟观测。返回单次区间标签，日志使用 latency_interval。
 
     典型用法::
 
         log_latency(log, operation="retrieval.search", latency_ms=42.7, buckets=b)
         # → {"msg": "latency", "operation": "retrieval.search",
-        #    "latency_ms": 42.7, "latency_bucket": "le_50", "trace_id": "..."}
+        #    "latency_ms": 42.7, "latency_interval": "range_25_50_ms", "trace_id": "..."}
     """
     label = buckets.label(latency_ms)
     logger.log(
@@ -279,7 +291,7 @@ def log_latency(
         extra={
             "operation": operation,
             "latency_ms": round(latency_ms, 3),
-            "latency_bucket": label,
+            "latency_interval": label,
             **fields,
         },
     )

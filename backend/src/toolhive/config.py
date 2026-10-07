@@ -34,17 +34,26 @@ import json
 import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 from pydantic import Field, ValidationError
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 __all__ = [
     "ConfigError",
     "ConfigProblem",
+    "ManagementSettings",
     "Settings",
+    "load_database_settings",
+    "load_management_settings",
     "load_settings",
 ]
 
@@ -94,6 +103,21 @@ class ConfigReport:
         return not self.errors
 
 
+_settings_environ: ContextVar[Mapping[str, str] | None] = ContextVar(
+    "toolhive_settings_environ", default=None
+)
+
+
+class _MappingEnvSource(EnvSettingsSource):
+    """独立配置字典，不读取或修改进程环境。"""
+
+    def _load_env_vars(self) -> Mapping[str, str | None]:
+        values = _settings_environ.get()
+        if values is None:
+            return super()._load_env_vars()
+        return {key.lower(): value for key, value in values.items()}
+
+
 class _Section(BaseSettings):
     """所有配置分区的基类。
 
@@ -107,6 +131,19 @@ class _Section(BaseSettings):
         validate_default=True,
         frozen=True,
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if _settings_environ.get() is not None:
+            return init_settings, _MappingEnvSource(settings_cls)
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
 
 
 # ---------------------------------------------------------------------------
@@ -659,28 +696,13 @@ def _redact_url(url: str) -> str:
 
 
 @contextmanager
-def _environ_taken_over(values: Mapping[str, str]) -> Iterator[None]:
-    """临时把 ``os.environ`` 换成 ``values``，退出时**原样还原**。
-
-    为什么需要接管进程环境：pydantic-settings 的取值来源里**没有"传入一个字典"的入口**，
-    ``EnvSettingsSource`` 永远去读 ``os.environ``。
-
-    > 这里曾经写成 ``section_type(_environ=environ)``，那是**错的**：
-    > pydantic-settings 不认 ``_environ`` 这个参数，而各分区都设了 ``extra="ignore"``，
-    > 于是它被**静默丢弃**，参数形同虚设——传进去的值一个都没用上，
-    > 却会在缺少 ``.env`` 时报出一堆"字段缺失"，极难定位。
-
-    接管期间是**整体替换**而不是叠加：这样结果只取决于调用方传了什么，
-    不受当前进程里残留的 ``TOOLHIVE_*`` 影响。
-    """
-    saved = dict(os.environ)
+def _mapping_settings(values: Mapping[str, str] | None) -> Iterator[None]:
+    """为当前上下文设置独立来源；不清空进程环境，也不影响其他线程。"""
+    token = _settings_environ.set(values)
     try:
-        os.environ.clear()
-        os.environ.update(values)
         yield
     finally:
-        os.environ.clear()
-        os.environ.update(saved)
+        _settings_environ.reset(token)
 
 
 def load_settings(
@@ -704,13 +726,89 @@ def load_settings(
         不会回头去进程环境里找。想叠加请自行合并后传入：``{**os.environ, **extra}``。
     """
     if environ is not None:
-        with _environ_taken_over(environ):
+        with _mapping_settings(environ):
             return _load_from(env_file=None)
 
     if env_file is None:
         candidate = Path(".env")
         env_file = candidate if candidate.is_file() else None
     return _load_from(env_file)
+
+
+SectionT = TypeVar("SectionT", bound=_Section)
+
+
+def _section_for_role(
+    section: str, section_type: type[SectionT], env_file: str | Path | None
+) -> SectionT:
+    """按角色加载一项，并统一配置异常的脱敏格式。"""
+    try:
+        kwargs: dict[str, Any] = {"_env_file": env_file}
+        return section_type(**kwargs)
+    except ValidationError as exc:
+        raise ConfigError([
+            ConfigProblem(section, ".".join(str(p) for p in err["loc"]),
+                          _format_validation_error(section, err))
+            for err in exc.errors()
+        ]) from None
+
+
+def _role_env_file(env_file: str | Path | None, environ: Mapping[str, str] | None) -> Path | None:
+    if environ is not None:
+        return None
+    if env_file is not None:
+        return Path(env_file)
+    candidate = Path(".env")
+    return candidate if candidate.is_file() else None
+
+
+def load_database_settings(
+    env_file: str | Path | None = None, *, environ: Mapping[str, str] | None = None
+) -> DatabaseSettings:
+    """迁移只加载数据库配置，不要求 KEK、Redis 或模型服务。"""
+    with _mapping_settings(environ):
+        cfg: DatabaseSettings = _section_for_role(
+            "database", DatabaseSettings, _role_env_file(env_file, environ)
+        )
+    report = ConfigReport()
+    _validate_database(cfg, report)
+    if not report.ok:
+        raise ConfigError(report.errors)
+    return cfg
+
+
+@dataclass(frozen=True)
+class ManagementSettings:
+    """管理进程的配置；没有 KEK 和任何解密能力。"""
+
+    runtime: RuntimeSettings
+    database: DatabaseSettings
+    redis: RedisSettings
+    snowflake: SnowflakeSettings
+    logging: LoggingSettings
+
+
+def load_management_settings(
+    env_file: str | Path | None = None, *, environ: Mapping[str, str] | None = None
+) -> ManagementSettings:
+    """普通管理 CLI/admin 加载器；索引和凭据任务委托运行面执行。"""
+    with _mapping_settings(environ):
+        source_file = _role_env_file(env_file, environ)
+        cfg = ManagementSettings(
+            runtime=_section_for_role("runtime", RuntimeSettings, source_file),
+            database=_section_for_role("database", DatabaseSettings, source_file),
+            redis=_section_for_role("redis", RedisSettings, source_file),
+            snowflake=_section_for_role("snowflake", SnowflakeSettings, source_file),
+            logging=_section_for_role("logging", LoggingSettings, source_file),
+        )
+    report = ConfigReport()
+    _validate_database(cfg.database, report)
+    _validate_redis(cfg.redis, report)
+    _validate_snowflake(cfg.snowflake, report)
+    _validate_logging(cfg.logging, report)
+    if not report.ok:
+        raise ConfigError(report.errors)
+    return cfg
 
 
 def _load_from(env_file: str | Path | None) -> Settings:

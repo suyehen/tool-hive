@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import re
 import sys
+from collections.abc import Mapping
 
 import asyncpg
 import httpx
@@ -35,6 +37,20 @@ NON_BUSINESS_TABLES = ("alembic_version",)
 
 BLOCKING: list[str] = []
 WARNING: list[str] = []
+
+
+def is_single_active_index(row: Mapping[str, object] | None) -> bool:
+    """检查指定索引的键、唯一性、有效性与谓词，不接受任意 UNIQUE。"""
+    if row is None:
+        return False
+    predicate = re.sub(r"::(?:text|character varying)", "", str(row.get("predicate", "")))
+    predicate = re.sub(r"[()\s]", "", predicate)
+    return (
+        bool(row.get("indisunique"))
+        and bool(row.get("indisvalid"))
+        and row.get("columns") == ["status"]
+        and predicate == "status='active'"
+    )
 
 
 def ok(msg: str) -> None:
@@ -120,11 +136,19 @@ async def check_postgres() -> None:
         # index_meta 单活唯一约束
         if n == EXPECTED_TABLE_COUNT:
             row = await conn.fetchrow(
-                "SELECT indexname FROM pg_indexes "
-                "WHERE tablename = 'index_meta' AND indexdef ILIKE '%UNIQUE%' LIMIT 1"
+                "SELECT i.indisunique, i.indisvalid, "
+                "pg_get_expr(i.indpred, i.indrelid) AS predicate, "
+                "ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(num, ord) "
+                "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.num "
+                "WHERE k.ord <= i.indnkeyatts ORDER BY k.ord) AS columns "
+                "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_class t ON t.oid = i.indrelid "
+                "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                "WHERE n.nspname = 'public' AND t.relname = 'index_meta' "
+                "AND c.relname = 'uq_index_meta_single_active'"
             )
-            if row:
-                ok(f"index_meta 单活唯一约束存在（{row['indexname']}）")
+            if is_single_active_index(row):
+                ok("index_meta 单活唯一约束存在且有效（uq_index_meta_single_active）")
             else:
                 bad("index_meta 缺少 UNIQUE 约束 —— DDL 未正确执行")
 

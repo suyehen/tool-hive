@@ -212,6 +212,12 @@ CREATE TABLE tool_version (
     -- 以下为定义快照（版本不可变）
     name           varchar(200) NOT NULL,
     description    text,
+    domain         varchar(64),
+    system         varchar(64),
+    tags           text[]      NOT NULL DEFAULT '{}',
+    risk           varchar(16) NOT NULL DEFAULT 'low',
+    executable     boolean     NOT NULL DEFAULT true,
+    discoverable   boolean     NOT NULL DEFAULT true,
     input_schema   jsonb,
     output_schema  jsonb,
     status         varchar(24)  NOT NULL DEFAULT 'draft',
@@ -228,19 +234,22 @@ CREATE TABLE tool_version (
     update_time    timestamptz
 );
 CREATE UNIQUE INDEX uq_tool_version         ON tool_version (tool_id, version);
+CREATE UNIQUE INDEX uq_tool_version_owner   ON tool_version (tool_id, id);
 CREATE INDEX        idx_tool_version_status ON tool_version (status);
 
 CREATE TABLE tool_channel (
     id             bigint      PRIMARY KEY,
     tool_id        bigint      NOT NULL REFERENCES tool(id),
     name           varchar(16) NOT NULL,                     -- stable | beta | canary
-    version_id     bigint      NOT NULL REFERENCES tool_version(id),
+    version_id     bigint      NOT NULL,
     create_by_id   bigint,
     create_by_name varchar(128),
     create_time    timestamptz NOT NULL DEFAULT now(),
     update_by_id   bigint,
     update_by_name varchar(128),
-    update_time    timestamptz
+    update_time    timestamptz,
+    CONSTRAINT fk_channel_version_owner FOREIGN KEY (tool_id, version_id)
+        REFERENCES tool_version (tool_id, id)
 );
 CREATE UNIQUE INDEX uq_tool_channel ON tool_channel (tool_id, name);
 
@@ -249,11 +258,11 @@ CREATE TABLE execution_binding (
     id              bigint       PRIMARY KEY,
     version_id      bigint       NOT NULL REFERENCES tool_version(id),
     provider_id     bigint       NOT NULL REFERENCES provider(id),
-    method          varchar(8),                              -- mcp/local 类型可空
+    method          varchar(8),                              -- mcp 空；local 固定 COMPUTE
     path_template   varchar(512),                            -- 支持 {arg} 占位符
-    param_mapping   jsonb        NOT NULL DEFAULT '{}'::jsonb,-- {query:{},body:{},headers:{}}
-    timeout_seconds integer      NOT NULL DEFAULT 5,
-    retry_max       integer      NOT NULL DEFAULT 0,
+    param_mapping   jsonb,                                   -- http 必填；mcp/local 空
+    timeout_seconds integer,                                -- 空时使用执行配置默认值
+    retry_max       integer,                                -- 空时使用执行配置默认值
     create_by_id    bigint,
     create_by_name  varchar(128),
     create_time     timestamptz  NOT NULL DEFAULT now(),
@@ -514,7 +523,7 @@ pgvector 对 `vector` 类型的索引上限是 **2000 维**，`halfvec`（半精
 2. **之后所有 schema 变更只走 Alembic**，本文档**不再更新**
 3. `C2` 的**人工核对**保证 `ORM metadata` == 迁移结果 —— 这条能同时兜住"ORM 漏写字段"和"迁移漏改"两类问题
 
-### 两条必须核对的不变量
+### 必须核对的不变量
 
 本文档的三条全局约定里，有两条**可以机器检查**，但 **M0 不建测试套件**（设计 §14.3），
 因此归入 `A6` 的架构断言或 `C2` 的人工核对：
@@ -523,6 +532,9 @@ pgvector 对 `vector` 类型的索引上限是 **2000 维**，`halfvec`（半精
 |---|---|
 | **每张表都有雪花 `bigint` 主键** | 遍历 `Base.metadata.tables`，断言 `id` 列存在、类型为 `BigInteger`、是主键 |
 | **每张表都有全部 6 个审计字段** | 断言 6 个列名在每张表上都存在（`update_*` 在追加型表上可空，但**必须存在**） |
+| **版本策略快照完整** | tool_version 包含 domain/system/tags/risk/executable/discoverable，stable 切换时才更新 Tool 投影 |
+| **Channel 不能跨工具指向版本** | (tool_id,version_id) 复合外键拒绝跨工具指向，服务层同时校验 published 状态 |
+| **row_version 初值一致** | ORM 的 default/server_default 与迁移统一为 0 |
 
 > 这两条的价值在于：新增表时如果漏了审计字段，**应当在写代码时就被发现**——
 > 而不是等到某次审计追溯时才发现记录里没有操作人。

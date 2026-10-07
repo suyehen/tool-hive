@@ -15,6 +15,8 @@ M0 的决定仍然是"不建测试套件"（设计 §14.3），所以本脚本�
 改完代码跑一遍，就能知道有没有把运行时行为改坏。
 
 基础设施不可达时**跳过而不是失败**——它不该成为"没开数据库就没法验证代码"的阻碍。
+指定 --strict 时，任一跳过项都会导致失败；verify 的 integration 阶段固定使用严格模式。
+每次运行使用独立 Redis key 前缀和临时表名，只清理本次创建的对象。
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
-_KEY_PREFIX = "toolhive:selfcheck:"
+_KEY_PREFIX = f"toolhive:selfcheck:{uuid.uuid4().hex}:"
 
 
 @dataclass
@@ -68,6 +70,10 @@ class Report:
     def passed(self) -> int:
         return sum(1 for status, _ in self.lines if status == PASS)
 
+    @property
+    def skipped(self) -> int:
+        return sum(1 for status, _ in self.lines if status == SKIP)
+
     def render(self) -> str:
         out = [f"  [{status}] {name}" for status, name in self.lines]
         out.append("")
@@ -75,17 +81,21 @@ class Report:
         return "\n".join(out)
 
 
+def exit_code(report: Report, *, strict: bool) -> int:
+    return 1 if report.failed or (strict and report.skipped) else 0
+
+
 # ---------------------------------------------------------------------------
 # Redis 原语（含 BUG-1 回归）
 # ---------------------------------------------------------------------------
 
 
-async def check_cache(report: Report) -> None:
+async def check_cache(report: Report, env_file: Path) -> None:
     from toolhive.adapters.cache.client import ScriptRegistry, create_client, ping
     from toolhive.adapters.cache.primitives import CachePrimitives, now_ms
     from toolhive.config import load_settings
 
-    settings = load_settings(BACKEND_ROOT / ".env")
+    settings = load_settings(env_file)
     client = create_client(settings.redis)
     if not await ping(client):
         report.skip("Redis 不可达，跳过缓存原语自检")
@@ -210,7 +220,8 @@ async def check_cache(report: Report) -> None:
         # 合法参数不应被误拦
         report.check(
             "参数校验：合法参数不被误拦",
-            bool(await reg.run(client, "token_bucket", keys=["k"], args=[1, 1.0, now_ms(), 1])),
+            bool(await reg.run(client, "token_bucket", keys=[_KEY_PREFIX + "valid"],
+                               args=[1, 1.0, now_ms(), 1])),
         )
     finally:
         stale = [k async for k in client.scan_iter(match=_KEY_PREFIX + "*")]
@@ -435,10 +446,10 @@ _CONFIG_CASES: tuple[tuple[str, str, dict[str, object], set[tuple[str, str]]], .
 )
 
 
-def check_config(report: Report) -> None:
+def check_config(report: Report, env_file: Path) -> None:
     from toolhive.config import Settings, load_settings, validate
 
-    base = load_settings(BACKEND_ROOT / ".env")
+    base = load_settings(env_file)
 
     def variant(section: str, changes: dict[str, object]) -> Settings:
         # Settings 是普通类（非 pydantic），只能按 11 个关键字参数重建；
@@ -473,8 +484,10 @@ def check_config(report: Report) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def check_database(report: Report) -> None:
-    from sqlalchemy import String, select, text
+async def check_database(report: Report, env_file: Path) -> None:
+    from typing import cast
+
+    from sqlalchemy import String, Table, select, text
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from toolhive.adapters.db.base import (
@@ -495,7 +508,7 @@ async def check_database(report: Report) -> None:
     from toolhive.adapters.snowflake import SnowflakeGenerator
     from toolhive.config import load_settings
 
-    table = "zz_selfcheck_row"
+    table = f"zz_selfcheck_row_{uuid.uuid4().hex[:12]}"
 
     class Row(Base, SnowflakePrimaryKeyMixin, RowVersionMixin, AuditMixin):
         __tablename__ = table
@@ -504,7 +517,7 @@ async def check_database(report: Report) -> None:
     class RowRepo(Repository[Row]):
         model = Row
 
-    settings = load_settings(BACKEND_ROOT / ".env")
+    settings = load_settings(env_file)
     db = Database.from_settings(settings.database)
     if not await db.ping():
         report.skip("PostgreSQL 不可达，跳过事务与仓储自检")
@@ -551,11 +564,8 @@ async def check_database(report: Report) -> None:
 
     try:
         async with db.engine.begin() as conn:
-            await conn.execute(text(f'DROP TABLE IF EXISTS "{table}"'))
-        async with db.engine.begin() as conn:
-            # 本进程只注册了 Row 一张表，所以 create_all 不带 tables 过滤也只建它。
-            # 传 tables=[Row.__table__] 会撞上 __table__ 的静态类型是 FromClause。
-            await conn.run_sync(Base.metadata.create_all)
+            # 只建本次唯一命名的测试表，不创建已注册的其他领域表。
+            await conn.run_sync(Base.metadata.create_all, tables=[cast("Table", Row.__table__)])
 
         # --- 会话不自动提交 ---
         async with db.session() as s:
@@ -592,14 +602,14 @@ async def check_database(report: Report) -> None:
         async with db.session() as s:
             repo = RowRepo(s)
             await repo.update_with_row_version(
-                row_id, expected_row_version=1, values={"name": "v2"}
+                row_id, expected_row_version=0, values={"name": "v2"}
             )
             await s.commit()
         async with db.session() as s:
             repo = RowRepo(s)
             try:
                 await repo.update_with_row_version(
-                    row_id, expected_row_version=1, values={"name": "v3"}
+                    row_id, expected_row_version=0, values={"name": "v3"}
                 )
                 report.check("乐观锁：过期版本必须冲突", False)
             except OptimisticLockError:
@@ -609,7 +619,7 @@ async def check_database(report: Report) -> None:
         # --- BUG-3 / BUG-4 回归：touch() ---
         new_version, has_time = await bump_touch(row_id)
         report.check("审计：touch() 写入的是 datetime（BUG-3 回归）", has_time)
-        report.check("审计：touch() 推进 row_version（BUG-4 回归）", new_version == 3)
+        report.check("审计：touch() 推进 row_version（BUG-4 回归）", new_version == 2)
 
         # --- 行锁 ---
         async with db.session() as holder:
@@ -637,7 +647,14 @@ async def check_database(report: Report) -> None:
 
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="selfcheck", description="模块 B 运行时自检")
-    parser.parse_args(argv)
+    parser.add_argument("--env-file", type=Path, default=BACKEND_ROOT / ".env",
+                        help="验证环境配置；脚本会写入数据库及 Redis")
+    parser.add_argument("--strict", action="store_true",
+                        help="任一基础设施检查跳过也以非零码退出")
+    args = parser.parse_args(argv)
+    if not args.env_file.is_file():
+        print("[FAIL] 未找到指定的验证环境配置文件")
+        return 1
 
     print("ToolHive 运行时自检（模块 B）")
     print("=" * 72)
@@ -653,15 +670,15 @@ async def main(argv: list[str] | None = None) -> int:
         print(f"\n--- {label} ---")
         before = len(report.lines)
         if label == "缓存原语（Redis）":
-            await check_cache(report)
+            await check_cache(report, args.env_file)
         elif label == "雪花 ID":
             await check_snowflake(report)
         elif label == "信封加密":
             check_crypto(report)
         elif label == "配置校验":
-            check_config(report)
+            check_config(report, args.env_file)
         else:
-            await check_database(report)
+            await check_database(report, args.env_file)
         for status, name in report.lines[before:]:
             print(f"  [{status}] {name}")
 
@@ -673,8 +690,16 @@ async def main(argv: list[str] | None = None) -> int:
         for status, name in report.lines:
             if status == FAIL:
                 print(f"  - {name}")
-    print("\n✅ 全部通过。" if not report.failed else "\n❌ 有失败项。")
-    return 1 if report.failed else 0
+    skipped = report.skipped
+    result_code = exit_code(report, strict=args.strict)
+    failed = bool(result_code)
+    if failed:
+        print("\n❌ 有失败项或严格模式下的跳过项。")
+    elif skipped:
+        print("\n检查完成，但基础设施验证有跳过项。")
+    else:
+        print("\n✅ 全部通过。")
+    return result_code
 
 
 if __name__ == "__main__":

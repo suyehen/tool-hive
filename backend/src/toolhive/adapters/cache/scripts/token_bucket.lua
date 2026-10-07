@@ -47,7 +47,7 @@ end
 
 -- 用固定小数位写入：Redis 会把 Lua number 转成字符串，
 -- 不指定格式时浮点表示可能在不同版本间不一致。
-redis.call('HSET', key, 'tokens', string.format('%.6f', tokens), 'ts', tostring(now_ms))
+redis.call('HSET', key, 'tokens', string.format('%.6f', tokens), 'ts', tostring(math.max(ts, now_ms)))
 
 -- 空闲桶自动回收。把一桶补满所需时间的 2 倍作为 TTL，
 -- 保证长期无人访问的 key 不会永久留在 Redis 里。

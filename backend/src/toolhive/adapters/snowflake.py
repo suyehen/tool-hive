@@ -175,25 +175,30 @@ class SnowflakeGenerator:
 
     def next_id(self) -> int:
         """产出一个 64 位正整数 ID。"""
-        if self._guard is not None:
-            # 在锁外调用：租约检查可能抛异常，不该占着发号锁。
-            self._guard()
-
         with self._lock:
+            if self._guard is not None:
+                self._guard()
             now = self._now_ms()
 
             if now < self._last_ms:
                 now = self._handle_backward(now)
 
             if now == self._last_ms:
-                self._sequence = (self._sequence + 1) & MAX_SEQUENCE
-                if self._sequence == 0:
+                sequence = self._sequence + 1
+                if sequence > MAX_SEQUENCE:
                     # 同一毫秒内 4096 个号已用完。等到下一毫秒——有界（≤1ms），
                     # 比抛错更可用；量级远超本项目，正常不会发生。
                     now = self._spin_until(self._last_ms + 1, reason="序列用尽，等待下一毫秒")
+                    sequence = 0
             else:
-                self._sequence = 0
+                sequence = 0
 
+            # 等待可能失败或跨过租约截止点；成功前不修改发号状态。
+            if self._guard is not None:
+                self._guard()
+            if not 0 <= now - self._epoch_ms < (1 << 41):
+                raise SnowflakeError("时间戳超出雪花 41 位范围，拒绝发号")
+            self._sequence = sequence
             self._last_ms = now
             self._issued += 1
 
@@ -286,6 +291,12 @@ class WorkerLease:
         instance_id: str | None = None,
         registry: ScriptRegistry | None = None,
     ) -> None:
+        if not 0 <= datacenter_id <= MAX_DATACENTER_ID:
+            raise ValueError("datacenter_id 必须在 0..31")
+        if not 0 <= worker_id <= MAX_WORKER_ID:
+            raise ValueError("worker_id 必须在 0..31")
+        if ttl_ms <= 0:
+            raise ValueError("ttl_ms 必须为正数")
         self._client = client
         self._datacenter_id = datacenter_id
         self._worker_id = worker_id
@@ -317,6 +328,7 @@ class WorkerLease:
 
         用 ``SET NX PX``：单条命令即原子，不需要 Lua。
         """
+        started = time.monotonic()
         ok = await self._client.set(self._key, self._holder_id, nx=True, px=self._ttl_ms)
         if not ok:
             current = await self._client.get(self._key)
@@ -328,7 +340,7 @@ class WorkerLease:
                 f"{self._ttl_ms}ms 后自动过期）。"
             )
         self._lost = False
-        self._last_renew_monotonic = time.monotonic()
+        self._last_renew_monotonic = started
         _log.info(
             "snowflake_lease_acquired",
             extra={"key": self._key, "holder": self._holder_id, "ttl_ms": self._ttl_ms},
@@ -337,19 +349,25 @@ class WorkerLease:
 
     async def renew(self) -> bool:
         """续租。返回是否**仍持有**。"""
+        if self._lost or self._last_renew_monotonic is None:
+            return False
+        started = time.monotonic()
         result = await self._registry.run(
             self._client, "worker_lease_renew", keys=[self._key],
             args=[self._holder_id, self._ttl_ms],
         )
         held = bool(result[0])
         if held:
-            self._last_renew_monotonic = time.monotonic()
+            self._last_renew_monotonic = started
         else:
             self._lost = True
         return held
 
     async def release(self) -> bool:
         """主动释放（正常停机时用）。返回是否真的删掉了自己的租约。"""
+        # 即使释放请求失败，也不再允许这个实例继续发号。
+        self._lost = True
+        self._last_renew_monotonic = None
         result = await self._registry.run(
             self._client, "worker_lease_release", keys=[self._key],
             args=[self._holder_id],

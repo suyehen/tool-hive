@@ -25,7 +25,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from toolhive.config import load_settings
+from toolhive.config import load_database_settings
 
 # Alembic 的 Config 对象，提供对 alembic.ini 的访问。
 config = context.config
@@ -41,8 +41,8 @@ target_metadata = None
 
 def _database_url() -> str:
     """从应用配置取连接串，并转换成 asyncpg 可用的形式。"""
-    settings = load_settings()
-    url = settings.database.url
+    settings = load_database_settings()
+    url = settings.url
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if url.startswith("postgres://"):

@@ -241,7 +241,9 @@ class EnvelopeCipher:
                 "解开正文失败：密文被篡改，或 AAD 与加密时不一致"
             ) from exc
 
-    def rewrap(self, blob: bytes, *, kek_id: str | None = None) -> bytes:
+    def rewrap(
+        self, blob: bytes, *, kek_id: str | None = None, aad: bytes | None = None
+    ) -> bytes:
         """把 DEK 换成用新 KEK 包装，**正文密文原样不动**。
 
         这是信封加密的核心收益：KEK 轮换（设计 §10.1 的第 3 步）只需要重写 48 字节，
@@ -250,16 +252,15 @@ class EnvelopeCipher:
 
         ``kek_id`` 为 ``None`` 时用当前的 ``ACTIVE_KEK_ID``。
         已经是目标 KEK 的密文原样返回（重复执行是安全的）。
+        ``aad`` 必须与加密时相同，通常为不可变的凭据 ID。
         """
         offset, current_kek_id = _split_header(blob)
         target = kek_id or self._secret.active_kek_id
-        if current_kek_id == target:
-            return blob
 
         old_kek = self._kek_or_raise(current_kek_id)
         new_kek = self._kek_or_raise(target)
 
-        need = offset + _NONCE_BYTES + _WRAPPED_DEK_BYTES
+        need = offset + _NONCE_BYTES + _WRAPPED_DEK_BYTES + _NONCE_BYTES + 16
         if len(blob) < need:
             raise DecryptionError("密文被截断")
 
@@ -268,21 +269,23 @@ class EnvelopeCipher:
         wrapped_dek = blob[wrapped_start : wrapped_start + _WRAPPED_DEK_BYTES]
         tail = blob[wrapped_start + _WRAPPED_DEK_BYTES :]
 
-        # 重包装不涉及 AAD —— 但注意：若原密文是用非空 AAD 加密的，
-        # 这里的 unwrap 必须用同样的 AAD。rewrap 因此只支持无 AAD 的密文，
-        # 需要 AAD 的场景请用 decrypt + encrypt。
+        context = aad or b""
         try:
-            dek = AESGCM(old_kek).decrypt(dek_nonce, wrapped_dek, _AAD_DEK)
+            dek = AESGCM(old_kek).decrypt(dek_nonce, wrapped_dek, _AAD_DEK + context)
         except InvalidTag as exc:
             raise DecryptionError(
                 f"重包装时无法解开 DEK（kek_id={current_kek_id!r}）。"
-                "若该密文是用 AAD 加密的，rewrap 不适用——请用 decrypt + encrypt"
+                "请检查 KEK、AAD 和密文完整性"
             ) from exc
 
+        if current_kek_id == target:
+            return blob
         new_nonce = os.urandom(_NONCE_BYTES)
-        new_wrapped = AESGCM(new_kek).encrypt(new_nonce, dek, _AAD_DEK)
+        new_wrapped = AESGCM(new_kek).encrypt(new_nonce, dek, _AAD_DEK + context)
 
         target_bytes = target.encode("utf-8")
+        if len(target_bytes) > 255:
+            raise CipherError("kek_id 超过 255 字节，无法写入密文头部")
         return b"".join(
             (MAGIC, bytes([len(target_bytes)]), target_bytes, new_nonce, new_wrapped, tail)
         )
