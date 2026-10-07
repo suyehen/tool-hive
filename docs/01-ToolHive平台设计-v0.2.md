@@ -78,7 +78,9 @@
 
 > **请求路径上不引入生成式模型。**
 > 被禁止的是**生成式决策**——让模型生成"该调哪个工具"或"答案文本"。
-> **判别式模型是允许的**：embedding 与 reranker 都只输出向量或分数，确定、无幻觉、不可被 prompt 注入。平台的确定性资产就在这里。
+> **判别式模型是允许的**：embedding 与 reranker 只输出向量或分数，不生成工具选择或答案。
+> 它们仍可能因描述质量、恶意元数据或模型变化产生错误排序；检索分数不代表可信度或执行权限。
+> 安全保证由来源审核、授权、参数校验、确认与出站策略提供，不能由检索模型替代。
 
 ### 3.2 分层架构
 
@@ -113,6 +115,14 @@
 理由：执行逻辑一旦长在 Web 框架里，加一种协议就要复制一遍（C1 的根因）。
 落地为架构适应度函数（见 §14.2）。
 
+### 3.4 逻辑统一与部署边界
+
+“唯一执行内核”指唯一的执行规则与内部契约，不要求所有任务运行在同一个进程。
+在线检索与执行、导入、批量 embedding、索引重建可以分别部署为服务或 worker，复用领域服务。
+后台任务通过持久任务记录或 Outbox 交接，使用独立的并发限制、连接池与超时；
+不得占满在线请求资源，也不得因改为后台任务而绕过授权、审计或凭据边界。
+M0 可同仓库部署，不引入微服务拆分或通用工作流引擎。
+
 ---
 
 ## 4. 领域模型
@@ -140,7 +150,7 @@
 | `ApiKey` | **调用方凭证**（M0 的认证载体） | `principal_id, key_prefix`（明文前缀，便于识别与轮换）、`key_hash`（argon2）、`status(active\|revoked)`、`expires_at`、`rotated_at`、`last_used_at` |
 | `Credential` | 上游凭据（加密存储，只写不读） | `name, kind, ciphertext, external_ref, kek_id, meta, rotated_at` |
 | `Provider` | 上游连接定义 | `code, name, type(http\|mcp\|local), base_url, auth_ref, tls_config, limits, status, row_version` |
-| `Tool` | 逻辑工具 | `code, source_ref, provider_id`（**来源**，区别于绑定的 provider_id）、`name, description, domain, system, tags[], risk, executable, discoverable, review_required, input_schema, output_schema, status, owner, row_version` |
+| `Tool` | 逻辑工具 | `code, source_ref, provider_id`（**来源**，区别于绑定的 provider_id）、`name, description, domain, system, tags[], risk, side_effect, retry_safe, executable, discoverable, review_required, input_schema, output_schema, status, owner, row_version` |
 | `ToolVersion` | 不可变版本快照 | `tool_id, version, 定义字段快照, status, review_comment, submitted_at, published_at, row_version` |
 | `ToolChannel` | 发布通道 | `tool_id, name(stable\|beta\|canary), version_id` |
 | `ExecutionBinding` | 执行绑定 | `version_id, provider_id`（必填）；`method, path_template, param_mapping`（**`mcp` 类型全为空**；**`local` 仅 `method="COMPUTE"`**；`http` 三者必填，见 §4.3）；`timeout_seconds, retry_max`（可空，取默认值） |
@@ -148,7 +158,7 @@
 | `Grant` | 主体 × 范围 × 配额 | `principal_id, scope_type(domain\|system\|tag\|tool), scope_value, quota, constraints, status` |
 | `IndexMeta` | 索引版本元数据（§6.5/§6.4） | `index_version, model, dimension, status(building\|active\|retired), activated_at, retired_at` |
 | `ToolEmbedding` | 向量索引数据（§6.5） | `tool_id, index_version, chunk_kind(name\|description\|combined), embedding, content_hash` |
-| `Invocation` | 每次调用记录（**追加型**） | `trace_id, principal_id, tool_id, version_id, protocol, outcome, error_code, duration_ms, request_digest, result_digest, result_bytes` |
+| `Invocation` | 每次调用记录（**追加型**） | `trace_id, principal_id, tool_id, version_id, provider_id, provider_row_version, binding_digest, provider_config_digest, protocol, outcome, error_code, duration_ms, request_digest, result_digest, result_bytes` |
 | `AuditLog` | 治理事件（谁改了什么，**追加型**） | `action, object_type, object_id, result, before_summary, after_summary, trace_id`（操作人即 `create_by_*`） |
 | `SearchEvent` | **检索事件**（§11.1；评测采样的唯一来源，**追加型**） | `trace_id, principal_id, query`（截断+脱敏）、`scope, top_k, returned, total_candidates, degraded, latency_ms` |
 | `OutboxEvent` | 索引/通知的异步投递 | `event_type, object_type, object_id, payload, status, attempts, next_retry_at, locked_by, locked_until, last_error` |
@@ -169,7 +179,7 @@
 >
 > | 字段 | 含义 | M0 取值 |
 > |---|---|---|
-> | `executable` | 是否允许执行。**为 false 时检索结果也会把它过滤掉**（见 §16.2） | 判定条件与内核确认判定对齐：**写方法或 `risk=high`**（D14） |
+> | `executable` | 是否允许执行。**为 false 时检索结果也会把它过滤掉**（见 §16.2） | 判定条件与内核确认判定对齐，按 **§4.2 的版本语义**（D14） |
 > | `discoverable` | 是否出现在检索结果里（用于"可执行但不该被搜到"的内部工具） | 默认 `true` |
 > | `review_required` | 该工具的版本是否必须走审批 | **M0 恒为 `true`**（M1 起支持按来源信任策略，§4.3） |
 
@@ -187,7 +197,7 @@
 ### 4.2 三个关键设计选择
 
 **版本与目录字段的权威性**：`ToolVersion` 快照同时包含
-`domain/system/tags/risk/executable/discoverable` 与 schema、名称、描述；pending_review/published
+`domain/system/tags/risk/side_effect/retry_safe/executable/discoverable` 与 schema、名称、描述；pending_review/published
 阶段不可修改定义，rejected 返回 draft 后可修订并重新送审，published 定义永久冻结。
 `Tool` 的同名字段仅为 **stable 已发布版本的检索投影**，重导只创建 draft，不覆盖生产投影。
 stable 切换时，通道更新、投影更新、索引 outbox 和可见集合失效在同一治理事务中提交。
@@ -195,6 +205,36 @@ stable 切换时，通道更新、投影更新、索引 outbox 和可见集合�
 `Tool.status` 是跨版本的紧急停用开关；修改它属于独立治理操作，不需要修改版本定义。
 ExecutionBinding 按相同状态规则冻结；Provider 的地址/认证配置修改须作为独立治理动作审核、审计，
 并在执行前校验 Provider 启用状态。`row_version` 初值统一为 0。
+
+**工具语义与协议属性分开**：Tool 是可理解、可授权的业务能力；OpenAPI operation 是导入来源，
+不限制长期工具模型必须与接口一一对应。M0 自动导入仍按一 operation 一工具，允许在 draft
+修订描述、schema 与参数映射；多接口组合由上游包装服务提供，本平台不做业务编排。
+每个已发布版本仍只有一条生效 Binding，不在 M0 引入动态路由或多绑定选择。
+
+以下两个字段同时进入 ToolVersion 定义快照与 Tool 的 stable 投影：
+
+| 属性 | 语义与约束 |
+|---|---|
+| `side_effect` | `read / write / unknown`。read 表示无业务状态修改；unknown 不视为只读。来源声明和方法推断均为草稿建议，须在送审时确认 |
+| `retry_safe` | boolean，默认 false。表示重复出站在该版本的业务语义下安全；独立于风险与 HTTP 方法。不得只因存在平台幂等缓存就置为 true |
+
+`risk` 独立表达风险等级。确认判定统一为 `side_effect != read` 或 `risk == high`，
+M0 将命中者标为不可执行；经审核的低/中风险只读 POST 可以执行，有副作用的 GET 必须拒绝。
+HTTP 导入可建议 GET/HEAD 为 read、其他方法为 unknown；风险按方法保守推断，审核可修正。
+local 纯函数可声明 read；其他来源缺少可信声明时为 unknown。审核记录需保留最终判定依据。
+上游幂等键透传/结果查询能力属于 Binding 的执行能力，按 §7.2 验证，
+不能由 `retry_safe`、平台缓存或 HTTP 方法推导；未知结果仍按恢复契约处理。
+
+**执行配置的版本边界**：ToolVersion 与 Binding 冻结的是工具定义，Provider 是可治理的实时连接配置，
+所以钉死工具版本不承诺上游地址、凭据或上游业务行为永远不变。
+修改 schema、参数映射或副作用/重试语义必须发布新工具版本；改变 Provider 地址或认证引用
+必须独立审核、递增 row_version，并在同一事务记录脱敏配置变更。
+单次出站使用一次性读取的 Provider 配置快照，重试沿用该快照；执行前仍检查停用与凭据吊销。
+Invocation 记录实际 provider_id、provider_row_version、binding_digest 与 provider_config_digest，
+摘要覆盖行为相关的非敏感配置及 credential ID/rotated_at，以规范化 JSON 计算；
+字段采用显式白名单，不纳入认证 header 值、密文、TLS 私钥或其他密钥。
+实际使用的凭据身份与 rotated_at 同时写入凭据使用审计，禁止记录明文凭据。
+结合配置变更审计追溯实际执行环境；工具通道回滚不自动回滚 Provider，恢复连接配置需独立治理。
 
 **① `source_ref` 是稳定身份，`code` 是展示身份。**
 
@@ -433,7 +473,7 @@ M0 的 REST 前端（任务 I）就要按这条实现，M1 管理台才能安全
 | `output_schema` | `responses.2xx.schema` | `tool.outputSchema` | 可为空（不阻塞） |
 | `domain` / `system` | **通常没有** | **通常没有** | **靠推断或导入时配置** |
 | `tags` | `tags` | 无 | 推断 + 人工补 |
-| `risk` | 按 method 推断（GET=low，写=high） | 同上 | 人工可改 |
+| `risk` / `side_effect` / `retry_safe` | 方法只提供草稿建议；retry_safe 默认 false | 可信声明提供草稿建议；缺失时 unknown / false | 送审确认，规则以 §4.2 为准 |
 | `binding` | method + path + 参数落点 | **只填 `provider_id`（映射字段留空）** | **两者都必须有 Binding**，见 §4.3 的修正说明 |
 
 > **注意最后几行**：业务域、系统、标签在这两种来源里**通常都不存在**，而它们是检索精度的基础。这就是富化管线存在的理由。
@@ -461,7 +501,7 @@ M0 的 REST 前端（任务 I）就要按这条实现，M1 管理台才能安全
 ```
 原始条目
   → [1] 结构化提取：从路径/参数推断实体与动作（/customers/{id} → entity=customer, action=query）
-  → [2] 打标：domain/system 取自导入配置；tags 取自路径与读写属性；risk 按 HTTP 方法推断
+  → [2] 打标：domain/system 取自导入配置；tags 取自路径与读写属性；风险/副作用/重试安全按 §4.2 提供草稿建议
   → [3] 命名规范化：<domain>.<system>.<entity>.<action>
   → [4] 生成 embedding，写入索引
 ```
@@ -793,7 +833,7 @@ Authorization: Bearer {TOOLHIVE_EMBEDDING_API_KEY}
        · 命中已完成结果且指纹一致 → 直接返回（不碰确认令牌、不计配额与并发、不判熔断）
        · 键已被不同参数占用       → TH_IDEMPOTENCY_KEY_REUSED
   5. 输入 schema 校验
-  6. 确认判定（高风险或写操作）   ← **M0 仅判定并拒绝**；M1 只校验，尚不消费令牌
+  6. 确认判定（按 §4.2 的版本语义） ← **M0 仅判定并拒绝**；M1 只校验，尚不消费令牌
   7. 幂等认领（Lua 原子比对指纹并认领；并发后到者得 TH_IDEMPOTENCY_IN_PROGRESS）
   8. 日配额 + 并发占用 + 熔断判定   ← 拒绝时释放尚未出站的认领及本次预留资源
   9. 凭据注入（从 Credential 解密 → 注入 header/query/mTLS）
@@ -910,7 +950,7 @@ M1 第 6 步只校验令牌，步骤 10 在凭据/SSRF 校验通过后才消费�
 | 幂等保留期 | `idempotency_ttl` 默认 **24h**。**到期后（而非"跨自然日"）** key 与缓存结果一并清除，**此时**重试才会重新执行并消耗当日配额。24h 窗口内的跨天重试（如 23:00 成功、次日 01:00 重试）**仍命中缓存**。它与日配额窗口互不相干：配额按自然日计，幂等按 24h 滑窗计 |
 | 确认 | **M1**：第 6 步校验、第 10 步条件 UPDATE 消费并绑定认领身份。**M0 只做判定**（§16.2） |
 | 超时 | 一个**整体 deadline** 从入口贯穿到出站，所有阶段共享 |
-| 重试 | 仅幂等方法 + 抖动退避 + 受 deadline 约束 |
+| 重试 | 仅版本 retry_safe=true 且失败类型允许重试；按 §4.2 / 本节恢复契约验证，抖动退避且受 deadline 约束。HTTP 方法本身不授予重试权限 |
 | 熔断 | 按 Provider 维度 |
 | 审计 | 结构化事件；**不存明文参数与结果**，只存摘要与哈希 |
 
@@ -980,6 +1020,9 @@ class InvocationRequest:
 上游故障（稍后重试）/ 需要确认（走确认流程）**。
 
 因此错误语义由**内核统一产出**，两个前端只做协议翻译；**不得各自实现一套**（否则 C1 复发）。
+
+内核错误契约只包含 code、message、retryable、trace_id 与可选 retry_after_ms，不包含 HTTP 状态。
+下表的 HTTP 列由 REST 适配器实现；MCP 适配器实现自己的协议映射，二者共享内核错误语义。
 
 #### 统一错误体
 
@@ -1250,7 +1293,8 @@ TOOLHIVE_ACTIVE_KEK_ID=k2                                            # 新写入
 管理面不落盘明文，不通过命令行参数传递明文；查询不解密。
 KEK 重包装任务在运行面使用相同 AAD；历史无 AAD 密文需显式区分，不能猜测或静默降级。
 索引重建同样作为运行面后台任务，管理面提交模型/版本参数，任务加载独立模型配置。
-上述任务入口尚未实现，属于 J/E 的验收要求，不能用统一全量配置替代。
+上述任务入口尚未实现：凭据写入由 E6 提供、J3 提交；索引重建由 H8 提供、J4 提交。
+它们属于 J/E/H 的验收要求，不能用统一全量配置替代。
 
 环境变量方案比明文入库强得多，但**拿到进程环境或 K8s Secret 的人可以解密全部凭据**。因此必须配套：
 
@@ -1578,7 +1622,7 @@ def test_core_is_framework_free():
 | **调用方认证** | **API Key**（每 Principal 一把，可轮换） | 签名的请求认证（RSA/Ed25519）留到 M1，作为可插拔 authenticator（Q2） |
 | **MCP 客户端 / MCP 服务端** | **两者都不做**（区分见 §5.1） | 均为 M1，且**彼此独立**（Q3） |
 | **确认令牌端点** | **不做**。内核**只保留判定**（命中高风险/写操作即返回 `TH_CONFIRMATION_REQUIRED`），**不实现令牌发放、存储与消费**——那整套属 M1 | M0 工具以读为主，链路 fail-safe（Q4）。注意：由于 G6 已把这类工具标为 `executable=false`（第 2 步即拒），第 6 步在 M0 **正常路径下不可达**，保留它只是纵深防御 |
-| **需确认工具的导入** | **照常建档，但标 `executable=false`**；判定条件**与内核第 6 步的确认判定完全对齐**：`method ∈ {POST,PUT,PATCH,DELETE}` **或** `risk == high`（**只读但高风险的工具同样处理**）。导入报告显式说明原因；**不跳过导入** | 否则会出现"搜得到、调得动、必被拒"的坏体验：`risk=high` 的 GET 工具不会被标不可用，但执行时第 6 步要求确认而 M0 无确认端点。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
+| **需确认工具的导入** | **照常建档，但标 `executable=false`**；判定条件**与内核第 6 步完全对齐**：`side_effect != read` **或** `risk == high`（§4.2；HTTP 方法只提供草稿建议）。审核修订后重新计算，导入报告显式说明原因；**不跳过导入** | M0 无确认端点，未知副作用、写操作及高风险工具均不可执行。**`executable=false` 的工具不进检索结果**（检索 = 可见 ∧ `discoverable` ∧ `executable`） |
 | **关键词检索** | **`pg_trgm`**，不做中文分词 | 见 §6.2（Q5）；`pg_trgm` 属 contrib 包，**需在服务器安装** |
 | **元数据富化** | **只做规则富化** | LLM 描述补全改为"评测触发的可选项"，见 §5.4 |
 | **精排（rerank）** | **供应商已定（DashScope `qwen3.7-text-rerank`）**；管线保留该阶段，但**默认关闭**（延迟与成本），由评测决定开启 | 见 §6.2；远程调用 p95 150–400ms，**不计入基线延迟 SLO**，见 §6.7 |
@@ -1614,9 +1658,9 @@ def test_core_is_framework_free():
 | # | 动作 | 预期 |
 |---|---|---|
 | 1 | `toolhive import openapi --provider <code> --file <path>` | 输出新增 / 变更 / 消失三类计数 |
-| 2 | `toolhive review list --status pending_review` | 列出刚导入的草稿 |
-| 3 | `toolhive review approve --version <id>` | 状态转为 `published` |
-| 4 | `toolhive publish --tool <code> --channel stable` | `stable` 通道指向该版本 |
+| 2 | `toolhive review submit --version <id>` 后运行 `toolhive review list --status pending_review` | 草稿校验通过并送审，出现在待审列表 |
+| 3 | `toolhive review approve --version <id>` | 状态转为 `published`；首次发布在同一事务设置 stable 通道与生产投影 |
+| 4 | `toolhive publish --tool <code> --channel stable` | 确认 stable 指向已审核版本；重复设置不改变定义，后续切换按 §4.2 / §4.3 原子提交 |
 | 5 | `toolhive grant create --principal <id> --scope domain --value <domain>` | 授权生效 |
 | 6 | `POST /v1/tools/search {"query": "..."}` | 命中正确工具，且 `degraded=false` |
 | 7 | `POST /v1/tools/{code}/execute` | 返回结果 + `trace_id` |
@@ -1678,7 +1722,7 @@ def test_core_is_framework_free():
 | D11 | **配额语义** | 每个命中的 grant **各自独立计数，任一超限即拒绝**；增加 grant 只增加约束、不增加额度 | §9.1 |
 | D12 | **Channel 悬空** | **拒绝**废弃被 Channel 指向的版本（**不做自动回退**）；无 stable 通道的工具视为不可调用 | §4.3 |
 | D13 | **数据留存**（**只约束审计表、日志与检索事件**） | 检索 `query` **存**（可配置脱敏）；工具参数/结果**只存哈希**；凭据值**永不记录**；`search` 不写 `Invocation`。**不约束幂等结果缓存**（属运行期临时状态，规则见 §7.2） | §11.1 §7.2 |
-| D14 | **需确认的工具在 M0** | 判定条件**与内核确认判定对齐**（写方法 **或** `risk == high`），照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 §4.1 |
+| D14 | **需确认的工具在 M0** | 判定条件**与内核确认判定对齐**（按 §4.2 的副作用与风险语义），照常导入但标 `executable=false`，导入报告显式告知（**不跳过导入**） | §16.2 §4.1 §4.2 |
 | D15 | **rerank 供应商** | **DashScope `qwen3.7-text-rerank`**（境内、判别式）；管线保留精排阶段，**默认关闭**，由评测决定开启；远程调用 p95 150–400ms 需并入延迟 SLO | §6.2 §6.7 §12 |
 
 **这些决策已足够冻结 M0 的表结构与接口，可以直接开工。**

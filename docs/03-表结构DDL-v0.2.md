@@ -179,6 +179,9 @@ CREATE TABLE tool (
     system          varchar(64),
     tags            text[]       NOT NULL DEFAULT '{}',
     risk            varchar(16)  NOT NULL DEFAULT 'low',      -- low | medium | high
+    side_effect     varchar(16)  NOT NULL DEFAULT 'unknown'
+        CHECK (side_effect IN ('read', 'write', 'unknown')),
+    retry_safe      boolean      NOT NULL DEFAULT false,      -- 与方法/风险独立，设计 §4.2
     executable      boolean      NOT NULL DEFAULT true,       -- false 时检索也会过滤掉
     discoverable    boolean      NOT NULL DEFAULT true,       -- 是否出现在检索结果里
     review_required boolean      NOT NULL DEFAULT true,       -- M0 恒 true
@@ -216,6 +219,9 @@ CREATE TABLE tool_version (
     system         varchar(64),
     tags           text[]      NOT NULL DEFAULT '{}',
     risk           varchar(16) NOT NULL DEFAULT 'low',
+    side_effect    varchar(16) NOT NULL DEFAULT 'unknown'
+        CHECK (side_effect IN ('read', 'write', 'unknown')),
+    retry_safe     boolean     NOT NULL DEFAULT false,
     executable     boolean     NOT NULL DEFAULT true,
     discoverable   boolean     NOT NULL DEFAULT true,
     input_schema   jsonb,
@@ -364,6 +370,10 @@ CREATE TABLE invocation (
     principal_id    bigint      NOT NULL,
     tool_id         bigint      NOT NULL,
     version_id      bigint,
+    provider_id     bigint,                                   -- 实际出站配置身份；出站前失败可空
+    provider_row_version integer,
+    binding_digest  varchar(64),                              -- 冻结绑定定义摘要
+    provider_config_digest varchar(64),                       -- 脱敏配置身份摘要，不含凭据值
     protocol        varchar(16) NOT NULL,                     -- rest | mcp | cli
     outcome         varchar(16) NOT NULL,                     -- success | failure
     error_code      varchar(64),
@@ -532,7 +542,7 @@ pgvector 对 `vector` 类型的索引上限是 **2000 维**，`halfvec`（半精
 |---|---|
 | **每张表都有雪花 `bigint` 主键** | 遍历 `Base.metadata.tables`，断言 `id` 列存在、类型为 `BigInteger`、是主键 |
 | **每张表都有全部 6 个审计字段** | 断言 6 个列名在每张表上都存在（`update_*` 在追加型表上可空，但**必须存在**） |
-| **版本策略快照完整** | tool_version 包含 domain/system/tags/risk/executable/discoverable，stable 切换时才更新 Tool 投影 |
+| **版本策略快照完整** | tool_version 包含 domain/system/tags/risk/side_effect/retry_safe/executable/discoverable，stable 切换时才更新 Tool 投影 |
 | **Channel 不能跨工具指向版本** | (tool_id,version_id) 复合外键拒绝跨工具指向，服务层同时校验 published 状态 |
 | **row_version 初值一致** | ORM 的 default/server_default 与迁移统一为 0 |
 
