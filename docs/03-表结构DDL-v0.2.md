@@ -128,6 +128,7 @@ CREATE TABLE credential (
     name           varchar(128) NOT NULL,
     kind           varchar(32)  NOT NULL,
         -- M0: static_header | bearer      M1: basic | oauth2_client | mtls
+    status         varchar(16)  NOT NULL DEFAULT 'active',    -- active | revoked；吊销不删除
     ciphertext     bytea,                                    -- DEK 加密后的密文
     external_ref   varchar(256),                             -- D2 预留：将来切 Vault 时使用
     kek_id         varchar(64),                              -- 该密文由哪把 KEK 包装（轮换用）
@@ -180,7 +181,7 @@ CREATE TABLE tool (
     tags            text[]       NOT NULL DEFAULT '{}',
     risk            varchar(16)  NOT NULL DEFAULT 'low',      -- low | medium | high
     side_effect     varchar(16)  NOT NULL DEFAULT 'unknown'
-        CHECK (side_effect IN ('read', 'write', 'unknown')),
+        CONSTRAINT ck_tool_side_effect CHECK (side_effect IN ('read', 'write', 'unknown')),
     retry_safe      boolean      NOT NULL DEFAULT false,      -- 与方法/风险独立，设计 §4.2
     executable      boolean      NOT NULL DEFAULT true,       -- false 时检索也会过滤掉
     discoverable    boolean      NOT NULL DEFAULT true,       -- 是否出现在检索结果里
@@ -220,7 +221,7 @@ CREATE TABLE tool_version (
     tags           text[]      NOT NULL DEFAULT '{}',
     risk           varchar(16) NOT NULL DEFAULT 'low',
     side_effect    varchar(16) NOT NULL DEFAULT 'unknown'
-        CHECK (side_effect IN ('read', 'write', 'unknown')),
+        CONSTRAINT ck_tool_version_side_effect CHECK (side_effect IN ('read', 'write', 'unknown')),
     retry_safe     boolean     NOT NULL DEFAULT false,
     executable     boolean     NOT NULL DEFAULT true,
     discoverable   boolean     NOT NULL DEFAULT true,

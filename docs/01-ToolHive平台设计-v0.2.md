@@ -148,7 +148,7 @@ M0 可同仓库部署，不引入微服务拆分或通用工作流引擎。
 |---|---|---|
 | `Principal` | 调用主体（**统一**人与机器） | `type(user\|service\|agent), tenant_id, name, display_name, status, row_version` |
 | `ApiKey` | **调用方凭证**（M0 的认证载体） | `principal_id, key_prefix`（明文前缀，便于识别与轮换）、`key_hash`（argon2）、`status(active\|revoked)`、`expires_at`、`rotated_at`、`last_used_at` |
-| `Credential` | 上游凭据（加密存储，只写不读） | `name, kind, ciphertext, external_ref, kek_id, meta, rotated_at` |
+| `Credential` | 上游凭据（加密存储，只写不读） | `name, kind, status(active\|revoked), ciphertext, external_ref, kek_id, meta, rotated_at` |
 | `Provider` | 上游连接定义 | `code, name, type(http\|mcp\|local), base_url, auth_ref, tls_config, limits, status, row_version` |
 | `Tool` | 逻辑工具 | `code, source_ref, provider_id`（**来源**，区别于绑定的 provider_id）、`name, description, domain, system, tags[], risk, side_effect, retry_safe, executable, discoverable, review_required, input_schema, output_schema, status, owner, row_version` |
 | `ToolVersion` | 不可变版本快照 | `tool_id, version, 定义字段快照, status, review_comment, submitted_at, published_at, row_version` |
@@ -988,6 +988,7 @@ M1 第 6 步只校验令牌，步骤 10 在凭据/SSRF 校验通过后才消费�
 | **QPS 限流** | **防滥用**（成本 / 容量控制） | **fail-open + 立即告警** | 它是"防滥用"而非"安全边界"；Redis 抖动通常短暂，因它全平台停服代价更大 |
 | **日配额** | **防滥用** | **fail-open + 立即告警** | 同上；配额超支可事后追责，全平台停服不可接受 |
 | **并发信号量** | **防滥用** | **fail-open + 立即告警** | 同上 |
+| **Provider 熔断** | **上游容量保护** | **fail-open + 立即告警** | Redis 故障不等于 Provider 已故障；整体 deadline 与出站错误处理继续生效 |
 | **可见集合缓存**（§9.2） | **性能优化** | **绕过缓存直接查库** | 缓存不是控制点——**降级为直查是正确的第三选择**，既不是 open 也不是 closed |
 
 > **一句话原则：关乎"正确性"的 fail-closed；关乎"防滥用"的 fail-open 并告警；纯缓存的直接绕过。**
@@ -1158,7 +1159,19 @@ Principal ──< Grant >── 范围(domain | system | tag | tool)
 
 - 层级继承：`domain` grant 自动覆盖其下所有 `system` 与 `tool`
 - 多 grant 对**可见性**取并集（能看见的范围 = 各 grant 范围的并集）
+- 同一次请求命中的全部 grant 的约束取交集；同一 grant 的 CIDR 列表取并集。新增 grant 不会绕过原有 IP、时间、确认或配额限制。
 - 默认拒绝（无 grant 即不可见、不可调）
+
+**范围值的规范形式（C6 实现契约）**：domain 使用域 code；system 使用 `domain.system`，
+避免同名系统跨域扩权；tag 使用完整 tag 字符串；tool 使用不可变 `tool_id` 的十进制字符串，
+不能使用可改名的工具 code。CLI 可接受 code 并先解析成 ID，但入库与计数身份始终使用 ID。
+范围解析只展开匹配工具集合；启停、发布状态、请求约束与配额由 D/H/F 在使用时叠加。
+
+**D9 约束格式**：`ip_cidrs` 为非空 IPv4/IPv6 CIDR 字符串列表；缺失来源 IP 时拒绝。
+`time_window` 为 `{ "timezone": "Asia/Shanghai", "start": "09:00", "end": "18:00", "weekdays": [0,1,2,3,4] }`，
+timezone 必填，weekdays 可省略（默认每天），0 为星期一。起点包含、终点不包含；跨午夜的窗口
+按起点所在星期归属，start/end 不可相等。不支持的字段在 Grant 写入时拒绝。
+`require_confirmation` 只接受 boolean。执行及重放使用所选发布版本的元数据求范围，不使用 stable 投影替代。
 
 #### 配额语义（此前未定义，现明确）
 
@@ -1167,12 +1180,27 @@ Principal ──< Grant >── 范围(domain | system | tag | tool)
 > **每个命中的 grant 各自独立计数，任一超限即拒绝。
 > 配额是"每个授权范围各自的限额"，不是主体总额。**
 
-- Redis key：`quota:{principal_id}:{scope_type}:{scope_value}:{window}`
+- Redis 计数身份使用不可变 Grant ID：`qps:{grant_id}`、`daily:{grant_id}:{date}:pending/used`、
+  `concurrency:{grant_id}:pending`，统一前缀 `toolhive:`。相同范围的不同 Grant 也独立计数，
+  避免共享范围 key 时一次请求重复扣同一计数器。禁用后重建 Grant 视为新授权预算，不继承旧计数。
 - `qps` / `daily` / `concurrency` 三者语义一致，都按 grant 独立计数
 - grant 未配置 quota ⇒ 该项**不限额**
 - 因此**增加一个 grant 只会增加约束，不会增加额度**（避免"多授一个范围就多一份 QPS"的意外放大）
 
 推论：若确实需要"主体级总额度"，那是另一个概念，应加在 `Principal` 上（M2 再评估），**不要与 grant 配额混用同一套 key**。
+
+**D 资源与恢复接入约定**：每日配额默认按 Asia/Shanghai 自然日，时区可在 ResourcePolicy 构造时配置。
+先预留、确定要出站时提交；中途预留失败或确定未出站时按 owner 补偿所有已尝试的 Grant，
+包括 Lua 成功但客户端未收到 ACK 的键。QPS 拒绝不退还先前计数。
+并发槽位始终在 finally 释放。每日预留提交后，未知执行结果不能归还每日额度。
+资源和幂等租期必须覆盖整个请求 deadline；续租只能延长仍有效的 owner，不可复活已过期槽位。
+租约与熔断用 Redis TIME；deadline 仍用单调时钟，自然日键用请求时刻。每日已提交 owner 标记
+保留到当日结束加租期余量，支持提交/退款 ACK 重试。M0 使用单实例 Redis，不承诺 Redis Cluster 多键脚本兼容。
+
+Provider 熔断采用窗口内连续故障阈值，成功重置故障数；打开后只允许一个带租期的半开探针。
+每次状态切换更新 generation，旧执行/探针结果不能关闭新的熔断窗口。具体哪些上游错误计为故障由 F/E 决定。
+幂等 completed 保留 24 小时；dispatching 租期届满转 unknown 并持久保留，不能自动过期重发。
+reserved 的回收入口按 owner 与租期 CAS；F 的运行生命周期负责调度回收/续租，不能把出站记录当作过期缓存删除。
 
 ### 9.2 与检索的耦合（含 pgvector 的性能陷阱）
 

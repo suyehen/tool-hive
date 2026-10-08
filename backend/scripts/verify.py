@@ -9,7 +9,7 @@
 2. types     ``mypy src tests scripts``
 3. arch      架构断言（设计 §14.1 的全部约束，逐条一个断言）
 4. runtime   本地异常路径回归（无外部服务）
-5. integration 显式指定验证配置后运行严格 selfcheck；未指定时报告 SKIP
+5. integration 显式指定配置后运行严格 selfcheck 与隔离 schema 的领域验证；未指定时 SKIP
 6. config    配置系统冒烟：从 ``.env`` 加载并做启动校验（**只打印脱敏快照**）
 ===========  ==========================================================
 
@@ -167,8 +167,7 @@ def _config_guard() -> list[str]:
         )
     except ConfigError as exc:
         problems.append(
-            f"environ= 未生效（{len(exc.problems)} 条问题，"
-            f"首条：{exc.problems[0].message[:60]}）"
+            f"environ= 未生效（{len(exc.problems)} 条问题，首条：{exc.problems[0].message[:60]}）"
         )
     else:
         if probe.database.pool_max != 7 or probe.snowflake.worker_id != 9:
@@ -274,26 +273,47 @@ def _tail(text: str, limit: int = 40) -> list[str]:
 
 
 def run_runtime() -> StageResult:
-    result = _run_tool([sys.executable, str(BACKEND_ROOT / "scripts" / "regression.py")])
-    return StageResult("runtime", PASS if result.returncode == 0 else FAIL,
-                       _tail(result.stdout + result.stderr))
+    lines: list[str] = []
+    for script in ("regression.py", "domain_regression.py", "policy_regression.py"):
+        result = _run_tool([sys.executable, str(BACKEND_ROOT / "scripts" / script)])
+        lines.extend(_tail(result.stdout + result.stderr))
+        if result.returncode != 0:
+            return StageResult("runtime", FAIL, lines)
+    return StageResult("runtime", PASS, lines)
 
 
 def run_integration(env_file: Path | None, *, required: bool = False) -> StageResult:
     """显式选择配置才写基础设施；未选择时清楚报告 SKIP。"""
     if env_file is None:
-        return StageResult("integration", FAIL if required else SKIP, [
-            "未执行真实 PostgreSQL/Redis 验证；使用 --integration-env <隔离环境配置>",
-            "该阶段会创建临时表及缓存键；严格模式不允许依赖不可达时跳过。",
-        ])
+        return StageResult(
+            "integration",
+            FAIL if required else SKIP,
+            [
+                "未执行真实 PostgreSQL/Redis 验证；使用 --integration-env <隔离环境配置>",
+                "该阶段会创建临时表、缓存键及随机 schema；严格模式不允许依赖不可达时跳过。",
+            ],
+        )
     if not env_file.is_file():
         return StageResult("integration", FAIL, ["指定的集成验证配置文件不存在"])
-    result = _run_tool([
-        sys.executable, str(BACKEND_ROOT / "scripts" / "selfcheck.py"),
-        "--strict", "--env-file", str(env_file.resolve()),
-    ])
-    return StageResult("integration", PASS if result.returncode == 0 else FAIL,
-                       _tail(result.stdout + result.stderr, limit=100))
+    lines: list[str] = []
+    for script, flags in (
+        ("selfcheck.py", ["--strict"]),
+        ("domain_selfcheck.py", []),
+        ("policy_selfcheck.py", []),
+    ):
+        result = _run_tool(
+            [
+                sys.executable,
+                str(BACKEND_ROOT / "scripts" / script),
+                *flags,
+                "--env-file",
+                str(env_file.resolve()),
+            ]
+        )
+        lines.extend(_tail(result.stdout + result.stderr, limit=100))
+        if result.returncode != 0:
+            return StageResult("integration", FAIL, lines)
+    return StageResult("integration", PASS, lines)
 
 
 RUNNERS = {
@@ -311,7 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         description="ToolHive 验证：静态、本地回归、可选严格集成及配置冒烟",
     )
     parser.add_argument(
-        "--integration-env", type=Path,
+        "--integration-env",
+        type=Path,
         help="执行会写入临时表/缓存键的严格集成验证；指定隔离环境配置文件",
     )
     parser.add_argument(

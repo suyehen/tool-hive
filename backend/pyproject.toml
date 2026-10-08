@@ -27,6 +27,9 @@ dependencies = [
     "typer>=0.12",
     "numpy>=1.26",
     "cryptography>=42",
+    "argon2-cffi>=23.1",
+    "jsonschema>=4.18",
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
@@ -112,4 +115,8 @@ disallow_incomplete_defs = false
 # 用 Protocol 描述连接能力，由 adapters/db（任务 B1）提供实现。
 # 这里只为部署脚本 preflight.py 放行。
 module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pgvector", "pgvector.*", "jsonschema", "jsonschema.*"]
 ignore_missing_imports = true

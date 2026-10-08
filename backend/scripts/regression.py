@@ -19,7 +19,7 @@ from unittest.mock import patch
 import httpx
 from pydantic_settings import PydanticBaseSettingsSource
 from redis.asyncio import Redis
-from sqlalchemy import String, create_engine
+from sqlalchemy import String, Table, create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -222,7 +222,7 @@ class Rows(Repository[Row]):
 async def check_repository() -> None:
     # SQLite 只验证身份映射刷新和默认值；不声称验证 PostgreSQL 行锁。
     engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine, tables=[cast(Table, Row.__table__)])
     try:
         with Session(engine) as writer:
             writer.add(Row(id=1, status="pending_review"))
@@ -348,7 +348,8 @@ def check_integration_gate() -> None:
             )) as runner:
                 assert run_integration(env_file).status == expected
                 command = runner.call_args.args[0]
-                assert "--strict" in command and "--env-file" in command
+                assert "--env-file" in command
+                assert "--strict" in runner.call_args_list[0].args[0]
                 assert str(env_file.resolve()) in command
 
 
